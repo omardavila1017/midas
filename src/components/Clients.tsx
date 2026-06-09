@@ -900,7 +900,7 @@ function ClientEditor({
             <Field label="Patrón de pago">
               <PatternEditor pattern={client.paymentDay} onChange={p => update({ paymentDay: p })} />
             </Field>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <Field label="Frecuencia">
                 <select
                   value={client.frequency}

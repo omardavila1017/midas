@@ -336,7 +336,7 @@ export default function TaxDashboard(props: Props) {
       />
 
       {/* Overdue balance tracker */}
-      <section className="grid gap-5 xl:grid-cols-2">
+      <section className="grid grid-cols-1 gap-5 xl:grid-cols-2">
         <OverdueBalanceSection
           balance={taxStore.overdueBalance}
           newPeriodTotal={view.totals.total}
@@ -357,7 +357,7 @@ export default function TaxDashboard(props: Props) {
       )}
 
       {/* Main content: period table with inline edit + detail panel */}
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_460px]">
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_460px]">
         <TaxPeriodTable
           view={view}
           selectedPeriod={selected?.period}
@@ -1545,7 +1545,7 @@ function PaymentPlanDetail({
               <div className="space-y-2">
                 {obligation.paymentPlan.map((payment) => (
                   <div key={payment.id} data-testid="tax-payment-card" className="rounded-[var(--radius)] border border-[var(--gray-200)] bg-white p-3">
-                    <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_120px]">
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_120px]">
                       <div className="grid grid-cols-2 gap-2">
                         <Field label="Fecha">
                           <input

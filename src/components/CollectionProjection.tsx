@@ -677,7 +677,7 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
           </button>
           {showReconciliation && (
             <div className="px-5 pb-4 pt-1 space-y-3">
-              <div className="grid grid-cols-4 gap-4">
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                 <div className="p-3 rounded-[var(--radius-md)] bg-[var(--success)]/5 border border-[var(--success)]/20">
                   <div className="flex items-center gap-1.5 mb-1">
                     <CheckCircle2 className="w-3.5 h-3.5 text-[var(--success)]" />

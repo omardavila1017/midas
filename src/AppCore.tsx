@@ -109,6 +109,7 @@ import {
   LogOut, ClipboardList, BarChart3, ShieldCheck, CreditCard, Scale,
   Snowflake, AlertTriangle, Target, KeyRound,
   ShoppingCart, SlidersHorizontal,
+  Menu, X,
   type LucideIcon,
 } from 'lucide-react';
 import { clearAllMidasStorage } from './domain/storageRegistry';
@@ -701,6 +702,10 @@ export default function App() {
   // módulos se muestran. Ver src/contexts/AuthContext.tsx y src/config/roles.ts.
   const { can: canAccessTab, role: userRole, email: userEmail } = useAuth();
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
+  // Mobile navigation drawer (off-canvas). Desktop (lg+) renders the inline
+  // section nav + sub-tab strip; below lg the sections collapse behind a
+  // hamburger so the header never overflows a phone viewport.
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   useEffect(() => {
     const notice = consumePurgeNotice();
     if (notice) {
@@ -4487,13 +4492,14 @@ export default function App() {
   const frozenPlanningProps = useFrozenWhenInactive(planningProps, planningActive);
 
   const switchSection = (s: SectionId) => {
+    setMobileNavOpen(false);
     if (s === activeSection) return;
     setActiveTab(DEFAULT_TAB[s]);
   };
 
   return (
     <ScenarioSelectionProvider initialScenarios={initialHeaderScenarios}>
-    <div className="min-h-screen" style={{ background: 'var(--background)' }}>
+    <div className="min-h-dvh" style={{ background: 'var(--background)' }}>
       {splashMounted && (
         <MidasSplash
           visible={!isBooted}
@@ -4521,10 +4527,20 @@ export default function App() {
           boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04)',
         }}
       >
-        <div className="max-w-[1400px] mx-auto px-8 h-14 flex items-center justify-between gap-4">
+        <div className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 h-14 flex items-center justify-between gap-3 sm:gap-4">
+          {/* Hamburger — mobile/tablet only (xl- hides the inline section nav) */}
+          <button
+            onClick={() => setMobileNavOpen(true)}
+            className="xl:hidden shell-icon-btn flex items-center justify-center w-9 h-9 rounded-[var(--radius-md)] flex-shrink-0 transition-colors duration-150"
+            aria-label="Abrir menú de navegación"
+            aria-expanded={mobileNavOpen}
+          >
+            <Menu className="w-5 h-5" strokeWidth={1.5} />
+          </button>
+
           {/* Brand lockup — Senda (white, inverted on dark) + divider + Midas */}
           <div
-            className="flex items-center gap-3 flex-shrink-0 cursor-pointer senda-lockup-dark"
+            className="flex items-center gap-2 sm:gap-3 flex-shrink-0 cursor-pointer senda-lockup-dark mr-auto xl:mr-0"
             onClick={() => setActiveTab('netflow')}
             aria-label="Midas · Senda corporativo"
           >
@@ -4535,12 +4551,13 @@ export default function App() {
               height={22}
               decoding="async"
               fetchpriority="high"
-              className="senda-mark-inverted"
+              className="senda-mark-inverted hidden sm:block"
               style={{ height: 22, width: 'auto', display: 'block' }}
             />
             <span
               aria-hidden="true"
-              style={{ display: 'inline-block', width: 1, height: 22, background: 'var(--shell-border)' }}
+              className="hidden sm:inline-block"
+              style={{ width: 1, height: 22, background: 'var(--shell-border)' }}
             />
             <span
               style={{
@@ -4555,11 +4572,11 @@ export default function App() {
             </span>
           </div>
 
-          {/* Section nav */}
+          {/* Section nav — desktop only; collapses into the drawer below xl */}
           <nav
             role="navigation"
             aria-label="Secciones principales"
-            className="flex items-center rounded-[var(--radius-md)] p-0.5 gap-0.5"
+            className="hidden xl:flex items-center rounded-[var(--radius-md)] p-0.5 gap-0.5"
             style={{ background: 'var(--gray-50)', border: '1px solid var(--gray-200)' }}
           >
             {visibleSections.map(s => {
@@ -4569,7 +4586,7 @@ export default function App() {
                   key={s.id}
                   onClick={() => switchSection(s.id)}
                   aria-current={isActive ? 'page' : undefined}
-                  className="flex items-center justify-center gap-2 rounded-md border px-3.5 py-1.5 text-[13px] font-medium transition-colors duration-150 whitespace-nowrap"
+                  className="flex items-center justify-center gap-1.5 rounded-md border px-3 py-1.5 text-[13px] font-medium transition-colors duration-150 whitespace-nowrap"
                   style={{
                     background: isActive ? 'var(--card)' : 'transparent',
                     color: isActive ? 'var(--gray-950)' : 'var(--shell-text-muted)',
@@ -4589,14 +4606,16 @@ export default function App() {
           </nav>
 
           {/* Actions */}
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1 sm:gap-1.5 flex-shrink-0">
+            {activeSection === 'proyeccion' && (
+              <span className="hidden md:inline-flex"><GlobalScenarioSelector /></span>
+            )}
             <DarkModeToggle />
-            {activeSection === 'proyeccion' && <GlobalScenarioSelector />}
             <button
               onClick={() => setColdBootOpen(true)}
               title={COLD_BOOT_STRINGS.triggerButton}
               aria-label={COLD_BOOT_STRINGS.triggerButton}
-              className="shell-icon-btn flex items-center justify-center w-9 h-9 rounded-[var(--radius-md)] flex-shrink-0 transition-colors duration-150"
+              className="hidden sm:flex shell-icon-btn items-center justify-center w-9 h-9 rounded-[var(--radius-md)] flex-shrink-0 transition-colors duration-150"
             >
               <Snowflake className="w-4 h-4" strokeWidth={1.5} />
             </button>
@@ -4605,7 +4624,7 @@ export default function App() {
                 onClick={() => setChangePasswordOpen(true)}
                 title="Cambiar contraseña"
                 aria-label="Cambiar contraseña"
-                className="shell-icon-btn flex items-center justify-center w-9 h-9 rounded-[var(--radius-md)] flex-shrink-0 transition-colors duration-150"
+                className="hidden sm:flex shell-icon-btn items-center justify-center w-9 h-9 rounded-[var(--radius-md)] flex-shrink-0 transition-colors duration-150"
               >
                 <KeyRound className="w-4 h-4" strokeWidth={1.5} />
               </button>
@@ -4624,6 +4643,114 @@ export default function App() {
           </div>
         </div>
       </header>
+
+      {/* ─── MOBILE NAV DRAWER (off-canvas, lg- only) ─── */}
+      {mobileNavOpen && (
+        <div
+          className="xl:hidden fixed inset-0 z-[60]"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Navegación"
+        >
+          <div
+            className="absolute inset-0"
+            style={{ background: 'rgba(15,23,42,0.45)' }}
+            onClick={() => setMobileNavOpen(false)}
+          />
+          <div
+            className="absolute inset-y-0 left-0 w-[82%] max-w-[320px] flex flex-col overflow-y-auto overscroll-contain animate-page-in"
+            style={{
+              background: 'var(--surface)',
+              borderRight: '1px solid var(--gray-200)',
+              boxShadow: '0 10px 40px rgba(15,23,42,0.25)',
+              paddingTop: 'env(safe-area-inset-top)',
+              paddingBottom: 'env(safe-area-inset-bottom)',
+            }}
+          >
+            <div
+              className="flex items-center justify-between px-4 h-14 border-b flex-shrink-0 sticky top-0"
+              style={{ borderColor: 'var(--gray-200)', background: 'var(--surface)' }}
+            >
+              <span style={{ fontSize: 18, fontWeight: 700, color: 'var(--shell-text)' }}>Midas</span>
+              <button
+                onClick={() => setMobileNavOpen(false)}
+                className="shell-icon-btn flex items-center justify-center w-9 h-9 rounded-[var(--radius-md)]"
+                aria-label="Cerrar menú"
+              >
+                <X className="w-5 h-5" strokeWidth={1.5} />
+              </button>
+            </div>
+
+            <nav className="flex-1 px-2 py-3" aria-label="Secciones">
+              {visibleSections.map((s) => {
+                const sectionTabs = visibleSubTabsBySection[s.id] ?? [];
+                const isActiveSection = activeSection === s.id;
+                return (
+                  <div key={s.id} className="mb-1">
+                    <div
+                      className="flex items-center gap-2 px-3 py-2 rounded-md text-[13px] font-semibold uppercase tracking-wide"
+                      style={{ color: isActiveSection ? 'var(--primary)' : 'var(--gray-500)' }}
+                    >
+                      <s.icon className="w-4 h-4" strokeWidth={1.5} />
+                      {s.label}
+                    </div>
+                    <div className="flex flex-col gap-0.5 pl-2">
+                      {sectionTabs.map((t) => {
+                        const isActive = activeTab === t.id;
+                        return (
+                          <button
+                            key={t.id}
+                            onClick={() => { setActiveTab(t.id); setMobileNavOpen(false); }}
+                            aria-current={isActive ? 'page' : undefined}
+                            className="flex items-center gap-2 text-left px-3 py-2 rounded-md text-[14px] font-medium transition-colors duration-150 min-h-11"
+                            style={{
+                              background: isActive ? 'var(--card)' : 'transparent',
+                              color: isActive ? 'var(--gray-950)' : 'var(--gray-600)',
+                              border: isActive ? '1px solid var(--gray-200)' : '1px solid transparent',
+                            }}
+                          >
+                            <t.icon className="w-4 h-4 flex-shrink-0" strokeWidth={1.5} style={{ color: isActive ? 'var(--primary)' : 'var(--gray-400)' }} />
+                            {t.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+            </nav>
+
+            <div className="border-t px-2 py-3 flex flex-col gap-0.5" style={{ borderColor: 'var(--gray-200)' }}>
+              <button
+                onClick={() => { setMobileNavOpen(false); setColdBootOpen(true); }}
+                className="flex items-center gap-2 px-3 py-2 rounded-md text-[14px] font-medium min-h-11"
+                style={{ color: 'var(--gray-600)' }}
+              >
+                <Snowflake className="w-4 h-4" strokeWidth={1.5} />
+                {COLD_BOOT_STRINGS.triggerButton}
+              </button>
+              {userEmail && (
+                <button
+                  onClick={() => { setMobileNavOpen(false); setChangePasswordOpen(true); }}
+                  className="flex items-center gap-2 px-3 py-2 rounded-md text-[14px] font-medium min-h-11"
+                  style={{ color: 'var(--gray-600)' }}
+                >
+                  <KeyRound className="w-4 h-4" strokeWidth={1.5} />
+                  Cambiar contraseña
+                </button>
+              )}
+              <button
+                onClick={() => { clearAuth(); window.location.reload(); }}
+                className="flex items-center gap-2 px-3 py-2 rounded-md text-[14px] font-medium min-h-11"
+                style={{ color: 'var(--gray-600)' }}
+              >
+                <LogOut className="w-4 h-4" strokeWidth={1.5} />
+                Cerrar sesión
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {coldBootOpen && (
         <div
@@ -4741,10 +4868,10 @@ export default function App() {
       {/* ─── SUB-TABS with context breadcrumb (light shell) ─── */}
       {subTabs.length > 0 && (
         <div className="border-b" style={{ background: 'var(--gray-50)', borderColor: 'var(--gray-200)' }}>
-          <div className="max-w-[1400px] mx-auto px-8">
-            <div className="flex items-center gap-1 py-1.5">
+          <div className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="flex items-center gap-1 py-1.5 overflow-x-auto no-scrollbar">
               {/* Breadcrumb context */}
-              <span className="text-[12px] font-medium mr-2 flex items-center gap-1" style={{ color: 'var(--gray-500)' }}>
+              <span className="hidden sm:flex text-[12px] font-medium mr-2 items-center gap-1 flex-shrink-0" style={{ color: 'var(--gray-500)' }}>
                 {SECTIONS.find(s => s.id === activeSection)?.label}
                 <ChevronRight className="w-3 h-3" strokeWidth={1.5} />
               </span>
@@ -4755,7 +4882,7 @@ export default function App() {
                     key={t.id}
                     onClick={() => setActiveTab(t.id)}
                     aria-current={isActive ? 'page' : undefined}
-                    className="min-h-9 px-3 py-1.5 rounded-md text-[13px] font-medium transition-colors duration-150"
+                    className="min-h-9 px-3 py-1.5 rounded-md text-[13px] font-medium transition-colors duration-150 whitespace-nowrap flex-shrink-0"
                     style={{
                       background: isActive ? 'var(--surface)' : 'transparent',
                       color: isActive ? 'var(--gray-950)' : 'var(--gray-500)',
@@ -4776,7 +4903,7 @@ export default function App() {
          NavigationProvider stays stable across module switches. Avoid using
          a dynamic key here: forcing a remount discards dashboard state and
          restarts expensive workers/calculations on every tab change. */}
-      <main id="main-content" role="main" className="max-w-[1400px] mx-auto px-8 py-4">
+      <main id="main-content" role="main" className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 py-4">
         <NavigationProvider goTo={goTo}>
           <div className="animate-page-in">
           <ErrorBoundary
@@ -5225,7 +5352,7 @@ function GlobalScenarioSelector() {
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label={`Escenario activo: ${active?.name ?? 'Aprobado'}. Aplica a toda la Proyección.`}
-        className="shell-picker-btn flex items-center gap-1.5 h-9 px-3 rounded-[var(--radius-md)] text-[13px] font-medium transition-colors duration-150 max-w-[280px]"
+        className="shell-picker-btn flex items-center gap-1.5 h-9 px-3 rounded-[var(--radius-md)] text-[13px] font-medium transition-colors duration-150 max-w-[150px] 2xl:max-w-[260px]"
         style={{
           background: 'rgba(255,255,255,0.08)',
           color: 'var(--shell-text)',
@@ -5248,7 +5375,7 @@ function GlobalScenarioSelector() {
 
       {open && (
         <div
-          className="absolute right-0 top-11 w-[320px] rounded-[var(--radius-md)] border p-1.5 z-50 max-h-[480px] overflow-y-auto animate-slide-down"
+          className="absolute right-0 top-11 w-[320px] max-w-[calc(100vw-1.5rem)] rounded-[var(--radius-md)] border p-1.5 z-50 max-h-[480px] overflow-y-auto animate-slide-down"
           style={{ background: 'var(--surface)', borderColor: 'var(--gray-200)', boxShadow: 'var(--shadow-md)' }}
         >
           <div className="text-[10px] uppercase tracking-[0.08em] text-[var(--gray-400)] px-3 pt-1.5 pb-1 font-medium">

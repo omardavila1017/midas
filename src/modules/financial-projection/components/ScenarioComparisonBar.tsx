@@ -149,7 +149,7 @@ export function ScenarioComparisonBar(props: ScenarioComparisonBarProps) {
 
           {open && (
             <div
-              className="absolute left-0 top-12 z-40 w-[280px] rounded-[var(--radius-md)] border border-[var(--gray-200)] bg-white p-1.5 shadow-lg max-h-[360px] overflow-y-auto"
+              className="absolute left-0 top-12 z-40 w-[280px] max-w-[calc(100vw-1.5rem)] rounded-[var(--radius-md)] border border-[var(--gray-200)] bg-white p-1.5 shadow-lg max-h-[360px] overflow-y-auto"
             >
               <button
                 type="button"

@@ -7,7 +7,7 @@
     <link rel="icon" type="image/svg+xml" href="logos/favicon.svg" />
     <link rel="icon" type="image/png" sizes="32x32" href="logos/favicon-32.png" />
     <link rel="apple-touch-icon" href="logos/apple-touch-icon.png" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#ffffff" />
     <meta name="description" content="Midas centraliza la proyección financiera, cobranza, pagos, bancos y nómina de Senda en un tablero operativo." />
     <title>Midas</title>
@@ -19,15 +19,19 @@
         margin: 0;
         min-width: 320px;
         min-height: 100vh;
+        min-height: 100dvh;
         background: #f8fafc;
         color: #111827;
         font-family: Roboto, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         text-rendering: optimizeLegibility;
         -webkit-font-smoothing: antialiased;
         -moz-osx-font-smoothing: grayscale;
+        -webkit-text-size-adjust: 100%;
+        overflow-x: hidden;
       }
       #root {
         min-height: 100vh;
+        min-height: 100dvh;
       }
     </style>
     <script>

@@ -51,7 +51,7 @@ export default function RolCobranzaPanel({ rolRecords, cobranzaRecords }: Props)
         </span>
       </div>
 
-      <div className="grid grid-cols-3 gap-4 px-4 pb-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 px-4 pb-4">
         <Kpi
           label="Facturado"
           hint="Viaje con factura encontrada en cobranza"

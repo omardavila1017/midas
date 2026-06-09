@@ -88,7 +88,7 @@ export function MergeDialog(props: MergeDialogProps) {
       aria-modal="true"
       aria-label="Aplicar propuesta al Aprobado"
     >
-      <div className="flex max-h-[88vh] w-[840px] flex-col overflow-hidden rounded-2xl border border-[var(--gray-200)] bg-white shadow-2xl">
+      <div className="flex max-h-[88vh] w-[840px] max-w-[calc(100vw-1.5rem)] flex-col overflow-hidden rounded-2xl border border-[var(--gray-200)] bg-white shadow-2xl">
         <header className="flex items-start justify-between border-b border-[var(--gray-200)] px-5 py-4">
           <div>
             <div className="flex items-center gap-2">
@@ -111,7 +111,7 @@ export function MergeDialog(props: MergeDialogProps) {
           </button>
         </header>
 
-        <div className="grid grid-cols-3 gap-3 border-b border-[var(--gray-200)] px-5 py-3">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 border-b border-[var(--gray-200)] px-5 py-3">
           <KpiPill label="Cambios a aplicar" value={`${selected.length} / ${diff.length}`} />
           <KpiPill
             label="Δ caja final"

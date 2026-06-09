@@ -713,6 +713,52 @@ html.dark ::-webkit-scrollbar-thumb:hover {
   background-clip: padding-box;
 }
 
+/* Hidden-scrollbar utility — used by horizontally scrollable nav/tab strips
+   (sub-tabs on mobile) where the scrollbar would add visual noise but the
+   content still needs to be swipeable. Keeps the strip scrollable without a
+   visible track on touch + desktop. */
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+/* ═══════════════════════════════════════════════
+   RESPONSIVE / MOBILE
+   ═══════════════════════════════════════════════ */
+
+/* Guard against accidental horizontal overflow on small screens. A single
+   wide child (table, chart, fixed-width card) should scroll inside its own
+   wrapper, never push the whole page sideways into dead space. The app shell
+   wrappers cap content at --max-width and gutters shrink via Tailwind
+   responsive prefixes (px-4 sm:px-6 lg:px-8). */
+html, body {
+  max-width: 100%;
+}
+
+/* Honor the iPhone notch / home-indicator safe areas on the sticky header so
+   header content never hides under the status bar in standalone/PWA mode. */
+@supports (padding: env(safe-area-inset-top)) {
+  header[role="banner"] {
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+}
+
+/* Touch targets: on coarse pointers, give nav/tab/icon buttons a comfortable
+   minimum hit area (WCAG 2.5.5 / Apple HIG 44px) without forcing it on the
+   dense desktop UI. */
+@media (pointer: coarse) {
+  .shell-icon-btn {
+    min-width: 40px;
+    min-height: 40px;
+  }
+}
+
 /* ═══════════════════════════════════════════════
    FORM ELEMENTS
    ═══════════════════════════════════════════════ */

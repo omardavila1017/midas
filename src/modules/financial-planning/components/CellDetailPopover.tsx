@@ -56,7 +56,7 @@ export function CellDetailPopover({ data, onClose, onApplyOverride }: Props) {
       onClick={onClose}
     >
       <div
-        className="pointer-events-auto w-[380px] overflow-hidden rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-[var(--surface)] shadow-2xl animate-card-in"
+        className="pointer-events-auto w-[380px] max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-[var(--surface)] shadow-2xl animate-card-in"
         onClick={(event) => event.stopPropagation()}
       >
         <header className="flex items-start justify-between gap-3 border-b border-[var(--gray-100)] px-4 py-3">

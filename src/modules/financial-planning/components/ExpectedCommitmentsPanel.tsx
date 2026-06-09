@@ -169,7 +169,7 @@ export function ExpectedCommitmentsPanel(props: ExpectedCommitmentsPanelProps) {
         </button>
       </header>
 
-      <div className="grid gap-4 p-4 xl:grid-cols-[360px_minmax(0,1fr)]">
+      <div className="grid grid-cols-1 gap-4 p-4 xl:grid-cols-[360px_minmax(0,1fr)]">
         <div className="space-y-3">
           <div className="rounded-xl border border-[var(--gray-200)] bg-[var(--gray-50)] p-3">
             <div className="mb-3 flex items-center justify-between">

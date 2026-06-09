@@ -72,7 +72,7 @@ export function AddRowPopover(props: AddRowPopoverProps) {
     >
       <div
         ref={containerRef}
-        className="w-[400px] rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white p-4 shadow-xl"
+        className="w-[400px] max-w-[calc(100vw-1.5rem)] rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white p-4 shadow-xl"
       >
         <div className="mb-3 flex items-center justify-between">
           <div>
