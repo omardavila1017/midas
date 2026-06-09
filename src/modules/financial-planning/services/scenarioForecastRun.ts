@@ -127,22 +127,28 @@ export function buildScenarioPipeline(args: BuildScenarioForecastRunArgs): Scena
     })
     : [];
 
-  // Non-base invariant: previous months show real historical only — no
-  // projections before the current month. Projected lines (PROJECTED_BASE)
-  // may appear from the FIRST day of the current month forward; anything
-  // earlier must be real bank/cobranza/GL (status REAL/EXECUTED). This keeps
-  // the rolling caja through past months equal to what actually hit the bank
-  // (Cobranza real), so Planeación's caja final stays consistent con el
-  // cash-flow module. Past-dated projections only leak when a previous month
-  // lacks bank coverage and the canonical classifies it as non-historical.
-  // Applies to BOTH Planeación and Proyección (shared pipeline). Base is
-  // already narrower (real short-term API + cut at today).
+  // Invariante de histórico (meses cerrados, < mes en curso): el pasado de un
+  // escenario NO-base debe ser IDÉNTICO al de Base — Base es la fuente de
+  // verdad del histórico. Por eso el pasado usa EXACTAMENTE el mismo predicado
+  // que Base (`isRealShortTermApiMovement`): MOTOR 1 real (banco/recon/cobranza/
+  // GL, status REAL) MÁS los registros reales de corto plazo del API
+  // (`cxc:`/`purchase:`/`po:`/`payroll:`). Estos últimos pueden quedar fechados
+  // en un mes pasado cuando el cobro/pago está vencido (status PROJECTED_BASE);
+  // Base los muestra, así que Aprobado debe mostrarlos también. El filtro
+  // previo (`status REAL/EXECUTED`) los descartaba → el histórico de Aprobado
+  // salía distinto al de Base ("no está actualizado").
+  //
+  // Del PRIMER día del mes en curso en adelante se proyecta completo (cualquier
+  // movimiento, incl. PROJECTED_BASE genérico). Las proyecciones genéricas SIN
+  // id de corto plazo (p.ej. el relleno no-histórico de un mes sin banco) se
+  // siguen cayendo en el pasado porque no pasan `isRealShortTermApiMovement` —
+  // se preserva la corrección de 67d4d17 (no se filtran proyecciones genéricas
+  // a meses cerrados). Aplica a Planeación y Proyección (pipeline compartido).
+  // Base es además más estrecho (corte a hoy).
   const currentMonthStart = `${args.today.slice(0, 7)}-01`;
-  const isRealHistoricalMovement = (movement: FinancialMovement): boolean =>
-    movement.status === 'REAL' || movement.status === 'EXECUTED';
   const nonBaseSource = args.sourceMovements.filter(
     (movement) =>
-      isRealHistoricalMovement(movement) ||
+      isRealShortTermApiMovement(movement) ||
       effectiveMovementDate(movement) >= currentMonthStart,
   );
 

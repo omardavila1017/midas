@@ -167,6 +167,75 @@ describe('scenarioForecastRun', () => {
     expect(ids).not.toContain('proj-prev');
   });
 
+  it('keeps past-dated short-term API records (cxc/purchase/payroll) so non-base history matches Base', () => {
+    // Histórico (meses cerrados): el pasado de Aprobado debe ser idéntico al de
+    // Base. Un cobro vencido (`cxc:` real de corto plazo, fechado en un mes
+    // pasado, status PROJECTED_BASE) aparece en Base → debe aparecer en
+    // Aprobado. Una proyección genérica sin id de API real se sigue cayendo en
+    // el pasado de ambos.
+    const sourceMovements = [
+      movement('bank-real-prev', 'INFLOW', 'TRANSFER', 'Banco real', 400, {
+        status: 'REAL',
+        projectedDate: '2026-04-10',
+      }),
+      // Cobro vencido: registro real de corto plazo fechado en el pasado.
+      movement('cxc:overdue-1', 'INFLOW', 'AR_COLLECTION', 'Cliente vencido', 900, {
+        status: 'PROJECTED_BASE',
+        projectedDate: '2026-04-15',
+      }),
+      // Proyección genérica pasada (sin id de API real) → se cae en ambos.
+      movement('forecast:generic-prev', 'INFLOW', 'AR_COLLECTION', 'Genérico', 300, {
+        status: 'PROJECTED_BASE',
+        projectedDate: '2026-04-20',
+      }),
+    ];
+    const commonArgs = {
+      sourceMovements,
+      adjustments: [],
+      manualEntries: [],
+      customRows: [],
+      overrides: [],
+      clients: [],
+      providers: [],
+      assumptions: { year: 2026, globalCompliance: 1, factorajeDays: 30 },
+      cxpRecords: [],
+      budget: null,
+      companyCode: 'all',
+      taxStore: defaultTaxStore(),
+      startDate: '2026-04-01',
+      endDate: '2026-05-31',
+      today: '2026-05-12',
+      initialCash: 0,
+      supplierInitialCash: 0,
+      minimumCash: 0,
+      granularity: 'monthly' as const,
+    };
+
+    const approved = buildScenarioForecastRun({
+      ...commonArgs,
+      scenarioId: 'approved',
+      scenarioName: 'Aprobado',
+      scenarioKind: 'APPROVED',
+    });
+    const base = buildScenarioForecastRun({
+      ...commonArgs,
+      scenarioId: 'base',
+      scenarioName: 'Base',
+      scenarioKind: 'BASE',
+    });
+
+    const closedMonth = (run: typeof approved) => run.movements
+      .filter((m) => (m.projectedDate ?? '') < '2026-05-01')
+      .map((m) => m.id)
+      .sort();
+
+    // El histórico (meses cerrados) de Aprobado == el de Base.
+    expect(closedMonth(approved)).toEqual(closedMonth(base));
+    expect(closedMonth(approved)).toContain('cxc:overdue-1');
+    expect(closedMonth(approved)).toContain('bank-real-prev');
+    expect(closedMonth(approved)).not.toContain('forecast:generic-prev');
+  });
+
   it('injects trend top-off in a non-base run (visible as its own editable row) but never in Base', () => {
     // Predicción mensual: agosto 2026 con un ingreso esperado por encima de lo
     // ya comprometido en el mes. El top-off debe rellenar el hueco.
