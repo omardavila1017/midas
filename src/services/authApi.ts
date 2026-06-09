@@ -180,6 +180,45 @@ export function requiresPasswordSetup(email: string): boolean {
 }
 
 /**
+ * Resultado de evaluar si un correo puede "crear su cuenta" (definir contraseña
+ * en un primer ingreso explícito, estilo Atlas). Permite a la UI dar un mensaje
+ * preciso en vez del genérico de credenciales:
+ *   - `eligible`            → pre-registrado por un admin y sin contraseña: puede
+ *                             definirla ahora y quedar registrado.
+ *   - `already_registered`  → ya tiene contraseña: debe iniciar sesión.
+ *   - `not_pre_registered`  → un admin no lo ha dado de alta todavía.
+ *   - `backend_managed`     → en modo backend el alta la gestiona el servidor.
+ */
+export type RegistrationEligibility =
+  | 'eligible'
+  | 'already_registered'
+  | 'not_pre_registered'
+  | 'backend_managed';
+
+/**
+ * ¿Puede este correo crear su cuenta (primer ingreso explícito)? Síncrono: la UI
+ * lo usa para decidir el mensaje del formulario de "Crear cuenta". Reusa la misma
+ * fuente de verdad que `requiresPasswordSetup` (registro de admin + JSON local).
+ */
+export function checkRegistrationEligibility(email: string): RegistrationEligibility {
+  if (!isLocalAuthEnabled()) return 'backend_managed';
+  const normalized = localNormalize(email);
+  if (!isKnownLocalUser(normalized)) return 'not_pre_registered';
+  if (hasLocalPassword(normalized)) return 'already_registered';
+  return 'eligible';
+}
+
+/**
+ * ¿Está disponible el auto-registro "tipo Atlas" en la UI? Solo en modo local: el
+ * usuario pre-registrado por un admin define su contraseña y queda activo. En
+ * modo backend el alta para iniciar sesión la hace el servidor, así que la UI
+ * oculta la entrada de "Crear cuenta".
+ */
+export function isRegistrationAvailable(): boolean {
+  return isLocalAuthEnabled();
+}
+
+/**
  * Primer ingreso "tipo register": un usuario registrado sin contraseña define la
  * suya y queda con sesión iniciada. Solo modo local (el backend lo resuelve por
  * su cuenta vía la liga de restablecimiento).

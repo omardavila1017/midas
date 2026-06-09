@@ -3,9 +3,11 @@ import { AlertCircle, ArrowLeft, ArrowRight, CheckCircle2, KeyRound, Lock, Mail 
 import PasswordPolicyChecklist from './PasswordPolicyChecklist';
 import {
   AuthApiError,
+  checkRegistrationEligibility,
   completeFirstLogin,
   completePasswordReset,
   getAuthSession,
+  isRegistrationAvailable,
   login,
   logout,
   requestPasswordReset,
@@ -21,7 +23,7 @@ import {
 
 const sendaLogoUrl = `${import.meta.env.BASE_URL}logos/senda-corporativo.svg`;
 
-type LoginMode = 'login' | 'forgot' | 'reset' | 'setup';
+type LoginMode = 'login' | 'forgot' | 'reset' | 'setup' | 'register';
 
 export function clearAuth() {
   clearAuthSession();
@@ -185,10 +187,14 @@ function LoginForm({
   onSignedIn,
   onForgot,
   onNeedsSetup,
+  onRegister,
+  canRegister,
 }: {
   onSignedIn: (session: LoginResponse) => void;
   onForgot: () => void;
   onNeedsSetup: (email: string) => void;
+  onRegister: (email: string) => void;
+  canRegister: boolean;
 }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -334,7 +340,21 @@ function LoginForm({
         </button>
       </form>
 
-      <p className="mt-6 text-center text-[11px] leading-relaxed text-[var(--gray-400)]">
+      {canRegister && (
+        <p className="mt-5 text-center text-[12px] leading-relaxed text-[var(--gray-500)]">
+          ¿Primera vez en Midas?{' '}
+          <button
+            type="button"
+            onClick={() => onRegister(email.trim().toLowerCase())}
+            className="font-medium text-[var(--primary)] hover:underline"
+            disabled={submitting}
+          >
+            Crea tu cuenta
+          </button>
+        </p>
+      )}
+
+      <p className="mt-4 text-center text-[11px] leading-relaxed text-[var(--gray-400)]">
         La sesión real vive en el backend corporativo. Midas no guarda tokens ni contraseñas en el navegador.
       </p>
     </>
@@ -596,6 +616,181 @@ function FirstLoginForm({
   );
 }
 
+function RegisterForm({
+  initialEmail,
+  onActivated,
+  onBack,
+  onGoLogin,
+}: {
+  initialEmail: string;
+  onActivated: (session: LoginResponse) => void;
+  onBack: () => void;
+  onGoLogin: () => void;
+}) {
+  const [email, setEmail] = useState(initialEmail);
+  const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const emailRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    // Si llegamos sin correo prellenado, enfoca el campo para empezar a escribir.
+    if (!initialEmail) emailRef.current?.focus();
+  }, [initialEmail]);
+
+  const canSubmit = useMemo(
+    () =>
+      looksLikeEmail(email) &&
+      passwordMeetsPolicy(password) &&
+      password === confirm &&
+      !submitting,
+    [email, password, confirm, submitting],
+  );
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const value = email.trim().toLowerCase();
+    if (!looksLikeEmail(value)) {
+      setError('Escribe un correo válido.');
+      emailRef.current?.focus();
+      return;
+    }
+    // El correo debe estar pre-registrado por un admin (capa de registro de
+    // usuarios). Damos un mensaje preciso según el caso antes de tocar la red.
+    const eligibility = checkRegistrationEligibility(value);
+    if (eligibility === 'not_pre_registered') {
+      setError('Tu correo no está pre-registrado. Pide a un administrador que te dé de alta en el módulo de Usuarios.');
+      return;
+    }
+    if (eligibility === 'already_registered') {
+      setError('Ya tienes una cuenta activa. Inicia sesión con tu contraseña.');
+      return;
+    }
+    if (eligibility === 'backend_managed') {
+      setError('El alta de cuentas la gestiona el backend corporativo. Solicita tu acceso a un administrador.');
+      return;
+    }
+    if (!passwordMeetsPolicy(password)) {
+      setError('La contraseña no cumple la política mínima.');
+      return;
+    }
+    if (password !== confirm) {
+      setError('Las contraseñas no coinciden.');
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    try {
+      const session = await completeFirstLogin(value, password);
+      rememberLastEmail(session.email);
+      onActivated(session);
+    } catch (err) {
+      // Carrera: si entre el chequeo y el submit el correo ya quedó registrado.
+      if (err instanceof AuthApiError && err.code === 'validation' && err.status === 409) {
+        setError('Ya tienes una cuenta activa. Inicia sesión con tu contraseña.');
+        return;
+      }
+      setError(authErrorMessage(err));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={onBack}
+        className="mb-4 inline-flex items-center gap-1.5 text-[12px] font-medium text-[var(--gray-500)] hover:text-[var(--gray-900)]"
+      >
+        <ArrowLeft className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden />
+        Volver al acceso
+      </button>
+      <h1 className="text-[22px] font-bold leading-tight text-[var(--gray-950)] skeuo-letterpress">
+        Crear cuenta
+      </h1>
+      <p className="mt-1.5 text-[13px] leading-relaxed text-[var(--gray-500)]">
+        Tu correo debe estar pre-registrado por un administrador. Defínele una contraseña para activar tu cuenta.
+      </p>
+      <form onSubmit={handleSubmit} className="mt-6 space-y-4">
+        <label className="block">
+          <span className="text-[12px] font-medium uppercase tracking-wide text-[var(--gray-700)]">
+            Correo corporativo
+          </span>
+          <div className="relative mt-1.5">
+            <Mail
+              className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--gray-400)]"
+              strokeWidth={1.75}
+              aria-hidden
+            />
+            <input
+              ref={emailRef}
+              type="email"
+              inputMode="email"
+              autoComplete="email"
+              autoCapitalize="off"
+              spellCheck={false}
+              value={email}
+              disabled={submitting}
+              onChange={(event) => {
+                setEmail(event.target.value);
+                if (error) setError(null);
+              }}
+              className="h-11 w-full rounded-[var(--radius-md)] border border-[var(--skeuo-paper-edge)] bg-[var(--input)] pl-9 pr-3 text-[14px] text-[var(--gray-950)] transition-shadow placeholder:text-[var(--gray-400)] focus:border-[var(--skeuo-brass)] focus:outline-none focus:ring-2 focus:ring-[color-mix(in_oklch,var(--skeuo-brass)_28%,transparent)] disabled:opacity-60"
+              style={{ boxShadow: 'var(--skeuo-deboss-md)' }}
+              placeholder="usuario@senda.com"
+            />
+          </div>
+        </label>
+        <PasswordInput
+          label="Crea tu contraseña"
+          value={password}
+          onChange={(next) => {
+            setPassword(next);
+            if (error) setError(null);
+          }}
+          disabled={submitting}
+          autoComplete="new-password"
+        />
+        <PasswordPolicyChecklist password={password} />
+        <PasswordInput
+          label="Confirmar contraseña"
+          value={confirm}
+          onChange={(next) => {
+            setConfirm(next);
+            if (error) setError(null);
+          }}
+          disabled={submitting}
+          autoComplete="new-password"
+        />
+        {confirm && password !== confirm && <AlertBox tone="info" message="Las contraseñas deben coincidir." />}
+        {error && <AlertBox message={error} />}
+        <button
+          type="submit"
+          disabled={!canSubmit}
+          className="flex h-11 w-full items-center justify-center gap-2 rounded-[var(--radius-md)] bg-[var(--primary)] text-[14px] font-semibold text-white transition-[background,transform] hover:bg-[var(--primary-hover)] active:translate-y-px disabled:cursor-not-allowed disabled:opacity-80"
+          style={{ boxShadow: 'var(--skeuo-emboss-md)', border: '1px solid var(--skeuo-brass-deep)' }}
+        >
+          {submitting ? <><Spinner /> Creando cuenta...</> : 'Crear cuenta'}
+        </button>
+      </form>
+
+      <p className="mt-5 text-center text-[12px] leading-relaxed text-[var(--gray-500)]">
+        ¿Ya tienes cuenta?{' '}
+        <button
+          type="button"
+          onClick={onGoLogin}
+          className="font-medium text-[var(--primary)] hover:underline"
+          disabled={submitting}
+        >
+          Inicia sesión
+        </button>
+      </p>
+    </>
+  );
+}
+
 function CheckingSession() {
   return (
     <LoginShell>
@@ -618,7 +813,9 @@ export default function AuthGate({ children }: AuthGateProps) {
   const [mode, setMode] = useState<LoginMode>(() => (readResetToken() ? 'reset' : 'login'));
   const [notice, setNotice] = useState<string | null>(null);
   const [setupEmail, setSetupEmail] = useState('');
+  const [registerEmail, setRegisterEmail] = useState('');
   const resetToken = useMemo(() => readResetToken(), []);
+  const canRegister = useMemo(() => isRegistrationAvailable(), []);
 
   useEffect(() => {
     if (mode === 'reset') {
@@ -687,6 +884,19 @@ export default function AuthGate({ children }: AuthGateProps) {
             setMode('login');
           }}
         />
+      ) : mode === 'register' ? (
+        <RegisterForm
+          initialEmail={registerEmail}
+          onActivated={handleSignedIn}
+          onBack={() => {
+            setRegisterEmail('');
+            setMode('login');
+          }}
+          onGoLogin={() => {
+            setRegisterEmail('');
+            setMode('login');
+          }}
+        />
       ) : (
         <LoginForm
           onSignedIn={handleSignedIn}
@@ -695,6 +905,11 @@ export default function AuthGate({ children }: AuthGateProps) {
             setSetupEmail(em);
             setMode('setup');
           }}
+          onRegister={(em) => {
+            setRegisterEmail(em);
+            setMode('register');
+          }}
+          canRegister={canRegister}
         />
       )}
     </LoginShell>
