@@ -586,3 +586,89 @@ describe('Nómina (TRESS) — mapNominaRow', () => {
     expect(result.some(r => r.cashTreatment === 'EMPLOYER_TAX')).toBe(true);
   });
 });
+
+describe('Nómina (TRESS) — robustez de mapeo de campos', () => {
+  const { mapNominaRow, classifyByConceptName } = __internal;
+
+  it('mapea llaves con ESPACIOS ("Tipo Concepto", "Tipo Nomina", "Fecha Pago", "ID Empresa")', () => {
+    const r = mapNominaRow({
+      'ID Empresa': 1,
+      'Empresa': 'TAMAULIPAS FEDERAL',
+      'Monto': 916049.74,
+      'Concepto': 'SUELDO ORDINARIO',
+      'Tipo Nomina': 'Semanal',
+      'Tipo Concepto': 'Percepción',
+      'Fecha Pago': '2026-05-07T00:00:00',
+    });
+    expect(r.cia).toBe('00001');
+    expect(r.amount).toBe(916049.74);
+    expect(r.payrollType).toBe('Semanal');
+    expect(r.conceptType).toBe('Percepción');
+    expect(r.cashTreatment).toBe('CASH_OUT');
+    expect(r.paymentDate).toBe('2026-05-07');
+  });
+
+  it('mapea llaves con GUION BAJO ("Tipo_Concepto", "Tipo_Nomina")', () => {
+    const r = mapNominaRow({
+      IDEmpresa: 11,
+      Empresa: 'SIR',
+      Monto: 18000,
+      Concepto: 'IMSS PATRONAL',
+      Tipo_Nomina: 'Quincenal',
+      Tipo_Concepto: 'Aportación Patronal',
+      FechaPago: '2026-05-15T00:00:00',
+    });
+    expect(r.payrollType).toBe('Quincenal');
+    expect(r.conceptType).toBe('Aportación Patronal');
+    expect(r.cashTreatment).toBe('EMPLOYER_TAX');
+  });
+
+  describe('classifyByConceptName — clasifica por el NOMBRE del concepto', () => {
+    const cases: Array<[string, string]> = [
+      ['SUELDO ORDINARIO', 'CASH_OUT'],
+      ['SALARIO', 'CASH_OUT'],
+      ['AGUINALDO', 'CASH_OUT'],
+      ['BONO DE PRODUCTIVIDAD', 'CASH_OUT'],
+      ['TIEMPO EXTRA', 'CASH_OUT'],
+      ['ISR', 'WITHHOLDING_PAYABLE'],
+      ['I.S.R.', 'WITHHOLDING_PAYABLE'],
+      ['IMSS EMPLEADO', 'WITHHOLDING_PAYABLE'],
+      ['IMSS PATRONAL', 'EMPLOYER_TAX'],
+      ['IMPUESTO SOBRE NOMINA', 'EMPLOYER_TAX'],
+      ['APORTACION INFONAVIT', 'EMPLOYER_TAX'],
+      ['CREDITO INFONAVIT', 'DEDUCTION'],
+      ['PRESTAMO PERSONAL', 'DEDUCTION'],
+      ['FONACOT', 'DEDUCTION'],
+      ['PENSION ALIMENTICIA', 'DEDUCTION'],
+      ['VALES DE DESPENSA', 'NON_CASH'],
+      ['PROVISION AGUINALDO', 'NON_CASH'],
+    ];
+    it.each(cases)('%s → %s', (name, expected) => {
+      expect(classifyByConceptName(name)?.treatment).toBe(expected);
+    });
+    it('regresa null para nombres sin señal (conservador)', () => {
+      expect(classifyByConceptName('ALGO QUE NO EXISTE')).toBeNull();
+      expect(classifyByConceptName('')).toBeNull();
+    });
+  });
+
+  it('mapNominaRow infiere desde el nombre cuando TipoConcepto viene VACÍO', () => {
+    const r = mapNominaRow({
+      IDEmpresa: 1, Empresa: 'X', Monto: 50000,
+      Concepto: 'SUELDO ORDINARIO', FechaPago: '2026-05-07T00:00:00',
+    });
+    expect(r.cashTreatment).toBe('CASH_OUT');
+    expect(r.conceptType).toContain('inferido');
+  });
+
+  it('mapNominaRow respeta el TipoConcepto del API cuando SÍ viene (no infiere de más)', () => {
+    const r = mapNominaRow({
+      IDEmpresa: 1, Empresa: 'X', Monto: 50000,
+      Concepto: 'SUELDO ORDINARIO', TipoConcepto: 'Informativo',
+      FechaPago: '2026-05-07T00:00:00',
+    });
+    // 'Informativo' → NON_CASH; el nombre NO debe sobre-escribirlo.
+    expect(r.cashTreatment).toBe('NON_CASH');
+    expect(r.conceptType).toBe('Informativo');
+  });
+});

@@ -18,6 +18,7 @@
  */
 
 import { loadHeavyRecords } from '../../../services/heavyStoreIDB';
+import { getLastNominaRawSample } from '../../../services/jde';
 import type { PayrollCostRecord } from '../../shared-finance/types';
 
 const STORE_KEY = 'midas-v12';
@@ -107,6 +108,19 @@ async function dump(): Promise<{
 }
 
 /**
+ * Imprime y devuelve la forma CRUDA del último fetch de nómina (nombres de
+ * campo reales del API TRESS, antes del strip/mapeo). Útil cuando el dashboard
+ * sale con todo en "Sin tipo" / "No monetario": revela si el API renombró
+ * `TipoConcepto` / `TipoNomina`.
+ */
+function rawShape(): { keys: string[]; sample: Record<string, unknown> } | null {
+  const s = getLastNominaRawSample();
+  // eslint-disable-next-line no-console
+  console.log('[nomina-debug] forma cruda del último fetch TRESS:', s ?? '(aún no hay fetch en esta sesión)');
+  return s;
+}
+
+/**
  * Monta `window.__midas__.nomina`. Idempotente y tolerante: si `window` no
  * existe (SSR/jsdom) o algo falla, no tira. Mergea sobre el namespace que ya
  * crea `runtimeGuardian`.
@@ -115,7 +129,7 @@ export function installNominaDebug(): void {
   try {
     if (typeof window === 'undefined') return;
     const w = window as unknown as { __midas__?: Record<string, unknown> };
-    w.__midas__ = { ...(w.__midas__ ?? {}), nomina: { dump, byMonth } };
+    w.__midas__ = { ...(w.__midas__ ?? {}), nomina: { dump, byMonth, rawShape } };
   } catch {
     /* ignore */
   }

@@ -113,11 +113,34 @@ function withLongRunningDefaults(config: JdeClientConfig = {}): JdeClientConfig 
 }
 
 /** Busca una clave por varios alias (case-insensitive, snake/camel). */
+/**
+ * Normaliza un nombre de campo a una forma comparable: minúsculas, sin acentos
+ * y sin separadores (espacios, guiones, guiones bajos, puntos). Permite cruzar
+ * llaves del upstream que llegan como "Tipo Concepto", "Tipo_Concepto",
+ * "TipoConcepto" o "tipo-concepto" contra un mismo alias canónico.
+ */
+function normKey(s: string): string {
+  return s
+    .normalize('NFD')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+}
+
 function pick(obj: RawRecord, aliases: string[]): unknown {
   const keys = Object.keys(obj);
+  // Paso 1: match exacto case-insensitive (comportamiento histórico).
   for (const alias of aliases) {
     const a = alias.toLowerCase();
     const found = keys.find(k => k.toLowerCase() === a);
+    if (found !== undefined) return obj[found];
+  }
+  // Paso 2 (aditivo): match normalizado — tolera separadores/acentos en las
+  // llaves del upstream ("Tipo Concepto", "Tipo_Concepto"). Solo corre cuando
+  // el paso 1 no encontró nada, así que nunca cambia un match que ya funcionaba.
+  for (const alias of aliases) {
+    const a = normKey(alias);
+    if (!a) continue;
+    const found = keys.find(k => normKey(k) === a);
     if (found !== undefined) return obj[found];
   }
   return undefined;
@@ -237,6 +260,21 @@ function stripToWhitelist(row: RawRecord, allowedLower: ReadonlySet<string>): Ra
 
 function stripAllToWhitelist(rows: RawRecord[], allowedLower: ReadonlySet<string>): RawRecord[] {
   for (const row of rows) stripToWhitelist(row, allowedLower);
+  return rows;
+}
+
+/**
+ * Variante del strip que compara por nombre NORMALIZADO (`normKey`), tolerando
+ * separadores/acentos en las llaves del upstream. Necesaria para nómina, donde
+ * un campo real `"Tipo Concepto"` (con espacio) era eliminado por el strip
+ * exacto antes de que el mapper lo viera → todo caía a NON_CASH / "Sin tipo".
+ */
+function stripAllToWhitelistNorm(rows: RawRecord[], allowedNorm: ReadonlySet<string>): RawRecord[] {
+  for (const row of rows) {
+    for (const key of Object.keys(row)) {
+      if (!allowedNorm.has(normKey(key))) delete row[key];
+    }
+  }
   return rows;
 }
 
@@ -2226,6 +2264,40 @@ function inferCashTreatment(tipoConcepto: string): PayrollCashTreatment {
   return 'NON_CASH';
 }
 
+// ── Clasificación por NOMBRE del concepto (red de seguridad) ─────────────────
+// Patrones evaluados en orden de especificidad. Se usan SOLO cuando el API no
+// trae (o no se pudo mapear) el `TipoConcepto`; sin esto, cada fila sin tipo
+// colapsa a NON_CASH y el dashboard sale en $0 con todo en "No monetario".
+const NAME_NON_CASH = /\bvales?\b|despensa|provisi(o|ó)n|informativ|\bexcent[oa]\b|\bexent[oa]\b|\bgravad[oa]\b/i;
+const NAME_WITHHOLDING = /\bisr\b|i\.s\.r|imss\s*(emple|obrer|trabaj)|retenci(o|ó)n|\brh?iva?\b/i;
+const NAME_EMPLOYER = /patronal|\bisn\b|impuesto\s+sobre\s+n(o|ó)mina|aportaci(o|ó)n|\bsar\b|cesant(i|í)a|\brcv\b|infonavit\s*(aport|patron)|prevision\s+social/i;
+const NAME_DEDUCTION = /pr(e|é)stamo|fonacot|pensi(o|ó)n|aliment|\bfalta|caja\s+de\s+ahorro|cuota\s+sindical|sindicat|anticipo/i;
+const NAME_PERCEPTION = /sueldo|salario|\bbono|bonificaci|aguinaldo|\bprima\b|\bptu\b|comisi(o|ó)n|incentivo|(tiempo|horas?)\s+extra|s(e|é)ptimo|d(i|í)a\s+(festiv|descans)|gratificaci|indemnizaci|finiquito|vacacion|retroactiv|compensaci|\bayuda\b|subsidio|destajo|viatic/i;
+
+/**
+ * Infiere `cashTreatment` + una etiqueta de tipo a partir del NOMBRE del
+ * concepto. Conservadora: lo ambiguo regresa `null` y el caller conserva el
+ * default NON_CASH (comportamiento histórico). El orden es deliberado — las
+ * señales de no-monetario / retención / patronal / deducción se evalúan ANTES
+ * que la percepción genérica para no inflar el efectivo.
+ */
+function classifyByConceptName(
+  conceptName: string,
+): { treatment: PayrollCashTreatment; typeLabel: string } | null {
+  const s = conceptName.trim();
+  if (!s) return null;
+  // INFONAVIT crédito/amortización/descuento = deducción al empleado (NO patronal).
+  if (/infonavit/i.test(s) && /(cr(e|é)dito|amortizac|descuento|abono)/i.test(s)) {
+    return { treatment: 'DEDUCTION', typeLabel: 'Deducción (inferido)' };
+  }
+  if (NAME_NON_CASH.test(s)) return { treatment: 'NON_CASH', typeLabel: 'No monetario (inferido)' };
+  if (NAME_WITHHOLDING.test(s)) return { treatment: 'WITHHOLDING_PAYABLE', typeLabel: 'Retención (inferido)' };
+  if (NAME_EMPLOYER.test(s)) return { treatment: 'EMPLOYER_TAX', typeLabel: 'Aportación patronal (inferido)' };
+  if (NAME_DEDUCTION.test(s)) return { treatment: 'DEDUCTION', typeLabel: 'Deducción (inferido)' };
+  if (NAME_PERCEPTION.test(s)) return { treatment: 'CASH_OUT', typeLabel: 'Percepción (inferido)' };
+  return null;
+}
+
 /**
  * Whitelist de campos consumidos por mapNominaRow. Mantener en sync con los
  * aliases del mapper.
@@ -2254,6 +2326,15 @@ const KEPT_NOMINA_FIELDS = new Set<string>([
   'anio', 'year',
   'mes_num', 'nummes', 'monthnumber',
 ]);
+
+/**
+ * Versión normalizada del whitelist (sin separadores/acentos) para el strip de
+ * nómina. Así `"Tipo Concepto"`, `"Tipo_Concepto"` y `"TipoConcepto"` colapsan
+ * todos a `tipoconcepto` y sobreviven el strip.
+ */
+const KEPT_NOMINA_FIELDS_NORM: ReadonlySet<string> = new Set(
+  Array.from(KEPT_NOMINA_FIELDS, normKey),
+);
 
 function mapNominaRow(raw: RawRecord): PayrollCostRecord {
   const idEmpresaRaw = pick(raw, ['IDEmpresa', 'idEmpresa', 'id_empresa', 'cia', 'compania']);
@@ -2286,6 +2367,19 @@ function mapNominaRow(raw: RawRecord): PayrollCostRecord {
   if (!year) year = toNum(pick(raw, ['anio', 'Anio', 'year']));
   if (!month) month = toNum(pick(raw, ['mes_num', 'numMes', 'monthNumber']));
 
+  // Clasificación primaria: el `TipoConcepto` del API (autoridad). Red de
+  // seguridad: si llega vacío (campo ausente o con un nombre que no mapeamos),
+  // inferimos por el NOMBRE del concepto en vez de colapsar todo a NON_CASH.
+  let conceptType = tipoConcepto;
+  let cashTreatment = inferCashTreatment(tipoConcepto);
+  if (!tipoConcepto) {
+    const byName = classifyByConceptName(concepto);
+    if (byName) {
+      cashTreatment = byName.treatment;
+      conceptType = byName.typeLabel;
+    }
+  }
+
   return {
     // `cia` se normaliza al mismo padding de 5 dígitos que usan CXP/bancos
     // para garantizar joins por compañía a nivel store.
@@ -2300,8 +2394,8 @@ function mapNominaRow(raw: RawRecord): PayrollCostRecord {
     payrollType: tipoNomina,
     conceptId: typeof idConcepto === 'number' ? idConcepto : toStr(idConcepto),
     conceptName: concepto,
-    conceptType: tipoConcepto,
-    cashTreatment: inferCashTreatment(tipoConcepto),
+    conceptType,
+    cashTreatment,
     amount: monto,
   };
 }
@@ -2322,6 +2416,36 @@ function mapNominaRow(raw: RawRecord): PayrollCostRecord {
  * pulsara refresh manual.
  */
 const MAX_NOMINA_PARTIAL_RETRIES = 2;
+
+// ── Diagnóstico de forma cruda (read-only) ──────────────────────────────────
+// El API de TRESS ha cambiado nombres de campo sin aviso. Capturamos la primera
+// fila CRUDA (antes del strip/mapeo) para poder ver los nombres reales desde
+// `window.__midas__.nomina.rawShape()` y un log único `[nomina-shape]`.
+let nominaShapeLogged = false;
+let lastNominaRawSample: { keys: string[]; sample: RawRecord } | null = null;
+
+function captureNominaShape(rows: RawRecord[]): void {
+  if (!rows.length) return;
+  const first = rows[0];
+  const keys = Object.keys(first);
+  // Clonado superficial: el strip muta las filas in-place más adelante.
+  lastNominaRawSample = { keys: [...keys], sample: { ...first } };
+  if (nominaShapeLogged) return;
+  nominaShapeLogged = true;
+  try {
+    // eslint-disable-next-line no-console
+    console.info('[nomina-shape] llaves crudas del API TRESS →', keys);
+    // eslint-disable-next-line no-console
+    console.info('[nomina-shape] registro de muestra →', { ...first });
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Última fila cruda observada en un fetch de nómina (diagnóstico). */
+export function getLastNominaRawSample(): { keys: string[]; sample: RawRecord } | null {
+  return lastNominaRawSample;
+}
 
 // Fan-out fallback cuando el wildcard (idEmpresa=99) se trunca >1MB. El
 // contrato (jdeTypes NominaRequest) define idEmpresa como enum chico; 33
@@ -2389,7 +2513,9 @@ export async function fetchNomina(
   };
   const fetchOne = async (r: NominaRequest): Promise<PayrollCostRecord[]> => {
     const raw = await jdeClient.post<unknown>('/Nomina', r, merged);
-    const rows = stripAllToWhitelist(unwrapList(raw), KEPT_NOMINA_FIELDS);
+    const list = unwrapList(raw);
+    captureNominaShape(list);
+    const rows = stripAllToWhitelistNorm(list, KEPT_NOMINA_FIELDS_NORM);
     return dropExcludedByCia(rows.map(mapNominaRow));
   };
 
@@ -2462,6 +2588,9 @@ export const __internal = {
   mapCobranza,
   mapNominaRow,
   inferCashTreatment,
+  classifyByConceptName,
+  pick,
+  normKey,
   normalizeBankAccountNumber,
   selectIvaFullObjetoRanges,
   ivaCacheNamespace,
