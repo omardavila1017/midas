@@ -1,20 +1,20 @@
 {
-  "_README": "Auth LOCAL (dev/interno). Esto NO es seguridad: el bundle es publico, cualquiera con acceso al sitio puede leer este archivo y la lista de usuarios. Las contrasenas NO se guardan en texto plano: se guarda el SHA-256 de `${salt}:${password}` (hashing, una via). El backend real /api/auth/* sigue siendo el camino para produccion. Para regenerar un hash: `node scripts/hashLocalPassword.mjs <password>`. Cambiar `enabled` a false desactiva el modo local y vuelve al backend.",
+  "_README": "Auth LOCAL (dev/interno). Esto NO es seguridad: el bundle es publico, cualquiera con acceso al sitio puede leer este archivo y la lista de usuarios. Los usuarios arrancan SIN contrasena (solo correo + rol): estan pre-registrados pero deben definir su contrasena en el primer ingreso ('Crear cuenta' / primer login). La contrasena vive en el overlay de localStorage (midas.auth.localOverrides.v2), guardada como SHA-256 de `${salt}:${password}`. Un correo que NO este en esta lista (ni dado de alta por un admin en Usuarios) no puede registrarse ni iniciar sesion. El backend real /api/auth/* sigue siendo el camino para produccion. Cambiar `enabled` a false desactiva el modo local y vuelve al backend.",
   "enabled": true,
   "salt": "midas.local.auth.v1",
   "sessionTtlHours": 12,
   "users": [
-    { "email": "blanca.reyes@gruposenda.com", "role": "cobranza", "passwordHash": "466f428cfb1d015c1325a3316af870ef34db88fbd2e583486d38c21b651a1bc0" },
-    { "email": "marco.guajardo@gruposenda.com", "role": "contaduria", "passwordHash": "466f428cfb1d015c1325a3316af870ef34db88fbd2e583486d38c21b651a1bc0" },
-    { "email": "francisco.boils@gruposenda.com", "role": "abastos", "passwordHash": "466f428cfb1d015c1325a3316af870ef34db88fbd2e583486d38c21b651a1bc0" },
-    { "email": "jose.gallegos@gruposenda.com", "role": "fiscal", "passwordHash": "466f428cfb1d015c1325a3316af870ef34db88fbd2e583486d38c21b651a1bc0" },
-    { "email": "agustin.blanco@gruposenda.com", "role": "admin", "passwordHash": "466f428cfb1d015c1325a3316af870ef34db88fbd2e583486d38c21b651a1bc0" },
-    { "email": "rafael.sampayo@gruposenda.com", "role": "admin", "passwordHash": "466f428cfb1d015c1325a3316af870ef34db88fbd2e583486d38c21b651a1bc0" },
-    { "email": "genaro.gonzalez@gruposenda.com", "role": "admin", "passwordHash": "466f428cfb1d015c1325a3316af870ef34db88fbd2e583486d38c21b651a1bc0" },
-    { "email": "arturo.jacobo@gruposenda.com", "role": "admin", "passwordHash": "466f428cfb1d015c1325a3316af870ef34db88fbd2e583486d38c21b651a1bc0" },
-    { "email": "fatima.garcia@gruposenda.com", "role": "admin", "passwordHash": "466f428cfb1d015c1325a3316af870ef34db88fbd2e583486d38c21b651a1bc0" },
-    { "email": "alberto.romo@gruposenda.com", "role": "admin", "passwordHash": "466f428cfb1d015c1325a3316af870ef34db88fbd2e583486d38c21b651a1bc0" },
-    { "email": "paolo.rodriguez@gruposenda.com", "role": "admin", "passwordHash": "466f428cfb1d015c1325a3316af870ef34db88fbd2e583486d38c21b651a1bc0" },
-    { "email": "smlr@gruposenda.com", "role": "admin", "passwordHash": "466f428cfb1d015c1325a3316af870ef34db88fbd2e583486d38c21b651a1bc0" }
+    { "email": "blanca.reyes@gruposenda.com", "role": "cobranza" },
+    { "email": "marco.guajardo@gruposenda.com", "role": "contaduria" },
+    { "email": "francisco.boils@gruposenda.com", "role": "abastos" },
+    { "email": "jose.gallegos@gruposenda.com", "role": "fiscal" },
+    { "email": "agustin.blanco@gruposenda.com", "role": "admin" },
+    { "email": "rafael.sampayo@gruposenda.com", "role": "admin" },
+    { "email": "genaro.gonzalez@gruposenda.com", "role": "admin" },
+    { "email": "arturo.jacobo@gruposenda.com", "role": "admin" },
+    { "email": "fatima.garcia@gruposenda.com", "role": "admin" },
+    { "email": "alberto.romo@gruposenda.com", "role": "admin" },
+    { "email": "paolo.rodriguez@gruposenda.com", "role": "admin" },
+    { "email": "smlr@gruposenda.com", "role": "admin" }
   ]
 }

@@ -21,15 +21,23 @@ Frontend auth is not a security boundary.
 (see `src/services/localAuth.ts`). It is obfuscation, not security: the user
 list and code are public in the bundle. In this mode:
 
-- `localAuth.ts` is the credential authority. Passwords are `SHA-256(salt:pwd)`;
-  JSON entries seed them, and a `localStorage` overlay
-  (`midas.auth.localOverrides.v1`) holds passwords that were changed, set by an
-  admin, or defined on first login. It works for any email (JSON-seeded or
-  registered by an admin).
-- **First login = register.** A user an admin registered in the Usuarios module
-  (registry entry, no password yet) sets their own password on first login:
-  `requiresPasswordSetup(email)` routes them to a set-password screen, and
-  `completeFirstLogin` fixes the password and opens the session.
+- `localAuth.ts` is the credential authority. Passwords are `SHA-256(salt:pwd)`
+  and live **only** in a `localStorage` overlay (`midas.auth.localOverrides.v2`).
+  The JSON **no longer seeds passwords** — its `users` are just the pre-registered
+  list (email + role). Every user starts passwordless and defines their own
+  password on first login (register). The overlay holds passwords defined on
+  first login, changed by the user, or set by an admin, for any pre-registered
+  email (JSON or admin-registered).
+- **Password reset (2026-06-09).** Bumping the overlay key `v1 → v2` wiped every
+  previously-defined password so everyone starts from zero: all users (JSON +
+  admin-registered) must re-register / re-set their password. The user list
+  (JSON `users` + the `midas.users.registry.v1` registry) is preserved.
+- **First login = register.** A pre-registered email with no password yet — in
+  the JSON `users` list **or** registered by an admin in the Usuarios module —
+  sets their own password on first login: `requiresPasswordSetup(email)` routes
+  them to a set-password screen, and `completeFirstLogin` fixes the password and
+  opens the session. An email that is **not** pre-registered can neither register
+  nor log in.
 - **Admin sets passwords** directly via `adminSetPassword` (writes the overlay).
 - **Per-browser limitation:** the registry and password overlay live in
   `localStorage`, so an admin registering a user / setting a password on their

@@ -27,8 +27,12 @@ describe('authApi (modo local)', () => {
     __resetAccessRegistryForTests();
   });
 
-  it('logs in a seeded JSON user with the dev password', async () => {
-    await expect(login(JSON_ADMIN, '12345')).resolves.toMatchObject({
+  it('routes a passwordless JSON user through first login, then accepts the password', async () => {
+    // El JSON ya no siembra contraseñas: el usuario está pre-registrado pero sin
+    // contraseña, así que primero la define (igual que un alta de admin).
+    expect(requiresPasswordSetup(JSON_ADMIN)).toBe(true);
+    await completeFirstLogin(JSON_ADMIN, 'PrimeraClave2026!');
+    await expect(login(JSON_ADMIN, 'PrimeraClave2026!')).resolves.toMatchObject({
       email: JSON_ADMIN,
       role: 'admin',
       passwordExpired: false,
@@ -38,8 +42,8 @@ describe('authApi (modo local)', () => {
   it('flags a registered-but-passwordless user as needing setup', () => {
     upsertUser(REGISTERED, 'user');
     expect(requiresPasswordSetup(REGISTERED)).toBe(true);
-    // Un usuario del JSON ya trae contraseña: no necesita primer ingreso.
-    expect(requiresPasswordSetup(JSON_ADMIN)).toBe(false);
+    // Un usuario del JSON ahora también arranca sin contraseña → necesita setup.
+    expect(requiresPasswordSetup(JSON_ADMIN)).toBe(true);
     // Un correo desconocido no es "registrado": tampoco entra al primer ingreso.
     expect(requiresPasswordSetup('desconocido@gruposenda.com')).toBe(false);
   });

@@ -20,7 +20,9 @@ import { AuthApiError } from './authError';
 interface LocalUser {
   email: string;
   role: string;
-  passwordHash: string;
+  // Opcional: los usuarios del JSON arrancan SIN contraseña (pre-registrados).
+  // La contraseña la define el usuario en su primer ingreso y vive en el overlay.
+  passwordHash?: string;
 }
 
 interface LocalAuthConfig {
@@ -34,8 +36,15 @@ const config = rawConfig as unknown as LocalAuthConfig;
 
 /** Sesión local persistida (sustituye a la cookie HttpOnly del backend). */
 export const LOCAL_SESSION_KEY = 'midas.auth.localSession.v1';
-/** Overlay de contraseñas cambiadas en el cliente (email → hash). */
-export const LOCAL_OVERRIDES_KEY = 'midas.auth.localOverrides.v1';
+/**
+ * Overlay de contraseñas definidas en el cliente (email → hash).
+ *
+ * `v2` (2026-06-09): reset total de contraseñas. Al subir la versión de la key
+ * se abandona el overlay `v1` previo, así TODOS los usuarios vuelven a quedar
+ * sin contraseña (deben registrarse / definirla de nuevo). El JSON ya no siembra
+ * contraseñas, así que esta es la única fuente de credenciales en modo local.
+ */
+export const LOCAL_OVERRIDES_KEY = 'midas.auth.localOverrides.v2';
 
 export interface LocalSession {
   email: string;
@@ -142,7 +151,10 @@ export function listLocalUsers(): { email: string; role: string }[] {
 function currentHashForEmail(email: string): string | null {
   const overlay = readOverrides()[normalizeEmail(email)];
   if (overlay) return overlay;
-  return findUser(email)?.passwordHash ?? null;
+  // El JSON ya no siembra contraseñas; un usuario sin overlay no tiene
+  // contraseña (debe registrarse). Tratamos hash ausente/vacío como `null`.
+  const seedHash = findUser(email)?.passwordHash;
+  return seedHash && seedHash.length > 0 ? seedHash : null;
 }
 
 /**
