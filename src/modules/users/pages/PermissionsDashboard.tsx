@@ -8,12 +8,11 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Download, Info, ShieldCheck, User as UserIcon } from 'lucide-react';
+import { Info, ShieldCheck, User as UserIcon } from 'lucide-react';
 import PageHeader from '../../../components/ui/PageHeader';
 import { useAuth } from '../../../contexts/AuthContext';
 import { PERMISSION_GROUPS, GRANTABLE_TABS, tabLabel } from '../../../config/appTabs';
 import {
-  exportRegistryJson,
   listManagedUsers,
   setPermission,
   setPermissions,
@@ -68,27 +67,6 @@ export default function PermissionsDashboard() {
     toast.success(enabled ? 'Se habilitaron todos los módulos.' : 'Se quitaron todos los módulos.');
   };
 
-  // Exporta el registro completo (correo → rol + permisos) a un archivo JSON,
-  // pensado para hardcodearlo como semilla. Botón temporal (ver PR de roster).
-  const handleExport = () => {
-    if (!canEdit) return;
-    try {
-      const json = exportRegistryJson();
-      const blob = new Blob([json], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `midas-permisos-${new Date().toISOString().slice(0, 10)}.json`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-      toast.success('Permisos exportados a JSON.');
-    } catch {
-      toast.error('No se pudo exportar el JSON de permisos.');
-    }
-  };
-
   if (users.length === 0) {
     return (
       <div className="space-y-5">
@@ -113,18 +91,6 @@ export default function PermissionsDashboard() {
           title="Permisos"
           subtitle="Elige un usuario y prende o apaga su acceso a cada módulo."
         />
-        {canEdit && (
-          <button
-            type="button"
-            onClick={handleExport}
-            className="flex h-9 items-center gap-2 rounded-[var(--radius-md)] border px-3 text-[13px] font-medium transition-colors hover:bg-[var(--gray-100)]"
-            style={{ borderColor: 'var(--gray-200)', color: 'var(--gray-700)' }}
-            title="Exporta todos los permisos a un JSON para hardcodearlos como semilla."
-          >
-            <Download className="h-4 w-4" strokeWidth={1.75} />
-            Exportar JSON
-          </button>
-        )}
       </div>
 
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-[280px_1fr]">
