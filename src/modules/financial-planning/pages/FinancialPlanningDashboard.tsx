@@ -4,7 +4,7 @@ import {
   postToSharedSourceWorker,
   subscribeSharedSourceWorker,
 } from '../../shared-finance/services/sharedSourceWorker';
-import { AlertTriangle, CheckCircle2, Copy, Eye, Trash2, Wallet, AlertTriangle as AlertIcon, TrendingUp } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Copy, Download, Eye, Trash2, Wallet, AlertTriangle as AlertIcon, TrendingUp } from 'lucide-react';
 import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
@@ -45,6 +45,7 @@ import { AdjustmentEditorPopover } from '../components/AdjustmentEditorPopover';
 import { clearProjectionRunCache, fingerprintArray, primeProjectionRunCache } from '../../financial-projection/services/projectionCache';
 import { clearProjectionSourceCache } from '../../financial-projection/services/financialProjectionService';
 import { onMemoryPressure } from '../../../services/runtimeGuardian';
+import { downloadFile, toCSV } from '../../../utils/export';
 import { projectionWindowFor } from '../../financial-projection/services/projectionWindow';
 import { useScenarioRunWorker } from '../../shared-finance/hooks/useScenarioRunWorker';
 import { CellDetailPopover, type CellDetailData } from '../components/CellDetailPopover';
@@ -1745,6 +1746,33 @@ function PlanningCellDetailPanel({
   const inflows = movements.filter((movement) => movement.type === 'INFLOW');
   const outflows = movements.filter((movement) => movement.type === 'OUTFLOW');
   const total = movements.reduce((sum, movement) => sum + effectiveAmount(movement), 0);
+  const handleExport = useCallback(() => {
+    const rows = movements.map((movement) => ({
+      Concepto: movement.counterpartyName ?? movement.concept,
+      Detalle: movement.concept,
+      Tipo: movement.type === 'INFLOW' ? 'Ingreso' : 'Egreso',
+      Categoría: movement.category,
+      Subcategoría: movement.subcategory ?? '',
+      Sistema: movement.sourceSystem,
+      Documento: movement.sourceObjectId ?? '',
+      'Cuenta banco': movement.bankAccountId ?? '',
+      'Fecha original': movement.dueDate ?? movement.projectedDate ?? '',
+      'Fecha estimada': effectiveMovementDate(movement) ?? '',
+      Monto: effectiveAmount(movement),
+      Moneda: movement.currency,
+      Score: movement.confidenceScore,
+      Estado: movement.status,
+    }));
+    const slug = (text: string) =>
+      text
+        .normalize('NFD')
+        .replace(/[̀-ͯ]/g, '')
+        .replace(/[^a-zA-Z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .toLowerCase() || 'celda';
+    const filename = `detalle-${slug(conceptLabel)}-${slug(bucketLabel)}.csv`;
+    downloadFile(toCSV(rows), filename);
+  }, [movements, conceptLabel, bucketLabel]);
   return (
     <aside className="rounded-2xl border border-[var(--gray-200)] bg-white">
       <header className="flex items-start justify-between border-b border-[var(--gray-200)] px-4 py-3">
@@ -1752,13 +1780,25 @@ function PlanningCellDetailPanel({
           <h3 className="truncate text-[13px] font-semibold text-[var(--gray-950)]">{conceptLabel}</h3>
           <p className="mt-1 text-[11px] text-[var(--gray-500)]">{bucketLabel} · {scenarioName}</p>
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="text-[11px] font-medium text-[var(--gray-500)] hover:text-[var(--gray-950)]"
-        >
-          Cerrar
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={handleExport}
+            disabled={movements.length === 0}
+            className="inline-flex items-center gap-1 rounded-lg border border-[var(--gray-200)] px-2 py-1 text-[11px] font-medium text-[var(--gray-600)] hover:bg-[var(--gray-50)] disabled:cursor-not-allowed disabled:opacity-40"
+            title="Descargar el detalle de esta celda en Excel (CSV)"
+          >
+            <Download className="h-3 w-3" strokeWidth={1.5} />
+            Excel
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-[11px] font-medium text-[var(--gray-500)] hover:text-[var(--gray-950)]"
+          >
+            Cerrar
+          </button>
+        </div>
       </header>
       <div className="grid grid-cols-3 gap-2 border-b border-[var(--gray-200)] p-3">
         <MiniStat label="Ingresos" value={String(inflows.length)} />
