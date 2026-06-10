@@ -17,6 +17,11 @@
  *   - Pagos internos (`internalPaymentKeys`) se filtran antes de KPIs.
  *   - Bridge OC: `${cia}::${noProveedor}::${normalize(noFactura)}` →
  *     `ComprasRecord[]` (una factura puede cubrir varias líneas de OC).
+ *   - "Huérfano" = UNMATCHED **con cobertura bancaria** (había banco cargado
+ *     contra qué cruzar y el cargo no apareció) y no-empleado. Un UNMATCHED
+ *     cuya cuenta no tiene estados de cuenta cargados (o cuya fecha cae fuera
+ *     del rango bancario) se muestra como "Sin estado de cuenta" — falta de
+ *     datos, no discrepancia. Misma definición en KPI, rollup y filtros.
  */
 
 import { useMemo, useState, type ReactNode } from 'react';
@@ -63,7 +68,7 @@ interface PagosProps {
 
 type ViewMode = 'byProvider' | 'flatList';
 type TipoBusquedaFilter = 'all' | 'employees' | 'suppliers';
-type StatusFilter = 'all' | 'matched' | 'cxp-only' | 'bank-only' | 'orphan';
+type StatusFilter = 'all' | 'matched' | 'cxp-only' | 'bank-only' | 'orphan' | 'no-bank-data';
 type ProviderSortKey = 'totalPagado' | 'conciliacionPct' | 'pagosCount' | 'orphanCount' | 'ultimoPago' | 'nombre';
 type FlatSortKey = 'fechaPago' | 'importePesos' | 'nombreProveedor' | 'banco' | 'noPago';
 type SortDirection = 'asc' | 'desc';
@@ -91,14 +96,32 @@ const CHIP_EMPLOYEE: ChipStyle = {
  * conciliados. Lo tratamos como variante de "Pagado" — tono success suave y
  * etiqueta explícita "CXP cerrada".
  */
-const STATUS_LABEL: Record<PaymentStatus, string> = {
+/**
+ * Estado VISIBLE: `UNMATCHED` se desdobla según `bankCoverage`. Sin banco
+ * cargado contra qué cruzar no hay discrepancia que alarme — el chip rojo
+ * "Huérfano" queda reservado para cuentas con cobertura donde el cargo
+ * realmente no apareció.
+ */
+type DisplayStatus = PaymentStatus | 'NO_BANK_DATA';
+
+function displayStatusOf(m: PaymentMatch): DisplayStatus {
+  return m.status === 'UNMATCHED' && m.bankCoverage !== 'covered' ? 'NO_BANK_DATA' : m.status;
+}
+
+/** Huérfano real: hubo banco contra qué cruzar, no-empleado, y no cruzó. */
+function isRealOrphan(m: PaymentMatch): boolean {
+  return m.status === 'UNMATCHED' && m.bankCoverage === 'covered' && !isEmployeePayment(m.payment);
+}
+
+const STATUS_LABEL: Record<DisplayStatus, string> = {
   MATCHED_FULL: 'Conciliado',
   MATCHED_CXP_ONLY: 'CXP ✓ · Banco pendiente',
   MATCHED_BANK_ONLY: 'Pagado · CXP cerrada',
   UNMATCHED: 'Huérfano',
+  NO_BANK_DATA: 'Sin estado de cuenta',
 };
 
-const STATUS_STYLE: Record<PaymentStatus, ChipStyle> = {
+const STATUS_STYLE: Record<DisplayStatus, ChipStyle> = {
   MATCHED_FULL: {
     bg: 'var(--success-muted)',
     border: 'oklch(88% 0.08 145)',
@@ -119,6 +142,11 @@ const STATUS_STYLE: Record<PaymentStatus, ChipStyle> = {
     border: 'oklch(85% 0.1 30)',
     text: 'var(--danger)',
   },
+  NO_BANK_DATA: {
+    bg: 'var(--surface-alt)',
+    border: 'var(--gray-200)',
+    text: 'var(--gray-500)',
+  },
 };
 
 const TIER_LABEL: Record<CxpMatchTier, string> = {
@@ -132,6 +160,7 @@ const TIER_LABEL: Record<CxpMatchTier, string> = {
 const CARGO_TIER_LABEL: Record<CargoMatchTier, string> = {
   exact: 'exacto',
   tolerance: 'tolerancia',
+  batch: 'lote agregado',
   'cross-account': 'otra cuenta',
   subset: 'pago partido',
   unmatched: 'sin cruce',
@@ -253,7 +282,10 @@ interface ProviderRollup {
   pagosFull: number;
   pagosCxpOnly: number;
   pagosBankOnly: number;
+  /** Huérfanos REALES (UNMATCHED con cobertura bancaria, no-empleado). */
   pagosOrphan: number;
+  /** UNMATCHED sin banco cargado contra qué cruzar — falta de datos, no alarma. */
+  pagosSinBanco: number;
   ultimoPago: string;
   conciliacionPct: number;
 }
@@ -281,6 +313,7 @@ function buildProviderRollups(matches: PaymentMatch[], bridge: ComprasBridge): P
         pagosCxpOnly: 0,
         pagosBankOnly: 0,
         pagosOrphan: 0,
+        pagosSinBanco: 0,
         ultimoPago: '',
         conciliacionPct: 0,
       };
@@ -293,7 +326,12 @@ function buildProviderRollups(matches: PaymentMatch[], bridge: ComprasBridge): P
       case 'MATCHED_FULL': r.pagosFull += 1; break;
       case 'MATCHED_CXP_ONLY': r.pagosCxpOnly += 1; break;
       case 'MATCHED_BANK_ONLY': r.pagosBankOnly += 1; break;
-      case 'UNMATCHED': r.pagosOrphan += 1; break;
+      case 'UNMATCHED':
+        // Misma definición que el KPI: huérfano sólo con cobertura bancaria
+        // y no-empleado; sin cobertura es falta de datos, no discrepancia.
+        if (isRealOrphan(m)) r.pagosOrphan += 1;
+        else if (m.bankCoverage !== 'covered') r.pagosSinBanco += 1;
+        break;
     }
     for (const hit of m.cxpMatches) {
       r.cxpsCubiertas += 1;
@@ -382,10 +420,12 @@ export default function Pagos({
       if (min !== undefined && r.importePesos < min) return false;
       if (max !== undefined && r.importePesos > max) return false;
       if (statusFilter !== 'all') {
-        if (statusFilter === 'matched' && m.status !== 'MATCHED_FULL') return false;
-        if (statusFilter === 'cxp-only' && m.status !== 'MATCHED_CXP_ONLY') return false;
-        if (statusFilter === 'bank-only' && m.status !== 'MATCHED_BANK_ONLY') return false;
-        if (statusFilter === 'orphan' && m.status !== 'UNMATCHED') return false;
+        const display = displayStatusOf(m);
+        if (statusFilter === 'matched' && display !== 'MATCHED_FULL') return false;
+        if (statusFilter === 'cxp-only' && display !== 'MATCHED_CXP_ONLY') return false;
+        if (statusFilter === 'bank-only' && display !== 'MATCHED_BANK_ONLY') return false;
+        if (statusFilter === 'orphan' && display !== 'UNMATCHED') return false;
+        if (statusFilter === 'no-bank-data' && display !== 'NO_BANK_DATA') return false;
       }
       if (q) {
         const hay =
@@ -430,6 +470,8 @@ export default function Pagos({
     let conciliadosMonto = 0;
     let huerfanos = 0;
     let huerfanosMonto = 0;
+    let sinBanco = 0;
+    let sinBancoMonto = 0;
     const ocsCubiertas = new Set<string>();
     for (const m of filteredMatches) {
       const r = m.payment;
@@ -440,9 +482,12 @@ export default function Pagos({
         conciliados += 1;
         conciliadosMonto += r.importePesos;
       }
-      if (m.status === 'UNMATCHED' && !isEmployeePayment(r)) {
+      if (isRealOrphan(m)) {
         huerfanos += 1;
         huerfanosMonto += r.importePesos;
+      } else if (m.status === 'UNMATCHED' && m.bankCoverage !== 'covered') {
+        sinBanco += 1;
+        sinBancoMonto += r.importePesos;
       }
       for (const hit of m.cxpMatches) {
         for (const oc of findOCsForCxp(hit.cxp, bridge)) ocsCubiertas.add(`${oc.cia}::${oc.noOrden}`);
@@ -458,6 +503,8 @@ export default function Pagos({
       conciliacionPct,
       huerfanos,
       huerfanosMonto,
+      sinBanco,
+      sinBancoMonto,
       ocsCubiertas: ocsCubiertas.size,
       cuenta: filteredMatches.length,
     };
@@ -564,7 +611,9 @@ export default function Pagos({
           icon={ShieldAlert}
           label="Pagos huérfanos"
           value={kpis.huerfanos.toLocaleString()}
-          sub={`Sin CXP ni banco · ${fmtCompact(kpis.huerfanosMonto)}`}
+          sub={`Con banco cargado y sin cruce · ${fmtCompact(kpis.huerfanosMonto)}${
+            kpis.sinBanco > 0 ? ` · ${kpis.sinBanco.toLocaleString()} sin edo. de cuenta` : ''
+          }`}
           tone={kpis.huerfanos === 0 ? 'success' : 'warning'}
         />
       </section>
@@ -636,6 +685,7 @@ export default function Pagos({
             <option value="cxp-only">Sólo CXP</option>
             <option value="bank-only">Sólo Banco</option>
             <option value="orphan">Huérfano</option>
+            <option value="no-bank-data">Sin estado de cuenta</option>
           </select>
           <select
             className="input max-w-[170px]"
@@ -981,6 +1031,9 @@ function ProviderAuditDetail({
             value={`${rollup.pagosOrphan}`}
             accent={rollup.pagosOrphan > 0 ? 'warning' : 'neutral'}
           />
+          {rollup.pagosSinBanco > 0 && (
+            <MiniStat label="Sin edo. de cuenta" value={`${rollup.pagosSinBanco}`} />
+          )}
         </div>
       </div>
 
@@ -1008,7 +1061,10 @@ function PaymentAuditCard({ match, bridge }: { match: PaymentMatch; bridge: Comp
     ocs: groupOCsByOrden(findOCsForCxp(hit.cxp, bridge)),
   }));
   const totalOCs = ocsByCxp.reduce((sum, x) => sum + x.ocs.length, 0);
-  const canExpand = !isEmployee && (match.cxpMatches.length > 0 || !!match.cargoMatch);
+  // UNMATCHED también expande: el detalle explica POR QUÉ no cruzó (sin
+  // estados de cuenta / fuera de rango / cargo candidato ya reclamado).
+  const canExpand = (!isEmployee && match.cxpMatches.length > 0) || !!match.cargoMatch || match.status === 'UNMATCHED';
+  const display = displayStatusOf(match);
 
   return (
     <div className="border border-[var(--gray-200)] rounded-[var(--radius-md)] bg-white">
@@ -1033,8 +1089,8 @@ function PaymentAuditCard({ match, bridge }: { match: PaymentMatch; bridge: Comp
             {p.moneda && p.moneda !== 'MXP' && p.moneda !== 'MXN' && (
               <span className="text-[10px] text-[var(--gray-400)]">{p.moneda}</span>
             )}
-            <Chip style={STATUS_STYLE[match.status]} icon={statusIcon(match.status)}>
-              {STATUS_LABEL[match.status]}
+            <Chip style={STATUS_STYLE[display]} icon={statusIcon(display)}>
+              {STATUS_LABEL[display]}
             </Chip>
             {totalOCs > 0 && (
               <span className="inline-flex items-center gap-1 text-[11px] text-[var(--gray-500)] font-medium">
@@ -1186,8 +1242,8 @@ function PaymentAuditCard({ match, bridge }: { match: PaymentMatch; bridge: Comp
               )}
             </div>
           ) : (
-            <div className="text-[11px] text-[var(--gray-400)] italic px-1">
-              Sin cargo bancario empatado todavía.
+            <div className="text-[11px] text-[var(--gray-500)] italic px-1">
+              {bankGapExplanation(match)}
             </div>
           )}
         </div>
@@ -1341,8 +1397,8 @@ function FlatPaymentList({
                     )}
                   </Td>
                   <Td>
-                    <Chip style={STATUS_STYLE[m.status]} icon={statusIcon(m.status)}>
-                      {STATUS_LABEL[m.status]}
+                    <Chip style={STATUS_STYLE[displayStatusOf(m)]} icon={statusIcon(displayStatusOf(m))}>
+                      {STATUS_LABEL[displayStatusOf(m)]}
                     </Chip>
                   </Td>
                   <Td>
@@ -1463,11 +1519,33 @@ function ConciliationBar({
   );
 }
 
-function statusIcon(status: PaymentStatus): typeof CheckCircle2 {
+function statusIcon(status: DisplayStatus): typeof CheckCircle2 {
   if (status === 'MATCHED_FULL') return CheckCircle2;
   if (status === 'MATCHED_BANK_ONLY') return CheckCircle2;
   if (status === 'UNMATCHED') return AlertTriangle;
+  if (status === 'NO_BANK_DATA') return Database;
   return Link2;
+}
+
+/**
+ * Explica el hueco bancario de un pago sin `cargoMatch`, en orden de
+ * especificidad: falta de cobertura (no es discrepancia) → CARGO candidato
+ * que el motor vio pero no pudo confirmar → huérfano genuino.
+ */
+function bankGapExplanation(m: PaymentMatch): string {
+  if (m.bankCoverage === 'no-account') {
+    return 'La cuenta de este pago no tiene estados de cuenta cargados — no hay banco contra qué cruzar.';
+  }
+  if (m.bankCoverage === 'out-of-range') {
+    return 'La fecha del pago cae fuera del rango bancario cargado para su cuenta.';
+  }
+  const c = m.unmatchedCandidate;
+  if (c) {
+    const claimed = c.claimed ? 'ya reclamado por otro pago' : 'fuera de la ventana de cruce';
+    const cuenta = c.sameAccount ? 'misma cuenta' : `cuenta ${c.cuenta}`;
+    return `Sin cargo bancario empatado. CARGO parecido de ${fmtCurrency(Math.abs(c.movement.importe))} en ${cuenta} a ${c.daysOff}d — ${claimed}.`;
+  }
+  return 'Sin cargo bancario empatado todavía.';
 }
 
 interface KpiCardProps {

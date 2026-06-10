@@ -34,6 +34,7 @@ function unmatchedMatch(record: PagoProveedorRecord): PaymentMatch {
   return {
     payment: record,
     status: 'UNMATCHED',
+    bankCoverage: 'covered',
     cxpMatches: [],
     reason: 'sin cxp ni cargo (test)',
   };

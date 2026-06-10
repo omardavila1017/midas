@@ -248,6 +248,65 @@ describe('reconcilePayments — CARGO matching', () => {
     expect(result.totals.totalInternalPesos).toBe(8695);
   });
 
+  it('matches N payments of the same batch against ONE aggregated CARGO (tier batch)', () => {
+    // Tesorería dispersa el lote como un solo SPEI por la suma: ningún pago
+    // individual cuadra por monto, pero la suma del batch sí.
+    const result = reconcilePayments({
+      payments: [
+        pago({ noPago: 'B1', batchPago: '777', importePesos: 3000, claveProveedor: '1', comentarioPago: 'x' }),
+        pago({ noPago: 'B2', batchPago: '777', importePesos: 4500, claveProveedor: '2', comentarioPago: 'x' }),
+        pago({ noPago: 'B3', batchPago: '777', importePesos: 2500, claveProveedor: '3', comentarioPago: 'x' }),
+      ],
+      cxpRecords: [],
+      bankStatements: [statement([cargo({ importe: 10000, concepto: 'DISPERSION LOTE' })])],
+    });
+    for (const pm of result.paymentMatches) {
+      expect(pm.cargoMatch?.tier).toBe('batch');
+      expect(pm.status).toBe('MATCHED_BANK_ONLY');
+    }
+    // Un solo enrichment con los 3 pagos colgando del mismo CARGO.
+    expect(result.cargoEnrichments.size).toBe(1);
+    const enrichment = Array.from(result.cargoEnrichments.values())[0];
+    expect(enrichment.status).toBe('MATCHED');
+    expect(enrichment.payments?.length).toBe(3);
+  });
+
+  it('batch matching does NOT steal cargos from individually-matched payments', () => {
+    // El pago suelto cuadra exacto contra su propio CARGO; el lote toma el
+    // agregado. Ninguno roba al otro.
+    const result = reconcilePayments({
+      payments: [
+        pago({ noPago: 'SOLO', batchPago: '888', importePesos: 7000, claveProveedor: '9', comentarioPago: 'x' }),
+        pago({ noPago: 'B1', batchPago: '999', importePesos: 3000, claveProveedor: '1', comentarioPago: 'x' }),
+        pago({ noPago: 'B2', batchPago: '999', importePesos: 4000, claveProveedor: '2', comentarioPago: 'x' }),
+      ],
+      cxpRecords: [],
+      bankStatements: [statement([
+        cargo({ importe: 7000, referencia: 'IND' }),
+        cargo({ importe: 7000, referencia: 'AGG', concepto: 'DISPERSION LOTE' }),
+      ])],
+    });
+    const byPago = new Map(result.paymentMatches.map((m) => [m.payment.noPago, m]));
+    expect(byPago.get('SOLO')?.cargoMatch?.tier).toBe('exact');
+    expect(byPago.get('B1')?.cargoMatch?.tier).toBe('batch');
+    expect(byPago.get('B2')?.cargoMatch?.tier).toBe('batch');
+  });
+
+  it('batch does not fire for a single-payment group nor without a sum-matching cargo', () => {
+    const result = reconcilePayments({
+      payments: [
+        pago({ noPago: 'B1', batchPago: '555', importePesos: 3000, claveProveedor: '1', comentarioPago: 'x' }),
+        pago({ noPago: 'B2', batchPago: '555', importePesos: 4500, claveProveedor: '2', comentarioPago: 'x' }),
+      ],
+      cxpRecords: [],
+      // 9000 ≠ 7500: la suma no cuadra → siguen sin cargo.
+      bankStatements: [statement([cargo({ importe: 9000 })])],
+    });
+    for (const pm of result.paymentMatches) {
+      expect(pm.cargoMatch).toBeUndefined();
+    }
+  });
+
   it('treats pair-matched CARGO/ABONO transfers as internal, not provider payments', () => {
     const internalCargo = cargo({
       importe: 5000,
@@ -278,6 +337,55 @@ describe('reconcilePayments — CARGO matching', () => {
     expect(result.paymentMatches[0].cargoMatch).toBeUndefined();
     expect(result.cargoEnrichments.size).toBe(0);
     expect(result.totals.internalPayments).toBe(1);
+  });
+});
+
+describe('reconcilePayments — bank coverage (huérfano real vs sin datos)', () => {
+  it('flags no-account when the payment account has no loaded statements', () => {
+    const result = reconcilePayments({
+      payments: [pago({ claveProveedor: '99999', comentarioPago: 'unknown' })],
+      cxpRecords: [],
+      bankStatements: [],
+    });
+    expect(result.paymentMatches[0].status).toBe('UNMATCHED');
+    expect(result.paymentMatches[0].bankCoverage).toBe('no-account');
+    expect(result.totals.unmatched).toBe(1);
+    expect(result.totals.unmatchedNoBankData).toBe(1);
+    expect(result.totals.totalUnmatchedNoBankDataPesos).toBe(8695);
+  });
+
+  it('flags out-of-range when fechaPago falls outside the loaded bank window', () => {
+    const result = reconcilePayments({
+      // Pago de enero; el banco sólo tiene mayo cargado para esa cuenta.
+      payments: [pago({ fechaPago: '2026-01-10', claveProveedor: '99999', comentarioPago: 'unknown' })],
+      cxpRecords: [],
+      bankStatements: [statement([cargo({ importe: 123456 })])],
+    });
+    expect(result.paymentMatches[0].status).toBe('UNMATCHED');
+    expect(result.paymentMatches[0].bankCoverage).toBe('out-of-range');
+    expect(result.totals.unmatchedNoBankData).toBe(1);
+  });
+
+  it('marks covered when the account+date have bank data, even if unmatched (huérfano real)', () => {
+    const result = reconcilePayments({
+      // Mismo día y cuenta con banco cargado, pero ningún cargo cuadra.
+      payments: [pago({ importePesos: 555, claveProveedor: '99999', comentarioPago: 'unknown' })],
+      cxpRecords: [],
+      bankStatements: [statement([cargo({ importe: 123456 })])],
+    });
+    expect(result.paymentMatches[0].status).toBe('UNMATCHED');
+    expect(result.paymentMatches[0].bankCoverage).toBe('covered');
+    expect(result.totals.unmatched).toBe(1);
+    expect(result.totals.unmatchedNoBankData).toBe(0);
+  });
+
+  it('matched payments report covered coverage trivially', () => {
+    const result = reconcilePayments({
+      payments: [pago()],
+      cxpRecords: [],
+      bankStatements: [statement([cargo()])],
+    });
+    expect(result.paymentMatches[0].bankCoverage).toBe('covered');
   });
 });
 

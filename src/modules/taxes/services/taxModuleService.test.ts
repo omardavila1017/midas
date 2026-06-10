@@ -1528,6 +1528,7 @@ function paymentMatch(
   return {
     payment,
     status: cxpMatches.length > 0 ? 'MATCHED_CXP_ONLY' : 'MATCHED_BANK_ONLY',
+    bankCoverage: 'covered',
     cxpMatches,
     reason: 'test match',
   };

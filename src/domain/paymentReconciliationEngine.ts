@@ -28,10 +28,19 @@
  * — son nómina/vales/reembolsos que no pasan por el módulo CXP. Sólo se
  * cruzan con bancos.
  *
- * Algoritmo PAGO ↔ CARGO, 2 capas:
+ * Algoritmo PAGO ↔ CARGO:
  *
- *   1. EXACTO: mismo `cuentaBanco`, misma `fechaPago`, mismo `importePesos`.
- *   2. TOLERANCIA: misma cuenta, ±2 días, ±0.5% monto.
+ *   1a pasada (por pago): EXACTO (misma cuenta, misma fecha, mismo importe)
+ *   → TOLERANCIA (misma cuenta, ventana de fecha, ±0.5%).
+ *   2a pasada (pagos sin cargo): BATCH (N pagos del mismo `batchPago` cuya
+ *   suma ≈ UN cargo agregado de la misma cuenta — tesorería dispersa el lote
+ *   como un solo SPEI) → CROSS-ACCOUNT (el cargo salió de otra cuenta) →
+ *   SUBSET (un pago partido en 2-4 cargos).
+ *
+ * Además, cada pago lleva `bankCoverage`: si la cuenta que nombra el pago ni
+ * siquiera tiene estados de cuenta cargados (o la fecha cae fuera del rango
+ * cargado), un UNMATCHED NO es un huérfano real — es falta de datos para
+ * cruzar. La UI los separa.
  */
 
 import type { PagoProveedorRecord, BankAccountStatement, BankStatementLine } from '../services/jdeTypes';
@@ -73,6 +82,7 @@ const DAY_MS = 86_400_000;
 const CARGO_TIER_CONFIDENCE: Record<Exclude<CargoMatchTier, 'unmatched'>, number> = {
   exact: 0.95,
   tolerance: 0.75,
+  batch: 0.7,
   'cross-account': 0.55,
   subset: 0.5,
 };
@@ -89,6 +99,8 @@ export type CxpMatchTier =
 /**
  * Tier del cruce PAGO ↔ CARGO bancario:
  *   - exact / tolerance: CARGO en la MISMA cuenta del registro de pago.
+ *   - batch: N pagos del mismo `batchPago` cubiertos por UN CARGO agregado
+ *     cuyo importe ≈ la suma del lote (dispersión SPEI en lote).
  *   - cross-account: el CARGO salió de OTRA cuenta (tesorería paga desde
  *     cuentas concentradoras; JDE registra la cuenta nominal de la cía).
  *   - subset: el pago se dispersó en 2-4 CARGOs de la misma cuenta.
@@ -97,9 +109,24 @@ export type CxpMatchTier =
 export type CargoMatchTier =
   | 'exact'
   | 'tolerance'
+  | 'batch'
   | 'cross-account'
   | 'subset'
   | 'unmatched';
+
+/**
+ * Cobertura bancaria de la cuenta que nombra el registro de pago:
+ *   - covered: la cuenta tiene movimientos cargados y `fechaPago` cae dentro
+ *     del rango [min, max] de sus `fechaOperacion`.
+ *   - no-account: la cuenta NO aparece en los estados de cuenta cargados
+ *     (cuenta cerrada, banco no incluido en /bancos, o clave irreconocible).
+ *   - out-of-range: la cuenta existe pero `fechaPago` cae fuera del rango
+ *     cargado (p.ej. backfill bancario recortado a 120d con pagos de 365d).
+ * Solo es significativo cuando NO hay `cargoMatch`: distingue el huérfano
+ * REAL (había banco contra qué cruzar y el cargo no apareció) del pago sin
+ * datos para cruzar. Los segundos no deben alarmar como huérfanos.
+ */
+export type BankCoverage = 'covered' | 'no-account' | 'out-of-range';
 
 /**
  * Estado de un pago tras la conciliación:
@@ -115,6 +142,9 @@ export type PaymentStatus = 'MATCHED_FULL' | 'MATCHED_CXP_ONLY' | 'MATCHED_BANK_
 export interface PaymentMatch {
   payment: PagoProveedorRecord;
   status: PaymentStatus;
+
+  /** Ver `BankCoverage` — separa huérfano real de "sin banco contra qué cruzar". */
+  bankCoverage: BankCoverage;
 
   /** CXPs que cubre este pago (1 para folio/exact, N para subset-sum). */
   cxpMatches: Array<{
@@ -211,10 +241,14 @@ export interface PaymentReconciliationResult {
     matchedCxp: number;
     matchedCargo: number;
     matchedFull: number;
+    /** TODOS los UNMATCHED no-internos (incluye los sin cobertura bancaria). */
     unmatched: number;
+    /** Subconjunto de `unmatched` cuya cuenta no tiene banco cargado para cruzar. */
+    unmatchedNoBankData: number;
     totalPaidPesos: number;
     totalInternalPesos: number;
     totalUnmatchedPesos: number;
+    totalUnmatchedNoBankDataPesos: number;
   };
 }
 
@@ -231,9 +265,11 @@ export function emptyPaymentReconciliationResult(): PaymentReconciliationResult 
       matchedCargo: 0,
       matchedFull: 0,
       unmatched: 0,
+      unmatchedNoBankData: 0,
       totalPaidPesos: 0,
       totalInternalPesos: 0,
       totalUnmatchedPesos: 0,
+      totalUnmatchedNoBankDataPesos: 0,
     },
   };
 }
@@ -249,6 +285,7 @@ export function reconcilePayments(input: {
 
   // Indexes ───────────────────────────────────────────────────────────────
   const cxpByProvider = indexCxpByProvider(cxpRecords);
+  const accountCoverage = buildAccountCoverage(bankStatements);
   const { real: cargoMovements, internal: internalCargoMovements } = collectCargoMovements(bankStatements);
   const cargoByAccount = indexCargosByAccount(cargoMovements);
   const internalCargoByAccount = indexCargosByAccount(internalCargoMovements);
@@ -346,10 +383,11 @@ export function reconcilePayments(input: {
           ? 'MATCHED_BANK_ONLY'
           : 'UNMATCHED';
 
+    const bankCoverage = resolveBankCoverage(payment, accountCoverage);
     const reason = isInternalPayment
       ? 'Pago interno detectado por CARGO bancario interno; se excluye de conciliacion CXP y egreso proveedor.'
-      : buildReason(status, cxpHits, cargoMatch, isEmployee);
-    paymentMatches.push({ payment, status, cxpMatches: cxpHits, cargoMatch, reason });
+      : buildReason(status, cxpHits, cargoMatch, isEmployee, bankCoverage);
+    paymentMatches.push({ payment, status, bankCoverage, cxpMatches: cxpHits, cargoMatch, reason });
 
     // ── Acumular coverage CXP ──
     for (const hit of cxpHits) {
@@ -399,6 +437,67 @@ export function reconcilePayments(input: {
     }
   }
 
+  // ── 2a pasada BATCH: N pagos del mismo lote → 1 CARGO agregado ───────────
+  // JDE registra un pago por proveedor/factura, pero tesorería dispersa el
+  // lote como UN solo CARGO por el total (`batchPago` agrupa). Ningún pago
+  // individual cuadra por monto contra ese cargo agregado, así que sin esta
+  // capa el lote ENTERO caía huérfano — era la causa #1 de huérfanos. Agrupa
+  // los pagos aún sin cargo por (cia, batch, cuenta, fecha) y busca un CARGO
+  // ≈ Σ del grupo en la misma cuenta. Corre ANTES de cross-account/subset:
+  // la suma del lote en la cuenta propia es señal más fuerte que un importe
+  // individual en otra cuenta. Grupos de 1 ya los cubrió la 1a pasada.
+  const batchGroups = new Map<string, PaymentMatch[]>();
+  for (const pm of paymentMatches) {
+    if (pm.cargoMatch) continue;
+    if (internalPaymentKeys.has(paymentKey(pm.payment))) continue;
+    const batch = (pm.payment.batchPago || '').trim();
+    if (!batch) continue;
+    const groupKey = `${pm.payment.cia}::${batch}::${resolvePaymentAccountKey(pm.payment)}::${cleanIsoDate(pm.payment.fechaPago) ?? ''}`;
+    const arr = batchGroups.get(groupKey);
+    if (arr) arr.push(pm);
+    else batchGroups.set(groupKey, [pm]);
+  }
+  for (const group of batchGroups.values()) {
+    if (group.length < 2) continue;
+    const total = group.reduce((acc, pm) => acc + pm.payment.importePesos, 0);
+    if (total <= 0) continue;
+    const refPayment = group[0].payment;
+    const cargo = findBatchCargo(
+      resolvePaymentAccountKey(refPayment),
+      total,
+      parseDateEpoch(cleanIsoDate(refPayment.fechaPago) ?? ''),
+      cargoByAccount,
+      claimedCargo,
+    );
+    if (!cargo) continue;
+    claimedCargo.add(cargo.key);
+    for (const pm of group) {
+      pm.cargoMatch = {
+        movement: cargo.movement,
+        cia: cargo.cia,
+        cuenta: cargo.cuenta,
+        tier: 'batch',
+        confidence: CARGO_TIER_CONFIDENCE.batch,
+      };
+      pm.status = pm.cxpMatches.length > 0 ? 'MATCHED_FULL' : 'MATCHED_BANK_ONLY';
+      pm.reason = buildReason(pm.status, pm.cxpMatches, pm.cargoMatch, isEmployeePayment(pm.payment), pm.bankCoverage);
+    }
+    const movKey = bankMovementKey(cargo.movement);
+    cargoEnrichments.set(movKey, {
+      movementKey: movKey,
+      status: 'MATCHED',
+      payments: group.map((pm) => ({
+        noPago: pm.payment.noPago,
+        claveProveedor: pm.payment.claveProveedor,
+        nombreProveedor: pm.payment.nombreProveedor,
+        clasificacionProveedor: pm.payment.clasificacionProveedor,
+        clasificacionProveedorFinanciera: pm.payment.clasificacionProveedorFinanciera,
+        importe: pm.payment.importePesos,
+        tier: 'batch' as const,
+      })),
+    });
+  }
+
   // ── 2a pasada CARGO: cross-account + subset ──────────────────────────────
   // Corre DESPUÉS del loop principal a propósito: el cruce de misma-cuenta
   // (exact/tolerance) reclama primero TODOS sus CARGOs, así un cruce débil
@@ -436,7 +535,7 @@ export function reconcilePayments(input: {
 
     pm.cargoMatch = resolved;
     pm.status = pm.cxpMatches.length > 0 ? 'MATCHED_FULL' : 'MATCHED_BANK_ONLY';
-    pm.reason = buildReason(pm.status, pm.cxpMatches, resolved, isEmployeePayment(pm.payment));
+    pm.reason = buildReason(pm.status, pm.cxpMatches, resolved, isEmployeePayment(pm.payment), pm.bankCoverage);
 
     for (const mv of [resolved.movement, ...(resolved.extraMovements ?? [])]) {
       const key = bankMovementKey(mv);
@@ -483,10 +582,15 @@ export function reconcilePayments(input: {
     matchedCargo: nonInternalMatches.filter((m) => m.cargoMatch).length,
     matchedFull: nonInternalMatches.filter((m) => m.status === 'MATCHED_FULL').length,
     unmatched: nonInternalMatches.filter((m) => m.status === 'UNMATCHED').length,
+    unmatchedNoBankData: nonInternalMatches
+      .filter((m) => m.status === 'UNMATCHED' && m.bankCoverage !== 'covered').length,
     totalPaidPesos: nonInternalMatches.reduce((acc, m) => acc + m.payment.importePesos, 0),
     totalInternalPesos: internalMatches.reduce((acc, m) => acc + m.payment.importePesos, 0),
     totalUnmatchedPesos: nonInternalMatches
       .filter((m) => m.status === 'UNMATCHED')
+      .reduce((acc, m) => acc + m.payment.importePesos, 0),
+    totalUnmatchedNoBankDataPesos: nonInternalMatches
+      .filter((m) => m.status === 'UNMATCHED' && m.bankCoverage !== 'covered')
       .reduce((acc, m) => acc + m.payment.importePesos, 0),
   };
 
@@ -566,6 +670,46 @@ function collectCargoMovements(statements: BankAccountStatement[]): { real: Inde
     }
   }
   return { real, internal };
+}
+
+interface AccountDateCoverage { min: string; max: string }
+
+/**
+ * Rango de fechas con movimientos cargados por cuenta (cualquier tipo de
+ * movimiento, no solo CARGO — un día con puros ABONOs también es cobertura).
+ * Alimenta `resolveBankCoverage`.
+ */
+function buildAccountCoverage(statements: BankAccountStatement[]): Map<string, AccountDateCoverage> {
+  const map = new Map<string, AccountDateCoverage>();
+  for (const stmt of statements) {
+    for (const m of stmt.movimientos ?? []) {
+      const key = normalizeAccountKey(m.cuenta || stmt.cuenta);
+      if (!key) continue;
+      const fecha = cleanIsoDate(m.fechaOperacion);
+      if (!fecha) continue;
+      const cur = map.get(key);
+      if (!cur) map.set(key, { min: fecha, max: fecha });
+      else {
+        if (fecha < cur.min) cur.min = fecha;
+        if (fecha > cur.max) cur.max = fecha;
+      }
+    }
+  }
+  return map;
+}
+
+function resolveBankCoverage(
+  payment: PagoProveedorRecord,
+  coverage: Map<string, AccountDateCoverage>,
+): BankCoverage {
+  const acc = coverage.get(resolvePaymentAccountKey(payment));
+  if (!acc) return 'no-account';
+  const fecha = cleanIsoDate(payment.fechaPago);
+  // Fecha de pago ilegible: no podemos afirmar falta de cobertura — que el
+  // cruce normal (que también fallará por fecha) lo reporte como huérfano.
+  if (!fecha) return 'covered';
+  if (fecha < acc.min || fecha > acc.max) return 'out-of-range';
+  return 'covered';
 }
 
 function indexCargosByAccount(cargos: IndexedCargo[]): Map<string, IndexedCargo[]> {
@@ -700,6 +844,40 @@ function findCrossAccountCargo(
     if (claimedCargo.has(cargo.key)) continue;
     if (!amountsClose(cargo.movement.importe, payAmt, AMOUNT_TOLERANCE_PCT)) continue;
     const days = Math.abs((cargo.fechaOpEpoch - payEpoch) / DAY_MS);
+    if (!Number.isFinite(days) || days > SECONDARY_DATE_WINDOW_DAYS) continue;
+    if (!best || days < best.days || (days === best.days && cargo.seq < best.cargo.seq)) {
+      best = { cargo, days };
+    }
+  }
+  return best?.cargo;
+}
+
+/**
+ * 2a pasada — batch: UN CARGO agregado cuyo importe ≈ la suma de N pagos del
+ * mismo lote, en la MISMA cuenta del registro de pago. Ventana estrecha
+ * (±SECONDARY_DATE_WINDOW_DAYS): la dispersión del lote sale por banco el
+ * mismo día o a días del registro JDE. Gana el más cercano en fecha (empate
+ * → menor `seq`).
+ */
+function findBatchCargo(
+  accountKey: string,
+  totalAmt: number,
+  refEpoch: number,
+  cargosByAccount: Map<string, IndexedCargo[]>,
+  claimedCargo: Set<string>,
+): IndexedCargo | undefined {
+  if (!Number.isFinite(refEpoch) || totalAmt <= 0) return undefined;
+  const accountCargos = cargosByAccount.get(accountKey) ?? [];
+  if (accountCargos.length === 0) return undefined;
+  const amountWindow = Math.max(AMOUNT_TOLERANCE_MIN_ABS, totalAmt * AMOUNT_TOLERANCE_PCT);
+  const hiBound = totalAmt + amountWindow;
+  let best: { cargo: IndexedCargo; days: number } | undefined;
+  for (let i = lowerBoundByImporte(accountCargos, totalAmt - amountWindow); i < accountCargos.length; i++) {
+    const cargo = accountCargos[i];
+    if (cargo.movement.importe > hiBound) break;
+    if (claimedCargo.has(cargo.key)) continue;
+    if (!amountsClose(cargo.movement.importe, totalAmt, AMOUNT_TOLERANCE_PCT)) continue;
+    const days = Math.abs((cargo.fechaOpEpoch - refEpoch) / DAY_MS);
     if (!Number.isFinite(days) || days > SECONDARY_DATE_WINDOW_DAYS) continue;
     if (!best || days < best.days || (days === best.days && cargo.seq < best.cargo.seq)) {
       best = { cargo, days };
@@ -879,6 +1057,7 @@ function buildReason(
   cxps: PaymentMatch['cxpMatches'],
   cargo: PaymentMatch['cargoMatch'],
   isEmployee: boolean,
+  coverage: BankCoverage,
 ): string {
   const parts: string[] = [];
   if (cxps.length === 1) {
@@ -899,12 +1078,18 @@ function buildReason(
     if (cargo.tier === 'subset') {
       const n = 1 + (cargo.extraMovements?.length ?? 0);
       parts.push(`Pago partido en ${n} CARGOs bancarios (cuenta ${cargo.cuenta}).`);
+    } else if (cargo.tier === 'batch') {
+      parts.push(`CARGO agregado del lote — un cargo cubre la suma de los pagos del batch (cuenta ${cargo.cuenta}).`);
     } else {
       const lab = cargo.tier === 'exact' ? 'exacto'
         : cargo.tier === 'tolerance' ? 'tolerancia'
         : 'desde otra cuenta (concentradora)';
       parts.push(`CARGO bancario ${lab} (cuenta ${cargo.cuenta}).`);
     }
+  } else if (coverage === 'no-account') {
+    parts.push('La cuenta del pago no tiene estados de cuenta cargados — no hay banco contra qué cruzar.');
+  } else if (coverage === 'out-of-range') {
+    parts.push('La fecha del pago cae fuera del rango bancario cargado para su cuenta.');
   } else {
     parts.push('Sin CARGO bancario asociado en el rango.');
   }
