@@ -94,6 +94,35 @@ describe('<SpreadsheetGrid />', () => {
     expect(screen.queryByText('Chasis Norte')).toBeNull();
     expect(appearsBefore('Flota · Taller', 'Flota · Refacciones')).toBe(true);
   });
+
+  // Los footers sticky (Neto/Caja) deben tapar TODO lo que scrollea por
+  // debajo. Las celdas sticky de etiqueta de fila (z 15) y el botón del header
+  // de sección (z 18) crean stacking contexts hermanos en el contexto raíz del
+  // grid: si el footer queda con z menor, las etiquetas se pintan ENCIMA de
+  // Neto/Caja (filas "fantasma" bajo la Caja, parecen inalcanzables) e
+  // interceptan sus clicks. Regresión del bug de scroll de Planeación.
+  it('stacks the sticky footers above row label cells and section headers', () => {
+    renderGrid(vi.fn());
+
+    const footerZ = (label: string): number => {
+      const footerRow = screen.getByText(label).closest('[role="row"]') as HTMLElement;
+      return Number(footerRow.style.zIndex);
+    };
+
+    const labelCell = screen.getByText('Clientes').closest('button')?.parentElement as HTMLElement;
+    const labelCellZ = Number(labelCell.style.zIndex);
+    const sectionButton = screen.getByRole('button', { name: /^Ingresos/ });
+    const sectionZ = Number((sectionButton as HTMLElement).style.zIndex);
+    const headerCell = screen.getByText('Concepto').closest('div') as HTMLElement;
+    const headerZ = Number(headerCell.style.zIndex);
+
+    for (const label of ['Neto', 'Caja final']) {
+      expect(footerZ(label)).toBeGreaterThan(labelCellZ);
+      expect(footerZ(label)).toBeGreaterThan(sectionZ);
+      // El header de columnas sigue por encima del footer (scroll vertical).
+      expect(footerZ(label)).toBeLessThan(headerZ);
+    }
+  });
 });
 
 function renderGrid(

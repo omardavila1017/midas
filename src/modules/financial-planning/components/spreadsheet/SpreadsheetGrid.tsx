@@ -688,10 +688,17 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
 
   // `bottom` apila los footers sticky (Neto sobre Caja). Con ambos en bottom:0
   // se encimaban al scrollear y la fila Neto quedaba oculta bajo Caja final.
+  // zIndex 22: el footer debe taparlo TODO lo que scrollea por debajo — las
+  // celdas sticky de etiqueta de las filas (z 15) y el botón de header de
+  // sección (z 18) crean stacking contexts en el contexto raíz; con el footer
+  // en z 5 esas etiquetas se pintaban ENCIMA de Neto/Caja al pasar por detrás
+  // (filas "fantasma" bajo la Caja que parecían inalcanzables) y además
+  // interceptaban los clicks del footer (un click en Caja expandía un bucket).
+  // 22 queda debajo del header de columnas (z 25/30) y del pill read-only (40).
   const renderFooterRow = (label: string, kind: 'inflows' | 'outflows' | 'net' | 'closingCash', tone: 'neutral' | 'positive' | 'negative' | 'highlight', bottom = 0) => (
     <div
       className="flex border-t border-[var(--gray-200)] sticky"
-      style={{ height: ROW_HEIGHT, bottom, zIndex: 5, minWidth: contentWidth, background: tone === 'highlight' ? 'var(--gray-50)' : 'white' }}
+      style={{ height: ROW_HEIGHT, bottom, zIndex: 22, minWidth: contentWidth, background: tone === 'highlight' ? 'var(--gray-50)' : 'white' }}
       role="row"
     >
       <StickyLeftCell
