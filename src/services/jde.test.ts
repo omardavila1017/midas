@@ -671,4 +671,45 @@ describe('Nómina (TRESS) — robustez de mapeo de campos', () => {
     expect(r.cashTreatment).toBe('NON_CASH');
     expect(r.conceptType).toBe('Informativo');
   });
+
+  describe('variantes del campo clasificador del concepto (de/del, Naturaleza, …)', () => {
+    const { stripAllToWhitelistNorm, KEPT_NOMINA_FIELDS_NORM } = __internal;
+
+    // Cada caso es el nombre de campo crudo que TRESS podría usar para el
+    // clasificador del concepto. Debe sobrevivir el strip Y mapearse a conceptType.
+    const conceptTypeKeys = [
+      'Tipo de Concepto',
+      'tipo_de_concepto',
+      'TipoDeConcepto',
+      'Tipo Concepto', // espacio (variante del fix previo, sigue cubierta)
+    ];
+    it.each(conceptTypeKeys)('campo %s sobrevive el strip y mapea a conceptType', (key) => {
+      const raw = {
+        IDEmpresa: 1,
+        Empresa: 'X',
+        Monto: 100000,
+        Concepto: 'SUELDO ORDINARIO',
+        [key]: 'Percepción',
+        FechaPago: '2026-05-07T00:00:00',
+      };
+      // El strip de producción corre ANTES de mapNominaRow.
+      const [stripped] = stripAllToWhitelistNorm([{ ...raw }], KEPT_NOMINA_FIELDS_NORM);
+      expect(stripped).toHaveProperty(key);
+      const r = mapNominaRow(stripped);
+      expect(r.conceptType).toBe('Percepción');
+      expect(r.cashTreatment).toBe('CASH_OUT'); // no cae a la inferencia por nombre
+    });
+
+    it('"Tipo de Nomina" sobrevive el strip y mapea a payrollType', () => {
+      const raw = {
+        IDEmpresa: 1, Empresa: 'X', Monto: 100000, Concepto: 'SUELDO',
+        'Tipo de Nomina': 'Quincenal', 'Tipo de Concepto': 'Percepción',
+        FechaPago: '2026-05-15T00:00:00',
+      };
+      const [stripped] = stripAllToWhitelistNorm([{ ...raw }], KEPT_NOMINA_FIELDS_NORM);
+      const r = mapNominaRow(stripped);
+      expect(r.payrollType).toBe('Quincenal');
+      expect(r.conceptType).toBe('Percepción');
+    });
+  });
 });

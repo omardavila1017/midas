@@ -2318,8 +2318,12 @@ const KEPT_NOMINA_FIELDS = new Set<string>([
   'mes',
   'idconcepto', 'id_concepto',
   'concepto', 'nombreconcepto',
-  'tiponomina', 'tipo_nomina',
-  'tipoconcepto', 'tipo_concepto',
+  // Variante con conectivo "de" del clasificador (TRESS prod ha mandado
+  // "Tipo de Concepto" / "Tipo de Nómina", que normalizan a tipodeconcepto/
+  // tipodenomina ≠ tipoconcepto/tiponomina). Sin esto el strip los borra antes
+  // de `mapNominaRow` y todo cae a "Sin tipo" / "No monetario".
+  'tiponomina', 'tipo_nomina', 'tipo_de_nomina',
+  'tipoconcepto', 'tipo_concepto', 'tipo_de_concepto',
   'fechainical', 'fechainicial', 'fecha_inicial',
   'fechafinal', 'fecha_final',
   'fechapago', 'fecha_pago',
@@ -2344,8 +2348,17 @@ function mapNominaRow(raw: RawRecord): PayrollCostRecord {
   const mes = toStr(pick(raw, ['Mes', 'mes']));
   const idConcepto = pick(raw, ['IDConcepto', 'idConcepto', 'id_concepto']);
   const concepto = toStr(pick(raw, ['Concepto', 'concepto', 'nombreConcepto']));
-  const tipoNomina = toStr(pick(raw, ['TipoNomina', 'tipoNomina', 'tipo_nomina']));
-  const tipoConcepto = toStr(pick(raw, ['TipoConcepto', 'tipoConcepto', 'tipo_concepto']));
+  const tipoNomina = toStr(
+    pick(raw, ['TipoNomina', 'tipoNomina', 'tipo_nomina', 'Tipo de Nomina', 'tipo_de_nomina']),
+  );
+  // El clasificador del concepto (Percepción/Deducción/Aportación/…). `pick`
+  // normaliza separadores y acentos, así que basta un alias por variante de
+  // palabra; cubrimos el conectivo "de" ("Tipo de Concepto") que el matcher
+  // previo no cruzaba. Si NINGUNO matchea, `mapNominaRow` cae a la inferencia
+  // por nombre del concepto (red de seguridad), nunca a un campo ajeno.
+  const tipoConcepto = toStr(
+    pick(raw, ['TipoConcepto', 'tipoConcepto', 'tipo_concepto', 'Tipo de Concepto', 'tipo_de_concepto']),
+  );
 
   // Aliases defensivos para el typo `Fechainical` en producción.
   const fechaInicial = trimIsoDate(
@@ -2591,6 +2604,8 @@ export const __internal = {
   classifyByConceptName,
   pick,
   normKey,
+  stripAllToWhitelistNorm,
+  KEPT_NOMINA_FIELDS_NORM,
   normalizeBankAccountNumber,
   selectIvaFullObjetoRanges,
   ivaCacheNamespace,
