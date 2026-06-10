@@ -18,8 +18,9 @@ import {
 const ADMIN = 'agustin.blanco@gruposenda.com';
 // `user` con permisos hardcodeados (Fideicomiso/Venta/Cobranza/Clientes).
 const SEEDED_USER = 'blanca.reyes@gruposenda.com';
-// `user` hardcodeado SIN permisos (arranca sin acceso a ningún módulo).
-const SEEDED_USER_NO_PERMS = 'marco.guajardo@gruposenda.com';
+// `user` hardcodeado con un set ACOTADO de permisos (Compras/Pagos/Proveedores)
+// — NO incluye Cobranza, así que sirve para probar el alta de un permiso nuevo.
+const SEEDED_USER_LIMITED = 'jesus.villarreal@gruposenda.com';
 
 beforeEach(() => {
   localStorage.clear();
@@ -35,10 +36,12 @@ describe('accessControlStore seeding', () => {
     const users = listManagedUsers();
     expect(users.length).toBeGreaterThan(0);
     expect(getManagedUser(ADMIN)?.role).toBe('admin');
-    const seeded = getManagedUser(SEEDED_USER_NO_PERMS);
+    const seeded = getManagedUser(SEEDED_USER_LIMITED);
     expect(seeded?.role).toBe('user');
-    // Roster hardcodeado sin permisos: arranca como `user` sin acceso.
-    expect(seeded?.permissions).toEqual([]);
+    // Permisos hardcodeados en authLocalUsers.json (orden no garantizado).
+    expect([...(seeded?.permissions ?? [])].sort()).toEqual(
+      ['compras', 'pagos', 'providers'].sort(),
+    );
   });
 
   it('seeds the hardcoded per-user permissions from the JSON roster', () => {
@@ -78,13 +81,13 @@ describe('canAccess', () => {
   });
 
   it('limits a user to granted tabs and blocks admin-only tabs', () => {
-    // Arranca sin permisos; un admin le prende `collections` desde el portal.
-    expect(canAccess(SEEDED_USER_NO_PERMS, 'user', 'collections')).toBe(false);
-    setPermission(SEEDED_USER_NO_PERMS, 'collections', true);
-    expect(canAccess(SEEDED_USER_NO_PERMS, 'user', 'collections')).toBe(true);
-    expect(canAccess(SEEDED_USER_NO_PERMS, 'user', 'taxes')).toBe(false);
-    expect(canAccess(SEEDED_USER_NO_PERMS, 'user', 'users')).toBe(false);
-    expect(canAccess(SEEDED_USER_NO_PERMS, 'user', 'permisos')).toBe(false);
+    // No tiene `collections` hardcodeado; un admin se lo prende desde el portal.
+    expect(canAccess(SEEDED_USER_LIMITED, 'user', 'collections')).toBe(false);
+    setPermission(SEEDED_USER_LIMITED, 'collections', true);
+    expect(canAccess(SEEDED_USER_LIMITED, 'user', 'collections')).toBe(true);
+    expect(canAccess(SEEDED_USER_LIMITED, 'user', 'taxes')).toBe(false);
+    expect(canAccess(SEEDED_USER_LIMITED, 'user', 'users')).toBe(false);
+    expect(canAccess(SEEDED_USER_LIMITED, 'user', 'permisos')).toBe(false);
   });
 
   it('falls back to the session role for emails not in the registry', () => {
