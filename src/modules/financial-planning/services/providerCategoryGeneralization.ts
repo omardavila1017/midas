@@ -98,14 +98,18 @@ export const PERSONAL_NOMINA_BUCKET = 'Personal y nómina';
  */
 const MACRO_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
   { pattern: /\bint\.?\s*cm\b|concurso\s*merc/i, label: 'Int. CM' },
+  // Mantenimiento de CENTRALES (edificios/estaciones) antes que Flota: sin
+  // esta entrada, `mantenim` (Flota) se comía "MANTENIMIENTO CENTRALES" y
+  // "Mtto central" caía sin bucket.
+  { pattern: /m(?:antenimiento|tto)\.?\s*(de\s*)?central/i, label: 'Inmuebles y rentas' },
   {
     pattern:
-      /tecnolog|\bti\b|soporte|telecom|\bgps\b|sistema\s*de\s*archivo|licencias?\s*(bfiskur|bavel)|honorarios?\s*ti\b|celulares|accesorios?\s*eq|impresoras|inform[áa]tic|software|hardware|electr[óo]nica?/i,
+      /tecnolog|\bti\b|soporte|telecom|\bgps\b|sistema\s*de\s*archivo|licencias?\s*(bfiskur|bavel)|honorarios?\s*ti\b|celulares|accesorios?\s*eq|impresoras|inform[áa]tic|software|hardware|electr[óo]nica?|plataforma/i,
     label: 'Proveedor TI',
   },
   {
     pattern:
-      /refac|chasis|carrocer|hojalater|pintura|llanta|neumat|combust|diesel|gasolin|lubric|mantenim|lavado\s*unidad|verificac.*unidad|ferreter|chatarra|amenidades?\s*bus|renta\s*(de\s*)?(unidad|traila)|casetas?|peaje|autoconsumo|corral[óo]n|taller\s*atenci[óo]n\s*accident|\bfletes?\b|entrega|recolecci|paqueter|automotriz/i,
+      /refac|chasis|carrocer|hojalater|pintura|llanta|neumat|combust|diesel|gasolin|lubric|mantenim|lavado\s*unidad|verificac.*unidad|ferreter|ferrer|chatarra|amenidades?\s*bus|renta\s*(de\s*)?(unidad|traila)|casetas?|peaje|autoconsumo|corral[óo]n|taller\s*atenci[óo]n\s*accident|\bfletes?\b|entrega|recolecci|paqueter|automotriz|convenio\s*sendex|gr[uú]as?\b|sellador|traslado\s*de\s*unidades/i,
     label: 'Flota',
   },
   {
@@ -114,23 +118,34 @@ const MACRO_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
   },
   {
     pattern:
-      /n[óo]mina|sueldo|pension\s*aliment|sindicato|imss|infonavit|\bisn\b|embargo\s*salario|caja\s*y\s*fondo|reclut|practicant|uniformes?|colegiatura|investigaciones?\s*labor|enfermer[íi]a|atenci[óo]n\s*m[ée]dica|material\s*depto\s*medico|comedor|insumos?\s*aliment|licencias?\s*operadores|funerales|certificac|capacitac|outsourc|lesiones?\s*por\s*accident|indemnizaci[óo]n|reembolso|honorarios?\s*rh\b/i,
+      /n[óo]mina|sueldo|pensi[oó]n(?:es)?\b|sindicato|imss|infonavit|\bisn\b|embargo\s*salario|caja\s*y\s*fondo|reclut|practicant|uniformes?|colegiatura|investigaciones?\s*labor|enfermer[íi]a|atenci[óo]n\s*m[ée]dica|insumos?\s*m[ée]dic|servicios?\s*m[ée]dic|material\s*depto\s*medico|comedor|insumos?\s*aliment|licencias?\s*operadores|funerales|certificac|capacitac|cursos?\b|outsourc|lesiones?\s*por\s*accident|indemnizaci[óo]n|reembolso|honorarios?\s*rh\b/i,
     label: PERSONAL_NOMINA_BUCKET,
   },
+  // Pagos a gobiernos por la vía CXP (predial, tenencias, renovaciones de
+  // permisos municipales): bucket Impuestos, igual que los TAX por concepto.
+  { pattern: /impuestos?\b|predial|tenencias?\b|renovaci[óo]n/i, label: 'Impuestos' },
   {
     pattern:
-      /servicios?\s*p[úu]blicos?|servicios?\s*generales?|consultor|recolec|residuos|pipas?\s*de\s*agua|vigilanc|traslado\s*de\s*valores|seguros?\s*y?\s*fianzas?|honorarios?|publicidad|mercadot|imprenta|papeler|membres|fumigac|aseo|limpie|agencia\s*de\s*viaje|entradas?\s*a\s*parques|\bbancos?\b|gubernament|atenci[óo]n\s*a\s*clientes|bolsas?\s*de\s*valores|mobiliar|boleto|donatar|membres[íi]a/i,
+      /servicios?\s*p[úu]blicos?|serv\.?\s*p[úu]blic|servicios?\s*generales?|consultor|recolec|residuos|pipas?\s*de\s*agua|suministro\s*(de\s*)?agua|vigilanc|traslado\s*de\s*valores|seguros?\s*y?\s*fianzas?|honorarios?|publicidad|mercadot|imprenta|papeler|membres|fumigac|aseo|limpie|agencia\s*de\s*viaje|hospedaje|entradas?\s*a\s*parques|\bbancos?\b|gubernament|atenci[óo]n\s*a\s*clientes|bolsas?\s*de\s*valores|mobiliar|boleto|donatar|donativ|donacion(?:es)?\b|membres[íi]a|\barchivo\b|insumos?\b|anuncios?\b|panor[aá]mic|peri[oó]dic|pago\s*da[ñn]os|administra|tr[aá]mite/i,
     label: 'Servicios',
   },
 ];
 
 export const UNCATEGORIZED_PROVIDER_BUCKET = 'Proveedores sin categoría';
 
+/** Quita acentos/diacríticos para que los patrones matcheen categorías crudas
+ *  escritas con tilde ("NEUMÁTICOS", "PERIÓDICO") — antes `/neumat/` fallaba
+ *  contra "NEUMÁT" y el proveedor caía sin bucket. */
+function deaccent(value: string): string {
+  return value.normalize('NFKD').replace(/[̀-ͯ]/g, '');
+}
+
 export function generalizeCategoria(raw: string | undefined | null): string {
   const trimmed = raw?.trim();
   if (!trimmed) return UNCATEGORIZED_PROVIDER_BUCKET;
+  const plain = deaccent(trimmed);
   for (const { pattern, label } of MACRO_PATTERNS) {
-    if (pattern.test(trimmed)) return label;
+    if (pattern.test(trimmed) || pattern.test(plain)) return label;
   }
   return UNCATEGORIZED_PROVIDER_BUCKET;
 }
@@ -161,8 +176,17 @@ export function macroBucketForSupplier(opts: {
   if (opts.counterpartyName && /\bbusbud\b/i.test(opts.counterpartyName)) {
     return 'Federal';
   }
-  const categoria = opts.providerCategory || lookupProviderCategoria(opts);
-  const bucket = generalizeCategoria(categoria);
+  // Dos fuentes de categoría cruda, en orden: la del movimiento (viene del
+  // API — clasificacionProveedor de CXP/pagoProveedor) y el catálogo derivado.
+  // Si la del movimiento existe pero NO generaliza a un bucket, se intenta la
+  // del catálogo antes de rendirse — antes un providerCategory raro bloqueaba
+  // el lookup y el proveedor caía "sin categoría" aunque el catálogo sí lo
+  // tuviera clasificado.
+  let bucket = generalizeCategoria(opts.providerCategory);
+  if (bucket === UNCATEGORIZED_PROVIDER_BUCKET) {
+    const catalogCategoria = lookupProviderCategoria(opts);
+    if (catalogCategoria) bucket = generalizeCategoria(catalogCategoria);
+  }
   if (bucket !== UNCATEGORIZED_PROVIDER_BUCKET) return bucket;
   // Rescate de pagos a personas → "Personal y nómina".
   if (opts.subcategory && generalizeCategoria(opts.subcategory) === PERSONAL_NOMINA_BUCKET) {

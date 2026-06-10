@@ -172,8 +172,14 @@ export interface BuildArgs {
 //     en una cuenta bancaria Federal. La cuenta queda como metadato.
 //   • Federal = ABONOs reales no ligados a cobranza/cliente que el catálogo
 //     de bancos etiqueta unidadNegocio=FEDERAL.
+//   • Multicarga = mismo criterio que Federal pero para las cuentas
+//     concentradoras de la unidad MULTICARGA (Sendex, guías prepagadas).
+//     El bucket "Multicarga" SIEMPRE existió en la taxonomía de Planeación
+//     (INCOME_BUCKETS) pero el resolver nunca lo emitía — esos ABONOs caían
+//     al default "Clientes Citi".
 //   • Otros ingresos = SOLO lo no reconocido.
 const INCOME_SUBCAT_FEDERAL = 'Federal';
+const INCOME_SUBCAT_MULTICARGA = 'Multicarga';
 export const INCOME_SUBCAT_CITI = 'Clientes Citi';
 export const INCOME_SUBCAT_VIAJES_ESPECIALES = 'Viajes Especiales';
 
@@ -255,6 +261,12 @@ export function resolveInflowSubcategory(args: {
   //    caen en una cuenta Federal del catálogo.
   if (args.businessUnitId && String(args.businessUnitId).toUpperCase() === 'FEDERAL') {
     return INCOME_SUBCAT_FEDERAL;
+  }
+  // 5b) Multicarga: mismo criterio que Federal para las cuentas de la unidad
+  //     MULTICARGA (concentradoras Sendex / guías prepagadas). Sin esta regla
+  //     el ingreso de paquetería caía al default Clientes Citi.
+  if (args.businessUnitId && String(args.businessUnitId).toUpperCase() === 'MULTICARGA') {
+    return INCOME_SUBCAT_MULTICARGA;
   }
   // 6) Default: Clientes Citi (ABONO no-Federal o sin match).
   return INCOME_SUBCAT_CITI;

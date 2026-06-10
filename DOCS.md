@@ -26,6 +26,7 @@ Updated 2026-06-05 for delivery handoff.
 | `SECURITY-AUDIT.md` | Security findings, mandatory operational actions, pre-deploy gate. | Security / DevOps |
 | `EXCLUSION_RULES.md` | The company exclusion filter (currently **empty** — nothing excluded; mechanism preserved). | Devs |
 | `AUDITORIA-INTEGRACION-MODULOS.md` | Module ↔ module / API integration map, persistence inventory, risk map, roadmap (snapshot 2026-05-19). | Devs / architects |
+| `AUDITORIA-CUADRE-PLANEACION.md` | Why the Base cash flow didn't square across modules: internal-transfer classification fix (2026-06-10), by-design divergences, the definitive missing-information list, how to verify the cuadre with real data. | Devs / treasury |
 | `REPORTES-TRESS-COMPRAS-MAPEO.md` | Field-mapping spec for the TRESS (nómina) and Compras APIs, including fields still requested from the API. | Devs / integration |
 | `PURPOSE.md` | Product purpose statement and rationale. | Product / leadership |
 | `PRODUCT.md` / `.impeccable.md` | Design-system context (Senda DS) read by the visual-tooling skills. | Design tooling |

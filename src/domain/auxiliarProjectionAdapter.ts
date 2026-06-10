@@ -125,8 +125,11 @@ export function adaptAuxiliarForProjection(
   }
 
   // Enriquecimiento por línea GL emparejada con un movimiento bancario.
+  // Las líneas `interno` pueden traer bankMovementKey (pata GL de un traspaso
+  // emparejada para auditoría) pero NO son flujo económico: su movimiento
+  // bancario se descarta como interno en MOTOR 1, así que no se enriquece.
   for (const line of result.lines) {
-    if (!line.bankMovementKey) continue;
+    if (!line.bankMovementKey || line.matchTier === 'interno') continue;
     const monto = Math.abs(line.importe);
     if (line.flujo === 'egreso') {
       bridge.cargoEnrichments.set(line.bankMovementKey, {

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { reconcileAuxiliar, deriveFlujo, emptyAuxiliarReconResult } from './auxiliarReconciliationEngine';
 import { adaptAuxiliarForProjection } from './auxiliarProjectionAdapter';
+import { buildHistoricalMonths } from './cashFlowEngine';
 import type { AuxiliarContableRecord, BankAccountStatement, BankStatementLine, CobranzaRecord } from '../services/jdeTypes';
 import type { CXPRecord } from './persistence';
 
@@ -313,6 +314,123 @@ describe('adaptAuxiliarForProjection', () => {
     const [enr] = [...bridge.cargoEnrichments.values()];
     expect(enr.status).toBe('MATCHED');
     expect(enr.payments?.[0].nombreProveedor).toBe('Proveedor Z');
+  });
+});
+
+describe('reconcileAuxiliar — traspasos internos económicos (cuadre con verdad bancaria)', () => {
+  // Segunda cuenta propia del grupo (misma cía) para los pares CARGO↔ABONO.
+  const ACCT2 = '11122233344';
+  /** Cuenta RESERVA real del catálogo de bancos (flow=neutro). */
+  const NEUTRAL_ACCT = '70144758151';
+
+  function statementFor(cuenta: string, movimientos: BankStatementLine[]): BankAccountStatement {
+    return {
+      cia: '00042',
+      banco: 'BANAMEX',
+      cuenta,
+      moneda: 'MXN',
+      fechaEstadoCuenta: '2026-04-30',
+      movimientos,
+    };
+  }
+
+  it('buckets a GL line matched to a pair-matched transfer leg as interno (not cruzada)', () => {
+    // Traspaso interno: CARGO 5000 en cuenta A compensado con ABONO 5000 en
+    // cuenta B el mismo día (pair-matched). La pata GL asentada en B debe
+    // emparejar con el ABONO pero clasificarse `interno` — la verdad bancaria
+    // (buildHistoricalMonths) descarta ambos movimientos, así que contarla
+    // como ingreso cruzado descuadraba Dashboard vs Planeación.
+    const statements = [
+      statementFor(ACCT, [bankLine({ cuenta: ACCT, tipoMovimiento: 'CARGO', importe: 5000, referencia: 'T-OUT' })]),
+      statementFor(ACCT2, [bankLine({ cuenta: ACCT2, tipoMovimiento: 'ABONO', importe: 5000, referencia: 'T-IN' })]),
+    ];
+    const res = reconcileAuxiliar(
+      [glLine({ importe: 5000, cuentaBanco: ACCT2 })],
+      statements,
+    );
+    expect(res.lines[0].matchTier).toBe('interno');
+    expect(res.lines[0].bankMovementKey).toBeTruthy();
+    expect(res.summary.internoLineas).toBe(1);
+    expect(res.summary.ingresoMontoCruzado).toBe(0);
+    expect(res.reconciledByCompanyMonth.size).toBe(0);
+    // La pata CARGO sin línea GL tampoco es un faltante real → no orphan.
+    expect(res.bankOrphans).toHaveLength(0);
+  });
+
+  it('buckets a GL line on a catalog-neutral account (RESERVA) as interno pre-match', () => {
+    const res = reconcileAuxiliar(
+      [glLine({ importe: 800, cuentaBanco: NEUTRAL_ACCT })],
+      [statementFor(NEUTRAL_ACCT, [bankLine({ cuenta: NEUTRAL_ACCT, importe: 800 })])],
+    );
+    expect(res.lines[0].matchTier).toBe('interno');
+    expect(res.reconciledByCompanyMonth.size).toBe(0);
+    // El movimiento de la cuenta neutra no aparece como orphan.
+    expect(res.bankOrphans).toHaveLength(0);
+  });
+
+  it('does not emit enrichments for interno-matched lines through the bridge', () => {
+    const statements = [
+      statementFor(ACCT, [bankLine({ cuenta: ACCT, tipoMovimiento: 'CARGO', importe: 5000, referencia: 'T-OUT' })]),
+      statementFor(ACCT2, [bankLine({ cuenta: ACCT2, tipoMovimiento: 'ABONO', importe: 5000, referencia: 'T-IN' })]),
+    ];
+    const res = reconcileAuxiliar(
+      [glLine({ importe: 5000, cuentaBanco: ACCT2, noFactura: 'RI-99' })],
+      statements,
+    );
+    const bridge = adaptAuxiliarForProjection(res, [], []);
+    expect(bridge.abonoEnrichments).toHaveLength(0);
+    expect(bridge.cargoEnrichments.size).toBe(0);
+    // Tampoco confirma la factura: el ABONO era un traspaso, no un cobro.
+    expect(bridge.cobradaBancoKeys.has('00042::RI-99')).toBe(false);
+  });
+
+  it('reconciledByCompanyMonth equals buildHistoricalMonths economic truth when GL fully covers real flow', () => {
+    // El invariante de cuadre entre módulos: con las líneas GL cubriendo todo
+    // el flujo real, los totales reconciliados por mes deben igualar el
+    // ingreso/egreso económico del banco (que excluye traspasos pareados y
+    // cuentas neutras del catálogo).
+    const statements = [
+      statementFor(ACCT, [
+        bankLine({ cuenta: ACCT, importe: 1000, referencia: 'R-REAL-IN' }),
+        bankLine({ cuenta: ACCT, tipoMovimiento: 'CARGO', importe: 500, referencia: 'R-REAL-OUT', fechaOperacion: '2026-04-20' }),
+        bankLine({ cuenta: ACCT, tipoMovimiento: 'CARGO', importe: 5000, referencia: 'T-OUT' }),
+      ]),
+      statementFor(ACCT2, [
+        bankLine({ cuenta: ACCT2, tipoMovimiento: 'ABONO', importe: 5000, referencia: 'T-IN' }),
+      ]),
+      statementFor(NEUTRAL_ACCT, [
+        bankLine({ cuenta: NEUTRAL_ACCT, importe: 800, referencia: 'N-IN' }),
+      ]),
+    ];
+    const res = reconcileAuxiliar(
+      [
+        glLine({ importe: 1000 }),
+        glLine({ importe: -500, tipoDocto: 'PK', idCuenta: '0165', fechaContable: '2026-04-20' }),
+        // Pata GL del traspaso — debe quedar interno, no inflar el cruce.
+        glLine({ importe: 5000, idCuenta: '0166', cuentaBanco: ACCT2 }),
+      ],
+      statements,
+    );
+    const bank = buildHistoricalMonths(statements).find((m) => m.yearMonth === '2026-04');
+    expect(bank).toBeTruthy();
+    let ingreso = 0;
+    let egreso = 0;
+    for (const t of res.reconciledByCompanyMonth.values()) {
+      ingreso += t.ingresoCruzado;
+      egreso += t.egresoCruzado;
+    }
+    expect(ingreso).toBe(bank!.income);
+    expect(egreso).toBe(bank!.expense);
+    expect(ingreso).toBe(1000);
+    expect(egreso).toBe(500);
+  });
+
+  it('marks every bank orphan as out-of-window when there are no GL 1020 lines (no aux window)', () => {
+    const res = reconcileAuxiliar([], [statement([bankLine({ concepto: 'comision' })])]);
+    expect(res.bankOrphans).toHaveLength(1);
+    expect(res.bankOrphans[0].outOfWindow).toBe(true);
+    expect(res.summary.bankOrphanLineas).toBe(0);
+    expect(res.summary.bankOrphanOutOfWindowLineas).toBe(1);
   });
 });
 

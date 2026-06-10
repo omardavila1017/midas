@@ -537,9 +537,15 @@ export function buildHistoricalReconciledMovements({ monthly, inputs }: BuildArg
   //     - Sólo flujo ingreso/egreso (caja=movimientos internos de caja,
   //       interno=traspasos entre cuentas propias — no son flujo real).
   //     - Sólo meses históricos dentro de la ventana monthly.
-  //     - Sólo (cia, ym) SIN cobertura bancaria (mismo cut que 1b).
-  //     - Sólo líneas SIN `bankMovementKey` cuando el mes SÍ tiene cobertura
-  //       (línea cruzada ya está representada vía `bank:*`).
+  //     - Sólo (cia, ym) SIN cobertura bancaria (mismo cut que 1b). El dedup
+  //       es a granularidad de MES COMPLETO: si la (cia, ym) tiene aunque sea
+  //       una línea de estado de cuenta, TODAS las líneas GL del mes se
+  //       omiten (incluidas las gl-orphan sin `bankMovementKey`) — el banco
+  //       es la única verdad del efectivo en meses cubiertos, y emitir
+  //       orphans GL encima rompería el cuadre Planeación==banco
+  //       (`reconcilePlanningAgainstBank`). Costo aceptado: un mes con banco
+  //       PARCIALMENTE cargado subreporta — el faltante es de carga de datos,
+  //       no del motor.
   for (const line of inputs.auxiliarReconLines ?? []) {
     if (
       inputs.companyCode !== 'all'

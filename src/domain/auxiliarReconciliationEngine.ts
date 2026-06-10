@@ -24,10 +24,17 @@
  *
  * Buckets aparte (no cuentan como cruce fallido):
  *   • caja — líneas de objeto 1010: no tienen estado de cuenta bancario.
- *   • interno — traspasos entre cuentas propias del grupo.
+ *   • interno — traspasos entre cuentas propias del grupo. Tres señales,
+ *     LAS MISMAS que usa la verdad bancaria (`buildHistoricalMonths`) y
+ *     MOTOR 1: (a) narrativa GL / heurística bancaria (leyenda, RFC,
+ *     beneficiario, cuenta propia), (b) cuenta con flow `neutro` en el
+ *     catálogo de bancos, y (c) línea GL emparejada a un movimiento bancario
+ *     pareado CARGO↔ABONO entre cuentas propias (±3d). Sin (b)/(c) los
+ *     totales reconciliados incluían traspasos que el resto de Midas excluye
+ *     y los brutos del Dashboard divergían de Planeación/Bancos.
  *
  * Movimientos bancarios sin línea GL → `bankOrphans` (comisiones, intereses
- * no asentados).
+ * no asentados). Excluye los económicamente internos (pareados / neutros).
  */
 
 import type {
@@ -36,8 +43,14 @@ import type {
   BankStatementLine,
 } from '../services/jdeTypes';
 import { bankMovementKey } from './bankMovementKey';
-import { findBankAccount } from './bankAccountsCatalog';
-import { buildOwnAccountsIndex, buildOwnAccountDetector, isInternalTransfer } from './netCashFlowEngine';
+import { enrichMovementWithCatalog, findBankAccount } from './bankAccountsCatalog';
+import {
+  buildOwnAccountsIndex,
+  buildOwnAccountDetector,
+  buildPairMatchedKeys,
+  classifyMovement,
+  isInternalTransfer,
+} from './netCashFlowEngine';
 import { describeDocType } from './jdeDocTypeCatalog';
 import { BANK_TIPO_BATCH } from './auxiliarReconciliationConfig';
 
@@ -393,6 +406,18 @@ interface BankNorm {
   fecha: string;
   importe: number;
   internal: boolean;
+  /**
+   * Movimiento económicamente interno bajo la MISMA clasificación que usa la
+   * verdad bancaria (`buildHistoricalMonths`) y MOTOR 1: detección heurística
+   * (leyenda/RFC/beneficiario/cuenta-propia), pareo simétrico CARGO↔ABONO
+   * entre cuentas propias (`buildPairMatchedKeys`, ±3d) o cuenta con flow
+   * `neutro` en el catálogo de bancos. A diferencia de `internal`, estos
+   * movimientos SÍ permanecen en el pool de match para que la pata GL del
+   * traspaso encuentre su contraparte y se bucketee `interno` (en vez de
+   * inflar `pendiente-revision`), pero NUNCA cuentan como flujo económico
+   * cruzado ni como bank-orphan.
+   */
+  econInternal: boolean;
   consumed: boolean;
 }
 
@@ -485,7 +510,17 @@ export function reconcileAuxiliar(
   //    contraparte en movimientos MXN del mismo banco (importes distintos por
   //    orden de magnitud — el matcher por tolerancia ±5% no protege contra
   //    cruces espurios entre monedas).
+  //
+  //    Clasificación de traspasos internos: la MISMA que aplica la verdad
+  //    bancaria (`buildHistoricalMonths` en cashFlowEngine) y MOTOR 1 —
+  //    `classifyMovement` (heurística + pareo simétrico CARGO↔ABONO ±3d) más
+  //    el corte de cuentas con flow `neutro` del catálogo. Antes este motor
+  //    sólo usaba la heurística (`isInternalTransfer`), así que los totales
+  //    reconciliados (`reconciledByCompanyMonth`) podían incluir traspasos
+  //    que TODAS las demás superficies de Midas excluyen — los brutos del
+  //    Dashboard divergían de Planeación/Bancos para el mismo mes cerrado.
   const ownAccountDetector = buildOwnAccountDetector(buildOwnAccountsIndex(bankStatements));
+  const pairedKeys = buildPairMatchedKeys(bankStatements);
   const bankPool = new Map<string, BankNorm[]>();
   const allBankNorms: BankNorm[] = [];
   /** AccountKeys de cuentas con AL MENOS un movimiento bancario cargado
@@ -502,10 +537,25 @@ export function reconcileAuxiliar(
       const flujo: AuxiliarFlujo = line.tipoMovimiento === 'ABONO' ? 'ingreso' : 'egreso';
       const accountKey = accountMatchKey(line.cuenta || line.cuentaBancos);
       const monedaKey = normalizeMoneda(line.moneda);
-      const internal = isInternalTransfer(
-        { concepto: line.concepto, referencia: line.referencia, cuenta: line.cuenta },
-        ownAccountDetector,
+      // Clasificación completa (heurística + pair-matched). `internal` conserva
+      // el corte previo (sólo heurística) para no sacar del pool las patas
+      // pareadas — ver `econInternal` en BankNorm.
+      const classification = classifyMovement(
+        line,
+        { ownAccountDetector, pairedKeys },
+        stmt.cia,
+        stmt.cuenta,
       );
+      const internal = classification.kind === 'internal'
+        && classification.reason !== 'pair-matched';
+      const catalogEnrich = enrichMovementWithCatalog({
+        cuenta: stmt.cuenta,
+        cuentaBancos: line.cuentaBancos ?? line.cuenta,
+        tipoMovimiento: line.tipoMovimiento,
+        importe: line.importe,
+      });
+      const econInternal = classification.kind === 'internal'
+        || (catalogEnrich !== null && catalogEnrich.entry.flow === 'neutro');
       const norm: BankNorm = {
         line,
         movementKey: bankMovementKey(line),
@@ -514,6 +564,7 @@ export function reconcileAuxiliar(
         fecha: line.fechaOperacion,
         importe: Math.abs(line.importe),
         internal,
+        econInternal,
         consumed: false,
       };
       allBankNorms.push(norm);
@@ -632,6 +683,18 @@ export function reconcileAuxiliar(
       lines.push(base);
       continue;
     }
+    // Cuenta con flow `neutro` en el catálogo de bancos (reserva, ahorro,
+    // crédito, garantía, por_cancelar, saldo_retenido): traspaso interno por
+    // definición — mismo corte que aplican la verdad bancaria
+    // (buildHistoricalMonths) y MOTOR 1 al lado banco. Sin esto, la línea GL
+    // cruzaba contra el movimiento de la cuenta neutra y contaba como flujo
+    // económico en `reconciledByCompanyMonth`, que el resto de Midas excluye.
+    const auxCatalogEntry = findBankAccount(rec.cuentaBanco);
+    if (auxCatalogEntry !== null && auxCatalogEntry.flow === 'neutro') {
+      base.matchTier = 'interno';
+      lines.push(base);
+      continue;
+    }
     // Si la cuenta aux no tiene NINGÚN movimiento bancario cargado (cuenta
     // por_cancelar inactiva, o cuenta que /bancos no expone), el match es
     // imposible por gap estructural — no inflar gl-orphan. La R-override del
@@ -690,7 +753,14 @@ export function reconcileAuxiliar(
     c.item.line.bankMovementKey = c.bank.movementKey;
     c.item.line.bankDate = c.bank.fecha;
     c.item.line.bankAmount = c.bank.line.importe;
-    c.item.line.matchTier = c.exact ? 'exact' : 'tolerance';
+    // Contraparte bancaria económicamente interna (pareo CARGO↔ABONO entre
+    // cuentas propias o cuenta neutra del catálogo): la línea GL es la pata
+    // contable de un traspaso interno → bucket `interno`, fuera de los
+    // totales económicos (igual que la verdad bancaria descarta ese
+    // movimiento). Conserva bankMovementKey para drill-down/auditoría.
+    c.item.line.matchTier = c.bank.econInternal
+      ? 'interno'
+      : c.exact ? 'exact' : 'tolerance';
   }
 
   // 3. Capa cross-account: para los aún sin pareja, intentar match en cuenta
@@ -724,7 +794,9 @@ export function reconcileAuxiliar(
     c.item.line.bankMovementKey = c.bank.movementKey;
     c.item.line.bankDate = c.bank.fecha;
     c.item.line.bankAmount = c.bank.line.importe;
-    c.item.line.matchTier = 'cross-account';
+    // Mismo criterio que el best-fit principal: contraparte económicamente
+    // interna → la línea GL se bucketea `interno` (no cuenta como cruce).
+    c.item.line.matchTier = c.bank.econInternal ? 'interno' : 'cross-account';
   }
 
   // 4. Para los que aún quedan sin pareja, ¿estamos viendo el ledger más allá
@@ -829,16 +901,21 @@ export function reconcileAuxiliar(
     }
   }
 
-  // 5. Movimientos bancarios sin línea GL (excluye internos).
+  // 5. Movimientos bancarios sin línea GL (excluye internos — tanto los
+  //    heurísticos como los económicamente internos: pareados y cuentas
+  //    neutras; un traspaso sin pata GL no es un faltante contable real).
   //    Los marcamos con `outOfWindow=true` si caen fuera del rango aux: el
   //    match era imposible por desfase temporal, no por error del motor.
+  //    Sin ventana aux (no hay líneas GL 1020 en el rango) el match era
+  //    imposible por gap estructural de datos — TODOS los orphans son
+  //    out-of-window, no candidatos reales a investigar.
   const bankOrphans: AuxiliarBankOrphan[] = [];
   for (const b of allBankNorms) {
-    if (b.consumed || b.internal) continue;
+    if (b.consumed || b.internal || b.econInternal) continue;
     const oow =
       auxMin !== null && auxMax !== null
         ? b.fecha < auxMin || b.fecha > auxMax
-        : false;
+        : true;
     bankOrphans.push({
       movementKey: b.movementKey,
       cia: b.line.cia,
