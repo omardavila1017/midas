@@ -98,6 +98,11 @@ export const MIDAS_STORAGE_REGISTRY: StorageEntry[] = [
   { key: 'midas.midasAi.conversations.v1', scope: 'localStorage', owner: 'modules/midas-ai/services/midasStorage.ts', description: 'Conversaciones del bot Midas AI.' },
   { key: 'midas.runtime.lastTrail.v1', scope: 'localStorage', owner: 'services/runtimeGuardian.ts', description: 'Trail post-mortem: últimas navegaciones + muestras de heap + flag cleanExit. Sobrevive al OOM-kill para diagnosticar "Aw Snap".' },
 
+  // ── Boot / storage health ───────────────────────────────────────────────
+  { key: 'midas.boot.inflight', scope: 'localStorage', owner: 'services/storageHealthGuard.ts', description: 'Flag de boot en curso: se setea al arrancar y se limpia al terminar; si sobrevive a un boot previo señala crash durante el arranque.' },
+  { key: 'midas.boot.purgedReason', scope: 'localStorage', owner: 'services/storageHealthGuard.ts', description: 'Motivo de la última purga selectiva del guard de salud de storage (diagnóstico).' },
+  { key: 'midas.boot.purgedAt', scope: 'localStorage', owner: 'services/storageHealthGuard.ts', description: 'Timestamp de la última purga del guard de salud de storage.' },
+
   // ── Legacy (flowsense / versiones previas — purgables) ──────────────────
   { key: 'midas-v11', scope: 'localStorage', owner: 'domain/persistence.ts', description: 'Store v11 previo.', legacy: true },
   { key: 'midas-v10', scope: 'localStorage', owner: 'domain/persistence.ts', description: 'Store v10 previo.', legacy: true },
@@ -114,6 +119,7 @@ export const MIDAS_STORAGE_REGISTRY: StorageEntry[] = [
   { key: 'flowsense.activityFeed', scope: 'localStorage', owner: 'components/ActivityFeed.tsx', description: 'Feed de actividad flowsense.', legacy: true },
   { key: 'flowsense.budget.v1', scope: 'localStorage', owner: 'domain/budgetPersistence.ts', description: 'Budget flowsense.', legacy: true },
   { key: 'flowsense.companyGroups', scope: 'localStorage', owner: 'domain/companyGroups.ts', description: 'Agrupación de compañías flowsense.', legacy: true },
+  { key: 'midas.daily.*', scope: 'localStorage', owner: 'services/dailyApiCache.ts', description: 'Prefijo legacy del cache diario pre-IDB; `migrateLegacyLocalStorage()` lo migra a midas-daily-cache y lo borra solo.', legacy: true },
 ];
 
 /**
