@@ -36,6 +36,8 @@ export interface SpreadsheetGridProps {
   onClearCell: (conceptKey: string, bucketKey: string) => void;
   onAddRow: (type: FinancialMovementType) => void;
   onClickRow?: (conceptKey: string) => void;
+  /** Click en una celda de datos → detalle de ESA celda (concepto × período). */
+  onClickCell?: (conceptKey: string, bucketKey: string) => void;
   onInspectCell?: (conceptKey: string, bucketKey: string) => void;
   onReadOnlyAttempt?: () => void;
   /**
@@ -101,6 +103,7 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
     onClearCell,
     onAddRow,
     onClickRow,
+    onClickCell,
     onInspectCell,
     onReadOnlyAttempt,
     closingCashLabel = 'Caja final',
@@ -549,7 +552,7 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
             onClick={() => {
               setSelection({ rowIndex, colIndex });
               setIsEditing(false);
-              if (isReadOnly) onReadOnlyAttempt?.();
+              onClickCell?.(row.conceptKey, column.key);
             }}
             onDoubleClick={() => {
               setSelection({ rowIndex, colIndex });
@@ -678,10 +681,12 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
     );
   };
 
-  const renderFooterRow = (label: string, kind: 'inflows' | 'outflows' | 'net' | 'closingCash', tone: 'neutral' | 'positive' | 'negative' | 'highlight') => (
+  // `bottom` apila los footers sticky (Neto sobre Caja). Con ambos en bottom:0
+  // se encimaban al scrollear y la fila Neto quedaba oculta bajo Caja final.
+  const renderFooterRow = (label: string, kind: 'inflows' | 'outflows' | 'net' | 'closingCash', tone: 'neutral' | 'positive' | 'negative' | 'highlight', bottom = 0) => (
     <div
-      className="flex border-t border-[var(--gray-200)] sticky bottom-0"
-      style={{ height: ROW_HEIGHT, zIndex: 5, minWidth: contentWidth, background: tone === 'highlight' ? 'var(--gray-50)' : 'white' }}
+      className="flex border-t border-[var(--gray-200)] sticky"
+      style={{ height: ROW_HEIGHT, bottom, zIndex: 5, minWidth: contentWidth, background: tone === 'highlight' ? 'var(--gray-50)' : 'white' }}
       role="row"
     >
       <StickyLeftCell
@@ -773,7 +778,13 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
       aria-readonly={isReadOnly}
       aria-rowcount={displayRows.length}
       className="relative overflow-auto overscroll-contain rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)]"
-      style={{ maxHeight: 560 }}
+      // overflowAnchor: la virtualización recicla filas y redimensiona spacers
+      // en cada frame de scroll; el scroll anchoring del navegador elige una
+      // fila como ancla y reajusta scrollTop para mantenerla fija, peleando
+      // contra el viewport (scroll "trabado" arriba/abajo con buckets grandes
+      // expandidos, p.ej. Proveedores sin categoría). Desactivarlo es el
+      // estándar en listas virtualizadas.
+      style={{ maxHeight: 560, overflowAnchor: 'none' }}
     >
       {/* Header row */}
       <div className="sticky top-0 z-30 flex border-b border-[var(--gray-200)] bg-[var(--gray-50)]" style={{ height: HEADER_HEIGHT, minWidth: contentWidth }}>
@@ -851,7 +862,7 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
       {outflowRows.length > 0 && renderSubtotalRow('Total Egresos', 'outflows')}
 
       {/* Footer */}
-      {renderFooterRow('Neto', 'net', 'neutral')}
+      {renderFooterRow('Neto', 'net', 'neutral', ROW_HEIGHT)}
       {renderFooterRow(closingCashLabel, 'closingCash', 'highlight')}
 
       {isReadOnly && (

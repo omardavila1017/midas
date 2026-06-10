@@ -1478,15 +1478,16 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
         onCommitCell={handleCommitCell}
         onClearCell={handleClearCell}
         onAddRow={handleAddRow}
-        onClickRow={(conceptKey) => setSelectedCell({ conceptKey, bucketKey: columns.find((column) => column.isCurrent)?.key ?? columns[0]?.key ?? yearStart })}
+        onClickCell={(conceptKey, bucketKey) => setSelectedCell({ conceptKey, bucketKey })}
         onInspectCell={(conceptKey, bucketKey) => setInspectedCell({ conceptKey, bucketKey })}
         onReadOnlyAttempt={() => setStatusMessage('Solo lectura. Crea una propuesta para editar.')}
         closingCashLabel={activeScenario.kind === 'BASE' ? 'Caja actual' : 'Caja final'}
       />
 
-      {drawerOpen && selectedCell ? (
+      {selectedCell ? (
         <PlanningCellDetailPanel
           movements={selectedCellMovements}
+          conceptLabel={rows.find((r) => r.conceptKey === selectedCell.conceptKey)?.label ?? selectedCell.conceptKey}
           scenarioName={activeScenario.name}
           bucketLabel={engineBucketLabel(selectedCell.bucketKey, granularity)}
           onSelectMovement={(movement) => {
@@ -1495,14 +1496,17 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
           }}
           onClose={() => setSelectedCell(null)}
         />
-      ) : (
+      ) : activeScenario.kind !== 'BASE' ? (
+        // El historial de cambios NO aplica al Escenario Base (read-only por
+        // invariante, nunca acumula ediciones) — sólo Aprobado y propuestas.
         <ChangeLogDrawer
           open={drawerOpen}
+          scenarioKind={activeScenario.kind === 'APPROVED' ? 'APPROVED' : 'DRAFT'}
           scenarioName={activeScenario.name}
           entries={draftEntries}
           onClose={() => setDrawerOpen(false)}
         />
-      )}
+      ) : null}
 
       {addRowFor && (
         <AddRowPopover
@@ -1725,12 +1729,14 @@ function ProposalActionBar({
 
 function PlanningCellDetailPanel({
   movements,
+  conceptLabel,
   scenarioName,
   bucketLabel,
   onSelectMovement,
   onClose,
 }: {
   movements: FinancialMovement[];
+  conceptLabel: string;
   scenarioName: string;
   bucketLabel: string;
   onSelectMovement: (movement: FinancialMovement) => void;
@@ -1742,9 +1748,9 @@ function PlanningCellDetailPanel({
   return (
     <aside className="rounded-2xl border border-[var(--gray-200)] bg-white">
       <header className="flex items-start justify-between border-b border-[var(--gray-200)] px-4 py-3">
-        <div>
-          <h3 className="text-[13px] font-semibold text-[var(--gray-950)]">Detalle de celda</h3>
-          <p className="mt-1 text-[11px] text-[var(--gray-500)]">{scenarioName} · {bucketLabel}</p>
+        <div className="min-w-0">
+          <h3 className="truncate text-[13px] font-semibold text-[var(--gray-950)]">{conceptLabel}</h3>
+          <p className="mt-1 text-[11px] text-[var(--gray-500)]">{bucketLabel} · {scenarioName}</p>
         </div>
         <button
           type="button"

@@ -23,6 +23,25 @@ describe('<SpreadsheetGrid />', () => {
     expect(onInspectCell).not.toHaveBeenCalled();
   });
 
+  it('reports the clicked data cell via onClickCell with its exact bucket', () => {
+    const onClickCell = vi.fn();
+    renderGrid(vi.fn(), [row], onClickCell);
+
+    fireEvent.click(screen.getByText('Clientes'));
+    fireEvent.click(dataCell());
+
+    expect(onClickCell).toHaveBeenCalledWith(row.conceptKey, '2026-05-01');
+  });
+
+  it('does not fire onClickCell on bucket header clicks', () => {
+    const onClickCell = vi.fn();
+    renderGrid(vi.fn(), [row], onClickCell);
+
+    fireEvent.click(screen.getByText('Clientes'));
+
+    expect(onClickCell).not.toHaveBeenCalled();
+  });
+
   it('opens the advanced inspector with the i shortcut', () => {
     const onInspectCell = vi.fn();
     renderGrid(onInspectCell);
@@ -77,7 +96,11 @@ describe('<SpreadsheetGrid />', () => {
   });
 });
 
-function renderGrid(onInspectCell: (conceptKey: string, bucketKey: string) => void, rows: PlanningRow[] = [row]) {
+function renderGrid(
+  onInspectCell: (conceptKey: string, bucketKey: string) => void,
+  rows: PlanningRow[] = [row],
+  onClickCell?: (conceptKey: string, bucketKey: string) => void,
+) {
   return render(
     <SpreadsheetGrid
       rows={rows}
@@ -91,6 +114,7 @@ function renderGrid(onInspectCell: (conceptKey: string, bucketKey: string) => vo
       onCommitCell={() => {}}
       onClearCell={() => {}}
       onAddRow={() => {}}
+      onClickCell={onClickCell}
       onInspectCell={onInspectCell}
     />,
   );
