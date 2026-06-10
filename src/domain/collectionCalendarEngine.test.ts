@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import type { BankAccountStatement, BankStatementLine, CobranzaRecord } from '../services/jdeTypes';
+import type { BankAccountStatement, BankStatementLine, CobranzaRecord, RolRecord } from '../services/jdeTypes';
 import type { CashFlowAssumptions, Client } from './types';
 import { reconcileRealCollections } from './realReconciliationEngine';
+import { buildRolProjectedInflows } from './rolProjectionEngine';
 import {
   buildCollectionCalendar,
   calendarEventMatchesSourceFilter,
@@ -41,6 +42,31 @@ function makeFactura(
     condPago: '30',
     estatus: 'PENDIENTE',
     tipoCambio: 1,
+    ...overrides,
+  };
+}
+
+function makeRol(overrides: Partial<RolRecord> = {}): RolRecord {
+  return {
+    cia: '00011',
+    empresa: 'SERVICIO INDUSTRIAL',
+    kCliente: 125,
+    cCliente: 'ALFA',
+    dCliente: 'CLIENTE ALFA',
+    rfc: 'XAXX010101000',
+    claveJDE: '9001',
+    facturacionTipo: 'MENSUAL',
+    iva: 16,
+    tipoViaje: 'SENCILL',
+    ruta: 'RUTA TEST',
+    costoRuta: 200,
+    viajes: 5,
+    subTotal: 1000,
+    despachado: true,
+    efectuado: true,
+    anio: 2026,
+    semana: 23,
+    fechaViaje: '2026-06-01',
     ...overrides,
   };
 }
@@ -303,6 +329,72 @@ describe('buildCollectionCalendar', () => {
     expect(bank && calendarEventMatchesSourceFilter(bank, 'jde')).toBe(false);
     expect(jde && calendarEventMatchesSourceFilter(jde, 'jde')).toBe(true);
     expect(projected && calendarEventMatchesSourceFilter(projected, 'projected')).toBe(true);
+  });
+
+  it('proyecta viajes ROL ejecutados sin facturar como ROL_PROJECTED con la regla del cliente', () => {
+    const client = makeClient({
+      id: '9001',
+      creditDays: 30,
+      paymentDay: { kind: 'ANY' },
+      monthlyBilling: new Array(12).fill(0),
+    });
+    const rolProjection = buildRolProjectedInflows({
+      rolRecords: [makeRol({ subTotal: 1000, iva: 16, viajes: 5, fechaViaje: '2026-06-01' })],
+      cobranzaRecords: [],
+      clients: [client],
+      assumptions: ASSUMPTIONS,
+      asOfDate: '2026-06-02',
+    });
+    const calendar = buildCollectionCalendar({
+      clients: [client],
+      assumptions: ASSUMPTIONS,
+      cobranzaRecords: [],
+      reconciliation: reconcileRealCollections([], []),
+      rolProjection,
+    });
+
+    const event = calendar.events.find(e => e.source === 'ROL_PROJECTED');
+    expect(event).toBeTruthy();
+    // 1000 subtotal × 1.16 = 1160 bruto; viaje 1-jun + 30d crédito → julio.
+    expect(event?.amount).toBeCloseTo(1160);
+    expect(event?.date).toBe('2026-07-01');
+    expect(event?.cia).toBe('00011');
+    expect(event?.clientId).toBe('9001');
+    expect(event?.dateReason).toContain('ROL CITI');
+    expect(calendarEventMatchesSourceFilter(event!, 'projected')).toBe(true);
+    expect(calendar.summaryBySource.ROL_PROJECTED.amount).toBeCloseTo(1160);
+  });
+
+  it('suprime la proyección genérica CLIENT_PROJECTED del mes de cobro cubierto por ROL', () => {
+    const client = makeClient({
+      id: '9001',
+      creditDays: 0,
+      paymentDay: { kind: 'ANY' },
+      monthlyBilling: new Array(12).fill(1000),
+    });
+    const rolProjection = buildRolProjectedInflows({
+      rolRecords: [makeRol({ fechaViaje: '2026-06-08', subTotal: 2000 })],
+      cobranzaRecords: [],
+      clients: [client],
+      assumptions: ASSUMPTIONS,
+      asOfDate: '2026-06-02',
+    });
+    const calendar = buildCollectionCalendar({
+      clients: [client],
+      assumptions: ASSUMPTIONS,
+      cobranzaRecords: [],
+      reconciliation: reconcileRealCollections([], []),
+      rolProjection,
+    });
+
+    // Junio queda cubierto por ROL → sin estimado genérico ese mes; otros
+    // meses conservan la proyección de catálogo.
+    const genericJune = calendar.events.filter(
+      e => e.source === 'CLIENT_PROJECTED' && e.date.startsWith('2026-06'),
+    );
+    expect(calendar.events.some(e => e.source === 'ROL_PROJECTED' && e.date.startsWith('2026-06'))).toBe(true);
+    expect(genericJune).toHaveLength(0);
+    expect(calendar.events.some(e => e.source === 'CLIENT_PROJECTED' && e.date.startsWith('2026-08'))).toBe(true);
   });
 });
 

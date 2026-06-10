@@ -21,6 +21,7 @@ import {
   type CollectionCalendarEvent,
   type CollectionCalendarEventSource,
 } from '../domain/collectionCalendarEngine';
+import { buildRolProjectedInflows } from '../domain/rolProjectionEngine';
 import { CXPRecord } from '../domain/persistence';
 import type { BankAccountStatement, CobranzaPayment, CobranzaRecord } from '../services/jde';
 import type { RolRecord } from '../services/jdeTypes';
@@ -220,6 +221,7 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
             assumptions={assumptions}
             records={cobranzaRecords}
             payments={cobranzaPayments}
+            rolRecords={rolRecords}
             loadedCias={cobranzaLoadedCias}
             companies={companies}
             bankStatements={bankStatements}
@@ -232,7 +234,7 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
             onEnsureBankCoverage={onEnsureBankCoverage}
             bankCoverageLoading={!!bankCoverageLoading}
           />
-          <RolCobranzaPanel rolRecords={rolRecords} cobranzaRecords={cobranzaRecords} />
+          <RolCobranzaPanel rolRecords={rolRecords} cobranzaRecords={cobranzaRecords} cobranzaPayments={cobranzaPayments} />
         </>
       ) : (
       <>
@@ -1318,6 +1320,12 @@ const COLLECTION_CALENDAR_SOURCE_STYLES: Record<CollectionCalendarEventSource, {
     textClass: 'text-[#6d28d9]',
     borderClass: 'border-[#7c3aed]/30',
   },
+  ROL_PROJECTED: {
+    color: '#0891b2',
+    rgb: '8,145,178',
+    textClass: 'text-[#0e7490]',
+    borderClass: 'border-[#0891b2]/30',
+  },
   CLIENT_PROJECTED: {
     color: '#64748b',
     rgb: '100,116,139',
@@ -1369,6 +1377,7 @@ function collectionEventMatchesCia(event: CollectionCalendarEvent, ciaFilter: st
   // JDE; se mantienen visibles para que el calendario futuro no desaparezca
   // al filtrar una compania.
   if (event.source === 'CLIENT_PROJECTED') return true;
+  if (event.source === 'ROL_PROJECTED' && !event.cia) return true;
   return event.cia === ciaFilter;
 }
 
@@ -1465,6 +1474,7 @@ function CobranzaRealCalendar({
           slot.real += e.amount;
         } else if (
           e.source === 'JDE_OPEN_PROJECTED'
+          || e.source === 'ROL_PROJECTED'
           || e.source === 'CLIENT_PROJECTED'
         ) {
           slot.projected += e.amount;
@@ -1549,6 +1559,7 @@ function CobranzaRealCalendar({
             const dayProjectedTotal = dayEvents
               .filter(event =>
                 event.source === 'JDE_OPEN_PROJECTED'
+                || event.source === 'ROL_PROJECTED'
                 || event.source === 'CLIENT_PROJECTED',
               )
               .reduce((s, event) => s + event.amount, 0);
@@ -1689,6 +1700,8 @@ function CobranzaRealCalendar({
                               <div className="text-[10px] text-[var(--gray-400)]">Confianza {(event.confidence * 100).toFixed(0)}%</div>
                             )}
                           </div>
+                        ) : event.source === 'ROL_PROJECTED' ? (
+                          <span className="text-[11px] text-[var(--gray-500)]">Viaje ROL ejecutado; factura aún no emitida.</span>
                         ) : event.projected ? (
                           <span className="text-[11px] text-[var(--gray-500)]">Regla de cliente sin factura JDE emitida.</span>
                         ) : event.source === 'JDE_PAID_UNMATCHED' ? (
@@ -1803,6 +1816,7 @@ function CobranzaRealView({
   assumptions,
   records,
   payments,
+  rolRecords = [],
   loadedCias,
   companies,
   bankStatements,
@@ -1819,6 +1833,8 @@ function CobranzaRealView({
   assumptions: CashFlowAssumptions;
   records: CobranzaRecord[];
   payments: CobranzaPayment[];
+  /** Viajes ROL ejecutados — alimentan la proyección "por facturar" del calendario. */
+  rolRecords?: RolRecord[];
   loadedCias: Record<string, string>;
   companies: { cia: string; nombre: string }[];
   bankStatements: BankAccountStatement[];
@@ -1882,14 +1898,30 @@ function CobranzaRealView({
     }
     return m;
   }, [externalFacturaIndex, reconciliation.matches]);
+  // Proyección ROL: viajes ejecutados aún sin factura, fechados por la regla
+  // del cliente (días crédito + día de pago + frecuencia). Es el ingreso de
+  // corto plazo más grande del módulo — sin esta capa la proyección del
+  // calendario salía muy por debajo de la realidad.
+  const rolProjection = useMemo(
+    () => buildRolProjectedInflows({
+      rolRecords,
+      cobranzaRecords: records,
+      cobranzaPayments: payments,
+      clients,
+      assumptions,
+      asOfDate: todayISO(),
+    }),
+    [rolRecords, records, payments, clients, assumptions],
+  );
   const collectionCalendar = useMemo(
     () => buildCollectionCalendar({
       clients,
       assumptions,
       cobranzaRecords: records,
       reconciliation,
+      rolProjection,
     }),
-    [clients, assumptions, records, reconciliation],
+    [clients, assumptions, records, reconciliation, rolProjection],
   );
   const calendarEventByFactura = useMemo(() => {
     const priority: Record<CollectionCalendarEventSource, number> = {
@@ -1897,7 +1929,8 @@ function CobranzaRealView({
       BANK_UNMATCHED: 1,
       JDE_PAID_UNMATCHED: 2,
       JDE_OPEN_PROJECTED: 3,
-      CLIENT_PROJECTED: 4,
+      ROL_PROJECTED: 4,
+      CLIENT_PROJECTED: 5,
     };
     const map = new Map<string, CollectionCalendarEvent>();
     for (const event of collectionCalendar.events) {

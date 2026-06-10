@@ -29,7 +29,7 @@
  */
 
 import type { CashFlowAssumptions, Client } from './types';
-import type { CobranzaRecord, RolRecord } from '../services/jdeTypes';
+import type { CobranzaPayment, CobranzaRecord, RolRecord } from '../services/jdeTypes';
 import { buildRolCobranzaCross } from './rolCobranzaMatch';
 import {
   buildClientLookup,
@@ -40,6 +40,8 @@ import {
 import { normalizeClientText } from './clientGrouping';
 
 export interface RolProjectedInflow {
+  /** Compañía JDE del viaje (permite filtrar el calendario por cía). */
+  cia: string;
   clientId: string;
   clientName: string;
   commercialGroupId?: string;
@@ -84,6 +86,8 @@ function emptyResult(): RolProjectionResult {
 export function buildRolProjectedInflows(args: {
   rolRecords: RolRecord[];
   cobranzaRecords: CobranzaRecord[];
+  /** Pagos CobranzaIndicadores — mejora el cruce (factura cobrada fuera del CXC). */
+  cobranzaPayments?: CobranzaPayment[];
   clients: Client[];
   assumptions: CashFlowAssumptions;
   asOfDate: string;
@@ -95,7 +99,7 @@ export function buildRolProjectedInflows(args: {
   const { rolRecords, cobranzaRecords, clients, assumptions, asOfDate, horizonYm } = args;
   if (!rolRecords || rolRecords.length === 0) return emptyResult();
 
-  const cross = buildRolCobranzaCross(rolRecords, cobranzaRecords ?? []);
+  const cross = buildRolCobranzaCross(rolRecords, cobranzaRecords ?? [], args.cobranzaPayments ?? []);
   if (cross.predicted.length === 0) return emptyResult();
 
   const lookup = args.clientLookup ?? buildClientLookup(clients);
@@ -150,7 +154,7 @@ export function buildRolProjectedInflows(args: {
     const ivaRate = Number.isFinite(r.iva) && r.iva > 0 ? r.iva : 16;
     const gross = r.subTotal * (1 + ivaRate / 100);
 
-    const key = `${client.id}::${calendarDate}`;
+    const key = `${r.cia}::${client.id}::${calendarDate}`;
     const existing = agg.get(key);
     if (existing) {
       existing.grossAmount += gross;
@@ -158,6 +162,7 @@ export function buildRolProjectedInflows(args: {
       existing.tripCount += r.viajes;
     } else {
       agg.set(key, {
+        cia: r.cia,
         clientId: client.id,
         clientName: client.name,
         commercialGroupId: client.commercialGroupId,

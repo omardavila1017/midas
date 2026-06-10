@@ -368,7 +368,7 @@ function collectInflowLines(
     const rolClient = inputs.clients.find((c) => c.id === inflow.clientId);
     const rolDisplay = rolClient ? clientDisplayCounterparty(rolClient) : { id: inflow.clientId, name: inflow.clientName };
     lines.push({
-      id: `rol:${inflow.clientId}:${inflow.date}`,
+      id: `rol:${inflow.cia}:${inflow.clientId}:${inflow.date}`,
       amount: inflow.grossAmount,
       date: inflow.date,
       concept: `Viajes ejecutados ${inflow.clientName} (${inflow.tripCount} viaje${inflow.tripCount === 1 ? '' : 's'})`,

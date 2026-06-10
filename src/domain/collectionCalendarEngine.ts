@@ -15,12 +15,17 @@ import type {
   RealReconciliationMatch,
   RealReconciliationResult,
 } from './realReconciliationEngine';
+// Type-only: `rolProjectionEngine` importa funciones de este módulo; un import
+// de solo-tipos no crea ciclo en runtime. El RESULTADO se calcula afuera
+// (UI/canónico) y entra precomputado por `BuildCollectionCalendarInput`.
+import type { RolProjectionResult } from './rolProjectionEngine';
 
 export type CollectionCalendarEventSource =
   | 'BANK_MATCHED'
   | 'BANK_UNMATCHED'
   | 'JDE_PAID_UNMATCHED'
   | 'JDE_OPEN_PROJECTED'
+  | 'ROL_PROJECTED'
   | 'CLIENT_PROJECTED';
 
 export type CollectionCalendarSourceFilter =
@@ -98,6 +103,14 @@ export interface BuildCollectionCalendarInput {
   assumptions: CashFlowAssumptions;
   cobranzaRecords: CobranzaRecord[];
   reconciliation: RealReconciliationResult;
+  /**
+   * Proyección ROL precomputada (`buildRolProjectedInflows`): viajes
+   * ejecutados aún no facturados, fechados por la regla del cliente. Emite
+   * eventos `ROL_PROJECTED` y suprime la proyección genérica
+   * `CLIENT_PROJECTED` en los meses de cobro que el ROL ya cubre con monto
+   * real ejecutado (sin doble conteo).
+   */
+  rolProjection?: RolProjectionResult;
 }
 
 export interface BuildCollectionCalendarResult {
@@ -112,6 +125,7 @@ export const COLLECTION_CALENDAR_SOURCE_LABELS: Record<CollectionCalendarEventSo
   BANK_UNMATCHED: 'Banco sin factura',
   JDE_PAID_UNMATCHED: 'Ingreso',
   JDE_OPEN_PROJECTED: 'Factura JDE por cobrar',
+  ROL_PROJECTED: 'Viaje ROL por facturar',
   CLIENT_PROJECTED: 'Proyectado',
 };
 
@@ -120,6 +134,7 @@ const SOURCE_ORDER: CollectionCalendarEventSource[] = [
   'BANK_UNMATCHED',
   'JDE_PAID_UNMATCHED',
   'JDE_OPEN_PROJECTED',
+  'ROL_PROJECTED',
   'CLIENT_PROJECTED',
 ];
 
@@ -146,7 +161,7 @@ export function calendarEventMatchesSourceFilter(
     case 'cxc':
       return event.source === 'JDE_OPEN_PROJECTED';
     case 'projected':
-      return event.source === 'CLIENT_PROJECTED';
+      return event.source === 'CLIENT_PROJECTED' || event.source === 'ROL_PROJECTED';
     case 'unruled':
       return event.source === 'JDE_OPEN_PROJECTED' && !event.rule;
   }
@@ -212,9 +227,38 @@ export function buildCollectionCalendar(input: BuildCollectionCalendarInput): Bu
     }
   }
 
+  // ROL CITI: viajes EJECUTADOS aún sin factura — monto real del servicio
+  // entregado, fechado por la regla del cliente (días crédito + día de pago
+  // + frecuencia). Es la capa de proyección más fiel del corto plazo: sin
+  // ella el calendario solo muestra facturas ya emitidas + el estimado
+  // genérico del catálogo y la proyección sale corta.
+  const rolCoverageByClientMonth = input.rolProjection?.coverageByClientMonth;
+  for (const inflow of input.rolProjection?.inflows ?? []) {
+    const client = clientLookup.byId.get(inflow.clientId);
+    if (client && isInternalCounterparty(client.rfc, client.name)) continue;
+    events.push({
+      id: `rol:${inflow.cia}:${inflow.clientId}:${inflow.date}`,
+      source: 'ROL_PROJECTED',
+      date: inflow.date,
+      amount: inflow.grossAmount,
+      cia: inflow.cia || undefined,
+      clientId: inflow.clientId,
+      clientName: inflow.clientName,
+      statusLabel: `Viaje ejecutado por facturar (${inflow.tripCount} viaje${inflow.tripCount === 1 ? '' : 's'})`,
+      dateReason: `ROL CITI · ${inflow.ruleReason}`,
+      ruleApplied: client ? clientRuleLabel(client) : 'Regla de cliente',
+      confidence: 0.7,
+      facturas: [],
+    });
+  }
+
   for (const projected of projectYear(clients, assumptions)) {
     const coveredMonths = cxcCoverageByClientMonth.get(projected.clientId);
     if (coveredMonths?.has(projected.invoiceDate.slice(0, 7))) continue;
+    // Mes de cobro cubierto por ROL → el estimado genérico del catálogo se
+    // suprime: el ROL es la versión real de esa venta (sin doble conteo).
+    const rolCovered = rolCoverageByClientMonth?.get(projected.clientId);
+    if (rolCovered?.has(projected.realDate.slice(0, 7))) continue;
     const client = clientLookup.byId.get(projected.clientId);
     if (client && isInternalCounterparty(client.rfc, client.name)) continue;
     events.push(eventFromProjection(projected, client));

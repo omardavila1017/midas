@@ -1092,7 +1092,7 @@ describe('canonicalProjection ROL projection (modelo corregido)', () => {
 
     const rol = canonical.movements.find((m) => m.id.startsWith('rol:'));
     expect(rol).toBeTruthy();
-    expect(rol?.id).toMatch(/^rol:client-1:\d{4}-\d{2}-\d{2}$/);
+    expect(rol?.id).toMatch(/^rol:00001:client-1:\d{4}-\d{2}-\d{2}$/);
     expect(rol?.category).toBe('AR_COLLECTION');
     expect(rol?.counterpartyId).toBe('client-1');
     expect(rol?.counterpartyType).toBe('CUSTOMER');

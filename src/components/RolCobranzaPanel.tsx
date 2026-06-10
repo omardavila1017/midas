@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { ChevronDown, Route } from 'lucide-react';
-import type { CobranzaRecord, RolRecord } from '../services/jdeTypes';
+import type { CobranzaPayment, CobranzaRecord, RolRecord } from '../services/jdeTypes';
 import { buildRolCobranzaCross, summarizeRolCrossByClient } from '../domain/rolCobranzaMatch';
 import { fmtCurrency } from '../formatters';
 
@@ -8,28 +8,28 @@ import { fmtCurrency } from '../formatters';
  * Panel ROL ↔ Cobranza dentro de la pestaña Cobranza.
  *
  * Cruza los viajes ejecutados del ROL diario CITI contra las facturas de
- * cobranza JDE (por `factura` / `uuidFiscal`) y los clasifica en:
- *   - Facturado: viaje con factura emitida y encontrada en cobranza.
+ * cobranza JDE (folio exacto / UUID / núcleo numérico del folio) y los pagos
+ * aplicados de CobranzaIndicadores, y los clasifica en:
+ *   - Facturado: viaje con factura encontrada en cobranza o en pagos.
  *   - Predicho:  viaje ejecutado aún sin factura.
- *   - Huérfano:  viaje marcado como facturado pero sin match en cobranza.
- *
- * NOTA — bloqueo conocido: la proyección de ingreso por viaje predicho
- * (ROL → motor canónico) está pendiente hasta que el API `/citi/roldiario`
- * exponga de forma fiable la columna de cliente. Este panel solo usa el
- * cruce por factura/UUID, que no depende de esa columna.
+ *   - Huérfano:  viaje marcado como facturado pero sin match en ningún
+ *                índice (objetivo de negocio: 0 — un huérfano es señal de
+ *                folio fuera del rango cargado o formato no reconocido).
  */
 
 interface Props {
   rolRecords: RolRecord[];
   cobranzaRecords: CobranzaRecord[];
+  /** Pagos CobranzaIndicadores — rescatan facturas cobradas fuera del CXC. */
+  cobranzaPayments?: CobranzaPayment[];
 }
 
-export default function RolCobranzaPanel({ rolRecords, cobranzaRecords }: Props) {
+export default function RolCobranzaPanel({ rolRecords, cobranzaRecords, cobranzaPayments = [] }: Props) {
   const [expanded, setExpanded] = useState(false);
 
   const cross = useMemo(
-    () => buildRolCobranzaCross(rolRecords, cobranzaRecords),
-    [rolRecords, cobranzaRecords],
+    () => buildRolCobranzaCross(rolRecords, cobranzaRecords, cobranzaPayments),
+    [rolRecords, cobranzaRecords, cobranzaPayments],
   );
   const byClient = useMemo(() => summarizeRolCrossByClient(cross), [cross]);
 
@@ -54,7 +54,7 @@ export default function RolCobranzaPanel({ rolRecords, cobranzaRecords }: Props)
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 px-4 pb-4">
         <Kpi
           label="Facturado"
-          hint="Viaje con factura encontrada en cobranza"
+          hint="Viaje con factura encontrada en cobranza o pagos"
           trips={cross.matches.length}
           amount={invoicedAmount}
           tone="var(--success)"
@@ -68,7 +68,7 @@ export default function RolCobranzaPanel({ rolRecords, cobranzaRecords }: Props)
         />
         <Kpi
           label="Huérfano"
-          hint="Marcado facturado pero sin match en cobranza"
+          hint="Marcado facturado sin match en cobranza ni pagos"
           trips={cross.invoicedOrphans.length}
           amount={orphanAmount}
           tone="var(--warning)"
