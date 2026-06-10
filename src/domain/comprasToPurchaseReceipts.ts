@@ -53,7 +53,7 @@ import { todayISO } from '../formatters';
  */
 const CLOSED_WORKFLOW_STATES = new Set<string>(['999', '998']);
 
-function isWorkflowStateClosed(edoSig: string | undefined): boolean {
+export function isComprasWorkflowClosed(edoSig: string | undefined): boolean {
   if (!edoSig) return false;
   return CLOSED_WORKFLOW_STATES.has(edoSig.trim());
 }
@@ -296,7 +296,7 @@ export function comprasToPurchaseReceipts(
 
   for (const r of comprasRecords) {
     if (r.cancelada) continue;
-    if (isWorkflowStateClosed(r.estadoSiguiente)) continue;
+    if (isComprasWorkflowClosed(r.estadoSiguiente)) continue;
 
     const amount = r.importeTotal || 0;
     if (amount <= 0) continue;

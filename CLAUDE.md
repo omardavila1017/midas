@@ -130,6 +130,16 @@ El daily-cache (IDB) guardaba `[]` PARA SIEMPRE para un día pasado de `/bancos`
 
 Costo: ~4-7 requests extra a `/bancos` por boot (los días genuinamente vacíos de las últimas 2 semanas). NO quitar la escritura de `[]` en días vacíos (evita repegar al API dentro de la misma sesión); la ventana es quien repara.
 
+## Compras (OCs): pestaña nutrida + depuración JDE (2026-06-10)
+
+La pestaña Órdenes de Compras (`src/components/Compras.tsx`) se re-nutrió sobre un módulo de dominio nuevo, **`src/domain/comprasInsights.ts`** (puro, testeado en `comprasInsights.test.ts`). Display-only: NO toca el motor ni la proyección.
+
+- **Strip mensual reemplazado.** Antes "Egreso proyectado por mes (sin facturar)" (Σ `importeTotal` por mes de `fechaPagoProyectada`); ahora **OCs abiertas sin entrada por mes de pedido** (`buildOpenSinEntradaByMonth`): activas, sin factura, sin `F_Recepcion` y workflow vivo (`Edo_Sig` ≠ 998/999 — predicado compartido `isComprasWorkflowClosed`, ahora **exportado** de `comprasToPurchaseReceipts.ts`; única fuente de verdad). Meses completos más viejos que `STALE_OPEN_ORDER_DAYS` (90) se pintan ámbar. Clic en un chip **enfoca** la tabla al set exacto por claves `cia::orden::linea` (`comprasRecordKey`, misma forma que el dedup de `fetchComprasRange`).
+- **Depuración JDE** (`buildComprasDepuracionInsights`): hallazgos por lógica sobre los campos del API, candidatos a corregir/cerrar en JDE — sin entrada +90 d (órdenes muertas), recibidas sin factura con pago vencido +30 d, crédito 0, workflow cerrado sin cancelar, recepción<pedido, sin fecha de pedido, cancelada con factura, divisa con TC≤1, importe ≤0, y posibles duplicados (misma cia/proveedor/fecha/producto/cantidad/importe en ≥2 **órdenes distintas**; multi-línea de la misma orden NO cuenta). Cards clicables → mismo mecanismo de foco (enfocar resetea los demás filtros para mostrar el set completo). El reporte se computa sobre el scope de la cía, no sobre los filtros de la tabla.
+- **Montos en MXN.** La pestaña convierte con `comprasImporteMxn` (espejo de la conversión del motor en `buildRecord`: MXP/MXN tal cual; divisa × `tipoCambio||1`) en KPIs, strip, hallazgos, filtros de importe y orden; la fila muestra el original como detalle (`USD 100.00 · TC 17.00`). Campos del API antes sin usar ahora visibles: moneda/tipoCambio, tipo de orden + línea, producto + cantidad × precio unitario, centro de costos, `Edo_Sig` (tooltip del chip), y antigüedad de pendientes de entrada (`Pendiente · N d`, ámbar si stale).
+- **Estado derivado `compraEstado`** (precedencia cancelada > facturada > cerradaWorkflow > porPagar > sinEntrada) alimenta el chip (nuevo estado "Cerrada en JDE") y los buckets de KPI — las cerradas por workflow ya no inflan "Abiertas sin entrada" ni "Por pagar", alineado con el motor que las excluye.
+- **Export CSV** (`comprasToCsv`, BOM como en Venta) de las OCs filtradas/enfocadas con todos los campos del API + derivados — para entregar la lista de depuración al equipo JDE.
+
 ## Stack
 
 - React 18 + Vite 5 + TypeScript 5.5 + Tailwind 3.4 (with `darkMode: 'class'`)

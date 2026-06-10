@@ -1,20 +1,39 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import {
-  Package,
-  Search,
+  AlertCircle,
+  AlertTriangle,
+  Archive,
   Calendar,
   CheckCircle2,
   Clock,
   Database,
+  Download,
   Filter,
+  Info,
+  Package,
+  Search,
   X,
 } from 'lucide-react';
 import { type ComprasRecord } from '../services/jde';
-import { fmtCompact, fmtCurrency, fmtDate } from '../formatters';
+import { fmtCompact, fmtCurrency, fmtDate, fmtInt, fmtNum, todayISO } from '../formatters';
 import PageHeader from './ui/PageHeader';
 import ProviderBadge from './ProviderBadge';
 import { buildProviderIndex } from '../domain/providerIdentity';
 import type { Provider } from '../domain/types';
+import {
+  STALE_OPEN_ORDER_DAYS,
+  buildComprasDepuracionInsights,
+  buildOpenSinEntradaByMonth,
+  compraEstado,
+  comprasImporteMxn,
+  comprasRecordKey,
+  comprasToCsv,
+  daysSinceIso,
+  isComprasForeignCurrency,
+  isStaleSinEntrada,
+  type ComprasInsight,
+  type ComprasInsightSeverity,
+} from '../domain/comprasInsights';
 
 interface ComprasProps {
   comprasRecords: ComprasRecord[];
@@ -33,6 +52,13 @@ type SortDirection = 'asc' | 'desc';
 interface CompraSort {
   key: CompraSortKey;
   direction: SortDirection;
+}
+
+/** Foco puntual sobre un set exacto de OCs (hallazgo de depuración o mes del strip). */
+interface CompraFocus {
+  id: string;
+  label: string;
+  keys: ReadonlySet<string>;
 }
 
 const COMPRAS_CACHE_KEY = '__all__';
@@ -58,7 +84,7 @@ const STATUS_POR_PAGAR: ChipStyle = {
   text: 'var(--warning)',
   dot: 'var(--warning)',
 };
-const STATUS_POR_RECIBIR: ChipStyle = {
+const STATUS_SIN_ENTRADA: ChipStyle = {
   bg: 'var(--info-muted)',
   border: 'var(--gray-200)',
   text: 'var(--info)',
@@ -69,6 +95,23 @@ const STATUS_CANCELADA: ChipStyle = {
   border: 'var(--gray-200)',
   text: 'var(--danger)',
   dot: 'var(--danger)',
+};
+const STATUS_CERRADA_WF: ChipStyle = {
+  bg: 'var(--surface-alt)',
+  border: 'var(--gray-200)',
+  text: 'var(--gray-500)',
+  dot: 'var(--gray-400)',
+};
+
+const SEVERITY_ICON: Record<ComprasInsightSeverity, typeof AlertTriangle> = {
+  danger: AlertTriangle,
+  warning: AlertCircle,
+  info: Info,
+};
+const SEVERITY_COLOR: Record<ComprasInsightSeverity, string> = {
+  danger: 'var(--danger)',
+  warning: 'var(--warning)',
+  info: 'var(--info)',
 };
 
 export default function Compras({
@@ -88,7 +131,9 @@ export default function Compras({
   const [amountMax, setAmountMax] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [sort, setSort] = useState<CompraSort>(DEFAULT_SORT);
+  const [focus, setFocus] = useState<CompraFocus | null>(null);
 
+  const asOf = useMemo(() => todayISO(), []);
   const providerIndex = useMemo(() => buildProviderIndex(providers), [providers]);
 
   const lastLoadedAt = comprasLoadedCias[COMPRAS_CACHE_KEY];
@@ -104,7 +149,8 @@ export default function Compras({
     || amountMax !== ''
     || categoryFilter !== 'all'
     || sort.key !== DEFAULT_SORT.key
-    || sort.direction !== DEFAULT_SORT.direction;
+    || sort.direction !== DEFAULT_SORT.direction
+    || focus !== null;
 
   const categoriasDisponibles = useMemo(() => {
     const set = new Set<string>();
@@ -115,7 +161,16 @@ export default function Compras({
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [comprasRecords]);
 
-  const filteredRecords = useMemo(() => {
+  // Reporte de higiene de datos sobre TODO el scope de la compañía (no sobre
+  // los filtros de la tabla): es el estado del dataset, no de la vista.
+  const insights = useMemo(() => {
+    const scoped = selectedCia === 'all'
+      ? comprasRecords
+      : comprasRecords.filter((r) => r.cia === selectedCia);
+    return buildComprasDepuracionInsights(scoped, asOf);
+  }, [comprasRecords, selectedCia, asOf]);
+
+  const baseFiltered = useMemo(() => {
     const q = search.trim().toUpperCase();
     const min = parseAmountInput(amountMin);
     const max = parseAmountInput(amountMax);
@@ -134,16 +189,20 @@ export default function Compras({
       const dateValue = r[dateField] || '';
       if (dateFrom && (!dateValue || dateValue < dateFrom)) return false;
       if (dateTo && (!dateValue || dateValue > dateTo)) return false;
-      if (min !== undefined && r.importeTotal < min) return false;
-      if (max !== undefined && r.importeTotal > max) return false;
+      const mxn = comprasImporteMxn(r);
+      if (min !== undefined && mxn < min) return false;
+      if (max !== undefined && mxn > max) return false;
       if (q) {
         const hay =
           r.nombreProveedor.toUpperCase().includes(q) ||
           r.noProveedor.toUpperCase().includes(q) ||
           r.noOrden.toUpperCase().includes(q) ||
           r.descProducto.toUpperCase().includes(q) ||
+          r.noProducto.toUpperCase().includes(q) ||
+          r.concepto.toUpperCase().includes(q) ||
           r.descCategoria.toUpperCase().includes(q) ||
           r.descFamilia.toUpperCase().includes(q) ||
+          r.centroCostos.toUpperCase().includes(q) ||
           r.noFactura.toUpperCase().includes(q);
         if (!hay) return false;
       }
@@ -165,33 +224,39 @@ export default function Compras({
     sort,
   ]);
 
+  const filteredRecords = useMemo(() => {
+    if (!focus) return baseFiltered;
+    return baseFiltered.filter((r) => focus.keys.has(comprasRecordKey(r)));
+  }, [baseFiltered, focus]);
+
+  // El strip ignora el foco a propósito: enfocar un mes no debe colapsar el
+  // propio strip a ese mes.
+  const openByMonth = useMemo(
+    () => buildOpenSinEntradaByMonth(baseFiltered, asOf),
+    [baseFiltered, asOf],
+  );
+
   const kpis = useMemo(() => {
     let totalAmount = 0;
     let pendientePago = 0;
-    let pendienteRecepcion = 0;
+    let sinEntrada = 0;
+    let sinEntradaStale = 0;
     let yaFacturadas = 0;
     for (const r of filteredRecords) {
-      totalAmount += r.importeTotal;
-      if (r.facturada) {
-        yaFacturadas += r.importeTotal;
-      } else if (!r.fechaRecepcion) {
-        pendienteRecepcion += r.importeTotal;
-      } else {
-        pendientePago += r.importeTotal;
+      const mxn = comprasImporteMxn(r);
+      totalAmount += mxn;
+      const estado = compraEstado(r);
+      if (estado === 'facturada') {
+        yaFacturadas += mxn;
+      } else if (estado === 'porPagar') {
+        pendientePago += mxn;
+      } else if (estado === 'sinEntrada') {
+        sinEntrada += mxn;
+        if (isStaleSinEntrada(r, asOf)) sinEntradaStale += mxn;
       }
     }
-    return { totalAmount, pendientePago, pendienteRecepcion, yaFacturadas };
-  }, [filteredRecords]);
-
-  const byMonth = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const r of filteredRecords) {
-      if (r.facturada || !r.fechaPagoProyectada) continue;
-      const ym = r.fechaPagoProyectada.slice(0, 7);
-      map.set(ym, (map.get(ym) ?? 0) + r.importeTotal);
-    }
-    return Array.from(map.entries()).sort(([a], [b]) => a.localeCompare(b));
-  }, [filteredRecords]);
+    return { totalAmount, pendientePago, sinEntrada, sinEntradaStale, yaFacturadas };
+  }, [filteredRecords, asOf]);
 
   const clearFilters = () => {
     setSearch('');
@@ -205,6 +270,42 @@ export default function Compras({
     setAmountMax('');
     setCategoryFilter('all');
     setSort(DEFAULT_SORT);
+    setFocus(null);
+  };
+
+  // Enfocar = "muéstrame EXACTAMENTE estas OCs": resetea los demás filtros
+  // (statusFilter a 'all' — algunos hallazgos incluyen canceladas) para que la
+  // tabla muestre el set completo del hallazgo/mes.
+  const toggleFocus = (id: string, label: string, keys: string[]) => {
+    if (focus?.id === id) {
+      setFocus(null);
+      return;
+    }
+    setSearch('');
+    setFacturaFilter('all');
+    setReceiptFilter('all');
+    setStatusFilter('all');
+    setDateField('fechaPedido');
+    setDateFrom('');
+    setDateTo('');
+    setAmountMin('');
+    setAmountMax('');
+    setCategoryFilter('all');
+    setFocus({ id, label, keys: new Set(keys) });
+  };
+
+  const handleExportCsv = () => {
+    if (filteredRecords.length === 0) return;
+    const csv = comprasToCsv(filteredRecords);
+    const blob = new Blob([`﻿${csv}`], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const scope = selectedCia === 'all' ? '' : `-${selectedCia}`;
+    const focused = focus ? `-${focus.id}` : '';
+    a.download = `ocs-${asOf}${scope}${focused}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   return (
@@ -234,7 +335,7 @@ export default function Compras({
           icon={Package}
           label="OCs activas"
           value={fmtCurrency(kpis.totalAmount)}
-          sub={`${filteredRecords.length.toLocaleString()} órdenes`}
+          sub={`${filteredRecords.length.toLocaleString()} órdenes (MXN)`}
           tone="neutral"
         />
         <KpiCard
@@ -246,9 +347,13 @@ export default function Compras({
         />
         <KpiCard
           icon={Calendar}
-          label="Pendiente recepción"
-          value={fmtCurrency(kpis.pendienteRecepcion)}
-          sub="Sin fecha cierta de pago"
+          label="Abiertas sin entrada"
+          value={fmtCurrency(kpis.sinEntrada)}
+          sub={
+            kpis.sinEntradaStale > 0
+              ? `${fmtCompact(kpis.sinEntradaStale)} con +${STALE_OPEN_ORDER_DAYS} días`
+              : 'Sin fecha cierta de pago'
+          }
           tone="info"
         />
         <KpiCard
@@ -260,23 +365,72 @@ export default function Compras({
         />
       </section>
 
-      {/* ─── Monthly outflow strip ─────────────────────────────────────── */}
-      {byMonth.length > 0 && (
+      {/* ─── Monthly strip: OCs abiertas que nunca recibieron entrada ──── */}
+      {openByMonth.length > 0 && (
         <section className="animate-card-in">
-          <h2 className="text-[11px] font-medium uppercase tracking-[0.08em] mb-2 text-[var(--gray-500)]">
-            Egreso proyectado por mes (sin facturar)
+          <h2 className="text-[11px] font-medium uppercase tracking-[0.08em] mb-1 text-[var(--gray-500)]">
+            OCs abiertas sin entrada por mes (fecha de pedido)
           </h2>
+          <p className="text-[11px] text-[var(--gray-400)] mb-2">
+            Comprometido que nunca recibió entrada de mercancía — los meses en ámbar superan{' '}
+            {STALE_OPEN_ORDER_DAYS} días y son candidatos a depurar en JDE. Clic para enfocar la tabla.
+          </p>
           <div className="flex gap-2 flex-wrap">
-            {byMonth.map(([ym, amount]) => (
-              <div
-                key={ym}
-                className="bg-white border border-[var(--gray-200)] rounded-[var(--radius-md)] px-3 py-1.5"
-              >
-                <div className="font-mono text-[10px] text-[var(--gray-400)]">{ym}</div>
-                <div className="text-[13px] font-bold tabular-nums text-[var(--gray-950)]">
-                  {fmtCompact(amount)}
-                </div>
-              </div>
+            {openByMonth.map((bucket) => {
+              const focusId = `month:${bucket.ym}`;
+              const isFocused = focus?.id === focusId;
+              return (
+                <button
+                  key={bucket.ym}
+                  type="button"
+                  aria-pressed={isFocused}
+                  onClick={() => toggleFocus(focusId, `Sin entrada · ${bucket.ym}`, bucket.keys)}
+                  className="text-left bg-white border rounded-[var(--radius-md)] px-3 py-1.5 hover-press"
+                  style={{
+                    backgroundColor: bucket.stale ? 'var(--warning-muted)' : undefined,
+                    borderColor: isFocused
+                      ? 'var(--primary)'
+                      : bucket.stale
+                        ? 'oklch(88% 0.08 80)'
+                        : 'var(--gray-200)',
+                  }}
+                  title={`${bucket.count} OCs sin entrada pedidas en ${bucket.ym}`}
+                >
+                  <div className="font-mono text-[10px] text-[var(--gray-400)]">{bucket.ym}</div>
+                  <div className="text-[13px] font-bold tabular-nums text-[var(--gray-950)]">
+                    {fmtCompact(bucket.totalMxn)}
+                  </div>
+                  <div
+                    className="text-[10px] tabular-nums"
+                    style={{ color: bucket.stale ? 'var(--warning)' : 'var(--gray-400)' }}
+                  >
+                    {bucket.count} OCs{bucket.stale ? ` · +${STALE_OPEN_ORDER_DAYS} d` : ''}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      {/* ─── Depuración JDE: hallazgos detectados con lógica ───────────── */}
+      {insights.length > 0 && (
+        <section className="animate-card-in">
+          <h2 className="text-[11px] font-medium uppercase tracking-[0.08em] mb-1 text-[var(--gray-500)]">
+            Depuración JDE
+          </h2>
+          <p className="text-[11px] text-[var(--gray-400)] mb-2">
+            Registros detectados con lógica sobre los datos del API — candidatos a corregir o cerrar
+            en JDE. Clic para enfocar la tabla; exporta el CSV para entregar la lista.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-2">
+            {insights.map((insight) => (
+              <InsightCard
+                key={insight.id}
+                insight={insight}
+                active={focus?.id === insight.id}
+                onClick={() => toggleFocus(insight.id, insight.label, insight.keys)}
+              />
             ))}
           </div>
         </section>
@@ -367,7 +521,7 @@ export default function Compras({
             value={amountMin}
             onChange={(e) => setAmountMin(e.target.value)}
             min="0"
-            title="Importe mínimo"
+            title="Importe mínimo (MXN)"
           />
           <input
             type="number"
@@ -376,7 +530,7 @@ export default function Compras({
             value={amountMax}
             onChange={(e) => setAmountMax(e.target.value)}
             min="0"
-            title="Importe máximo"
+            title="Importe máximo (MXN)"
           />
           <select
             className="input max-w-[185px]"
@@ -396,6 +550,23 @@ export default function Compras({
             <option value="importeTotal:desc">Importe mayor primero</option>
             <option value="importeTotal:asc">Importe menor primero</option>
           </select>
+          {focus && (
+            <button
+              type="button"
+              onClick={() => setFocus(null)}
+              className="inline-flex items-center gap-1 px-3 h-9 rounded-full text-[12px] font-medium border hover-press"
+              style={{
+                backgroundColor: 'var(--primary-muted)',
+                borderColor: 'var(--primary)',
+                color: 'var(--primary)',
+              }}
+              title="Quitar el foco"
+            >
+              <Filter className="w-3.5 h-3.5" />
+              {focus.label}
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
           {filtersActive && (
             <button
               type="button"
@@ -405,6 +576,15 @@ export default function Compras({
               <X className="w-3.5 h-3.5" /> Limpiar
             </button>
           )}
+          <button
+            type="button"
+            onClick={handleExportCsv}
+            disabled={filteredRecords.length === 0}
+            className="inline-flex items-center gap-1 px-3 h-9 rounded-[var(--radius-md)] text-[12px] font-medium text-[var(--gray-500)] hover:text-[var(--gray-950)] hover:bg-[var(--gray-50)] hover-press disabled:opacity-40"
+            title="Exportar las OCs filtradas a CSV"
+          >
+            <Download className="w-3.5 h-3.5" /> CSV
+          </button>
           <div className="ml-auto text-[12px] text-[var(--gray-400)] tabular-nums">
             {filteredRecords.length === comprasRecords.length
               ? `${comprasRecords.length.toLocaleString()} total`
@@ -421,7 +601,8 @@ export default function Compras({
                   <Th className="pl-5">Cía</Th>
                   <Th>Proveedor</Th>
                   <Th>OC</Th>
-                  <Th align="right">Importe</Th>
+                  <Th>Producto</Th>
+                  <Th align="right">Importe (MXN)</Th>
                   <Th>Categoría</Th>
                   <Th>Recepción</Th>
                   <Th align="right">D. créd.</Th>
@@ -432,7 +613,7 @@ export default function Compras({
               <tbody>
                 {filteredRecords.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="text-center text-[var(--gray-400)] py-14">
+                    <td colSpan={10} className="text-center text-[var(--gray-400)] py-14">
                       <div className="flex flex-col items-center gap-2">
                         {comprasRecords.length === 0 ? (
                           <>
@@ -458,94 +639,13 @@ export default function Compras({
                   </tr>
                 ) : (
                   filteredRecords.slice(0, ROW_CAP).map((r, idx) => (
-                    <tr
-                      key={`${r.cia}-${r.noOrden}-${r.lineaOrden}`}
-                      className={`group border-t border-[var(--gray-200)]/40 hover-row hover:bg-[var(--primary-muted)]/30 ${
-                        idx % 2 === 1 ? 'bg-[var(--gray-50)]/40' : ''
-                      }`}
-                    >
-                      <Td className="pl-5">
-                        <span className="font-mono text-[11px] text-[var(--gray-500)]">{r.cia}</span>
-                      </Td>
-                      <Td>
-                        <div
-                          className="font-medium text-[var(--gray-950)] truncate max-w-[220px]"
-                          title={r.nombreProveedor}
-                        >
-                          {r.nombreProveedor}
-                        </div>
-                        <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                          <ProviderBadge
-                            index={providerIndex}
-                            jdeCode={r.noProveedor}
-                            name={r.nombreProveedor}
-                          />
-                          {r.noFactura && (
-                            <span className="text-[10px] text-[var(--gray-400)] font-mono">
-                              Fac. {r.noFactura}
-                            </span>
-                          )}
-                        </div>
-                      </Td>
-                      <Td>
-                        <span className="font-mono text-[11px] text-[var(--gray-700)]">{r.noOrden}</span>
-                      </Td>
-                      <Td align="right">
-                        <span className="tabular-nums font-medium text-[var(--gray-950)]">
-                          {fmtCurrency(r.importeTotal)}
-                        </span>
-                      </Td>
-                      <Td>
-                        <span
-                          className="inline-block max-w-[160px] truncate text-[var(--gray-700)] text-[12px]"
-                          title={r.descCategoria || r.descFamilia}
-                        >
-                          {r.descCategoria || r.descFamilia || (
-                            <span className="text-[var(--gray-300)]">—</span>
-                          )}
-                        </span>
-                      </Td>
-                      <Td>
-                        {r.fechaRecepcion ? (
-                          <span className="text-[12px] tabular-nums text-[var(--gray-700)]">
-                            {r.fechaRecepcion}
-                          </span>
-                        ) : (
-                          <span className="text-[12px] text-[var(--gray-300)]">Pendiente</span>
-                        )}
-                      </Td>
-                      <Td align="right">
-                        <span className="tabular-nums text-[var(--gray-700)]">{r.diasCredito}</span>
-                      </Td>
-                      <Td>
-                        {r.fechaPagoProyectada ? (
-                          <span className="text-[12px] tabular-nums text-[var(--gray-950)]">
-                            {r.fechaPagoProyectada}
-                          </span>
-                        ) : (
-                          <span className="text-[12px] text-[var(--gray-300)]">—</span>
-                        )}
-                      </Td>
-                      <Td>
-                        {r.cancelada ? (
-                          <StatusChip style={STATUS_CANCELADA} icon={X}>
-                            Cancelada
-                          </StatusChip>
-                        ) : r.facturada ? (
-                          <StatusChip style={STATUS_FACTURADA} icon={CheckCircle2}>
-                            Facturada
-                          </StatusChip>
-                        ) : r.fechaRecepcion ? (
-                          <StatusChip style={STATUS_POR_PAGAR} icon={Clock}>
-                            Por pagar
-                          </StatusChip>
-                        ) : (
-                          <StatusChip style={STATUS_POR_RECIBIR} icon={Calendar}>
-                            Por recibir
-                          </StatusChip>
-                        )}
-                      </Td>
-                    </tr>
+                    <CompraRow
+                      key={comprasRecordKey(r)}
+                      record={r}
+                      idx={idx}
+                      asOf={asOf}
+                      providerIndex={providerIndex}
+                    />
                   ))
                 )}
               </tbody>
@@ -570,6 +670,196 @@ export default function Compras({
 /* ──────────────────────────────────────────────────────────────────────── */
 /*  Helpers                                                                  */
 /* ──────────────────────────────────────────────────────────────────────── */
+
+function CompraRow({
+  record: r,
+  idx,
+  asOf,
+  providerIndex,
+}: {
+  record: ComprasRecord;
+  idx: number;
+  asOf: string;
+  providerIndex: ReturnType<typeof buildProviderIndex>;
+}) {
+  const estado = compraEstado(r);
+  const foreign = isComprasForeignCurrency(r);
+  const ocMeta = [
+    r.descTipoOrden || r.tipoOrden,
+    r.lineaOrden ? `L${r.lineaOrden}` : '',
+  ].filter(Boolean).join(' · ');
+  const pendingDays = !r.fechaRecepcion && r.fechaPedido ? daysSinceIso(r.fechaPedido, asOf) : null;
+  const stale = isStaleSinEntrada(r, asOf);
+
+  return (
+    <tr
+      className={`group border-t border-[var(--gray-200)]/40 hover-row hover:bg-[var(--primary-muted)]/30 ${
+        idx % 2 === 1 ? 'bg-[var(--gray-50)]/40' : ''
+      }`}
+    >
+      <Td className="pl-5">
+        <span className="font-mono text-[11px] text-[var(--gray-500)]">{r.cia}</span>
+        {r.centroCostos && (
+          <div className="font-mono text-[10px] text-[var(--gray-400)]" title="Centro de costos">
+            CC {r.centroCostos}
+          </div>
+        )}
+      </Td>
+      <Td>
+        <div
+          className="font-medium text-[var(--gray-950)] truncate max-w-[220px]"
+          title={r.nombreProveedor}
+        >
+          {r.nombreProveedor}
+        </div>
+        <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+          <ProviderBadge
+            index={providerIndex}
+            jdeCode={r.noProveedor}
+            name={r.nombreProveedor}
+          />
+          {r.noFactura && (
+            <span className="text-[10px] text-[var(--gray-400)] font-mono">
+              Fac. {r.noFactura}
+            </span>
+          )}
+        </div>
+      </Td>
+      <Td>
+        <span className="font-mono text-[11px] text-[var(--gray-700)]">{r.noOrden}</span>
+        {ocMeta && (
+          <div className="text-[10px] text-[var(--gray-400)] truncate max-w-[140px]" title={ocMeta}>
+            {ocMeta}
+          </div>
+        )}
+      </Td>
+      <Td>
+        <span
+          className="inline-block max-w-[180px] truncate text-[var(--gray-700)] text-[12px]"
+          title={[r.noProducto, r.descProducto, r.concepto].filter(Boolean).join(' · ')}
+        >
+          {r.descProducto || r.concepto || <span className="text-[var(--gray-300)]">—</span>}
+        </span>
+        {r.cantidad > 0 && r.precioUnitario > 0 && (
+          <div className="text-[10px] text-[var(--gray-400)] tabular-nums">
+            {Number.isInteger(r.cantidad) ? fmtInt(r.cantidad) : fmtNum(r.cantidad)} × {fmtCurrency(r.precioUnitario)}
+          </div>
+        )}
+      </Td>
+      <Td align="right">
+        <span className="tabular-nums font-medium text-[var(--gray-950)]">
+          {fmtCurrency(comprasImporteMxn(r))}
+        </span>
+        {foreign && (
+          <div
+            className="text-[10px] text-[var(--gray-400)] tabular-nums"
+            title="Importe original y tipo de cambio del API"
+          >
+            {r.moneda} {fmtNum(r.importeTotal)} · TC {fmtNum(r.tipoCambio || 1)}
+          </div>
+        )}
+      </Td>
+      <Td>
+        <span
+          className="inline-block max-w-[160px] truncate text-[var(--gray-700)] text-[12px]"
+          title={[r.descCategoria, r.descFamilia, r.descSubFamilia].filter(Boolean).join(' · ')}
+        >
+          {r.descCategoria || r.descFamilia || (
+            <span className="text-[var(--gray-300)]">—</span>
+          )}
+        </span>
+      </Td>
+      <Td>
+        {r.fechaRecepcion ? (
+          <span className="text-[12px] tabular-nums text-[var(--gray-700)]">
+            {r.fechaRecepcion}
+          </span>
+        ) : (
+          <span
+            className="text-[12px] tabular-nums"
+            style={{ color: stale ? 'var(--warning)' : 'var(--gray-300)' }}
+            title={pendingDays !== null ? `Pedida hace ${pendingDays} días sin entrada` : undefined}
+          >
+            Pendiente{pendingDays !== null && pendingDays >= 0 ? ` · ${pendingDays} d` : ''}
+          </span>
+        )}
+      </Td>
+      <Td align="right">
+        <span className="tabular-nums text-[var(--gray-700)]">{r.diasCredito}</span>
+      </Td>
+      <Td>
+        {r.fechaPagoProyectada ? (
+          <span className="text-[12px] tabular-nums text-[var(--gray-950)]">
+            {r.fechaPagoProyectada}
+          </span>
+        ) : (
+          <span className="text-[12px] text-[var(--gray-300)]">—</span>
+        )}
+      </Td>
+      <Td>
+        <EstadoChip estado={estado} edoSig={r.estadoSiguiente} />
+      </Td>
+    </tr>
+  );
+}
+
+function EstadoChip({ estado, edoSig }: { estado: ReturnType<typeof compraEstado>; edoSig: string }) {
+  const title = edoSig ? `Edo_Sig ${edoSig}` : undefined;
+  switch (estado) {
+    case 'cancelada':
+      return <StatusChip style={STATUS_CANCELADA} icon={X} title={title}>Cancelada</StatusChip>;
+    case 'facturada':
+      return <StatusChip style={STATUS_FACTURADA} icon={CheckCircle2} title={title}>Facturada</StatusChip>;
+    case 'cerradaWorkflow':
+      return <StatusChip style={STATUS_CERRADA_WF} icon={Archive} title={title}>Cerrada en JDE</StatusChip>;
+    case 'porPagar':
+      return <StatusChip style={STATUS_POR_PAGAR} icon={Clock} title={title}>Por pagar</StatusChip>;
+    default:
+      return <StatusChip style={STATUS_SIN_ENTRADA} icon={Calendar} title={title}>Sin entrada</StatusChip>;
+  }
+}
+
+function InsightCard({
+  insight,
+  active,
+  onClick,
+}: {
+  insight: ComprasInsight;
+  active: boolean;
+  onClick: () => void;
+}) {
+  const Icon = SEVERITY_ICON[insight.severity];
+  const color = SEVERITY_COLOR[insight.severity];
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      onClick={onClick}
+      title={insight.description}
+      className="text-left bg-white border rounded-[var(--radius-md)] p-3 hover-press"
+      style={{ borderColor: active ? 'var(--primary)' : 'var(--gray-200)' }}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-[var(--gray-950)]">
+          <Icon className="w-3.5 h-3.5 shrink-0" style={{ color }} />
+          {insight.label}
+        </span>
+        <span
+          className="text-[11px] font-bold tabular-nums px-1.5 py-0.5 rounded-full"
+          style={{ backgroundColor: `color-mix(in oklch, ${color} 12%, transparent)`, color }}
+        >
+          {insight.count.toLocaleString()}
+        </span>
+      </div>
+      <div className="mt-1 text-[14px] font-bold tabular-nums text-[var(--gray-950)]">
+        {fmtCompact(insight.totalMxn)}
+      </div>
+      <p className="mt-1 text-[11px] leading-snug text-[var(--gray-400)]">
+        {insight.description}
+      </p>
+    </button>
+  );
+}
 
 interface KpiCardProps {
   icon: typeof Package;
@@ -645,7 +935,7 @@ function parseAmountInput(value: string): number | undefined {
 function compareCompraRecords(a: ComprasRecord, b: ComprasRecord, sort: CompraSort): number {
   const direction = sort.direction === 'asc' ? 1 : -1;
   if (sort.key === 'importeTotal') {
-    return (a.importeTotal - b.importeTotal) * direction;
+    return (comprasImporteMxn(a) - comprasImporteMxn(b)) * direction;
   }
   const av = a[sort.key] || '';
   const bv = b[sort.key] || '';
@@ -659,15 +949,18 @@ function StatusChip({
   children,
   style,
   icon: Icon,
+  title,
 }: {
   children: ReactNode;
   style: ChipStyle;
   icon: typeof CheckCircle2;
+  title?: string;
 }) {
   return (
     <span
-      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[11px] font-medium"
+      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[11px] font-medium whitespace-nowrap"
       style={{ backgroundColor: style.bg, borderColor: style.border, color: style.text }}
+      title={title}
     >
       <Icon className="w-3 h-3" />
       {children}
