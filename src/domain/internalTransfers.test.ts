@@ -473,3 +473,76 @@ describe('INTERNAL_BENEFICIARIES — razones sociales del grupo (catálogo de cu
     expect(classifyMovement(mov({ concepto: 'MULTISERVICIOS SA DE CV', referencia: '' })).kind).toBe('real');
   });
 });
+
+describe('Campos InF_ADI — cuenta destino del traspaso fuera del concepto', () => {
+  // Caso raíz del bug "Sin identificar · BANAMEX <pagadora CM>" en Planeación:
+  // InF_ADI_1 trae una leyenda limpia ("PAGO A TERCEROS") que parseConcepto
+  // adopta como concepto, e InF_ADI_2 — que el detector NO escaneaba — trae el
+  // detalle real "P589  00877732401 a 7013870885 1 SERVICIOS T DE N?21 …" con
+  // la cuenta DESTINO del grupo troceada por espacios de ancho fijo.
+  const detector = () => buildOwnAccountDetector(buildOwnAccountsIndex([]));
+
+  it('detecta traspaso cuando la cuenta destino del grupo viene en InF_ADI_2 troceada por espacios', () => {
+    // "7013 8708851" = PAGADORA - PROVEEDORES CM de SERVICIOS T DE N en el
+    // catálogo; el banco la imprime como "7013870885 1".
+    const m = {
+      ...mov({ cuenta: '00877732401', concepto: 'PAGO A TERCEROS', referencia: '20/EI/TR' }),
+      infAdi2: 'P589  00877732401 a 7013870885 1 SERVICIOS T DE N?21  Pago de SERVICIOS T DE N 170405',
+    };
+    const c = classifyMovement(m, { ownAccountDetector: detector() });
+    expect(c.kind).toBe('internal');
+    expect(c.reason).toBe('own-account');
+  });
+
+  it('detecta el barrido de la pagadora hacia otra cuenta del grupo vía InF_ADI', () => {
+    // CARGO en la pagadora CM cuyo InF_ADI referencia la concentradora.
+    const m = {
+      ...mov({ cuenta: '70138708851', concepto: 'PAGO A TERCEROS', referencia: '' }),
+      infAdi2: 'P612  70138708851 a 0087773240 1 SERVICIOS T DE N?21  Pago de SERVICIOS T DE N 170900',
+    };
+    const c = classifyMovement(m, { ownAccountDetector: detector() });
+    expect(c.kind).toBe('internal');
+    expect(c.reason).toBe('own-account');
+  });
+
+  it('NO marca interno un pago real a tercero aunque InF_ADI nombre al ordenante propio', () => {
+    // El InF_ADI de TODO pago imprime la cuenta origen (propia, auto-excluida)
+    // y "Pago de <empresa propia>" (ordenante). Los patrones de nombre/RFC NO
+    // escanean InF_ADI a propósito — si lo hicieran, este pago legítimo a un
+    // proveedor externo se marcaría interno.
+    const m = {
+      ...mov({ cuenta: '70138708851', concepto: 'PAGO A TERCEROS', referencia: '' }),
+      infAdi2: 'P630  70138708851 a 1234567890 1 PROVEEDOR EXTERNO SA?21  Pago de SERVICIOS T DE N 171001',
+    };
+    expect(classifyMovement(m, { ownAccountDetector: detector() }).kind).toBe('real');
+    expect(isInternalTransfer(m, detector())).toBe(false);
+  });
+
+  it('NO marca interno un ABONO real cuyo InF_ADI imprime la CLABE de la PROPIA cuenta', () => {
+    // SPEI real entrante: la CLABE beneficiaria (la propia) viaja en InF_ADI.
+    // La auto-exclusión estructural de la cuenta origen lo cubre.
+    const m = {
+      ...mov({ cuenta: '70138708851', tipoMovimiento: 'ABONO', concepto: 'ABONO SPEI', referencia: '' }),
+      infAdi3: 'CLABE 002580701387088517 DE ACME EXTERIORES SA',
+    };
+    expect(classifyMovement(m, { ownAccountDetector: detector() }).kind).toBe('real');
+  });
+
+  it('NO une dígitos a través de campos distintos al normalizar', () => {
+    // concepto termina en dígitos y InF_ADI empieza con dígitos: juntos
+    // formarían "70138708851" (cuenta del grupo), pero la normalización es
+    // por campo — no debe fabricar el número.
+    const m = {
+      ...mov({ cuenta: '0190047839', concepto: 'FOLIO 7013', referencia: '' }),
+      infAdi1: '8708851 OPERACION VENTANILLA',
+    };
+    expect(classifyMovement(m, { ownAccountDetector: detector() }).kind).toBe('real');
+  });
+
+  it('sigue detectando dígitos troceados también en el concepto', () => {
+    const m = mov({ cuenta: '0190047839', concepto: 'ENVIO A CTA 7014 102 7881', referencia: '' });
+    const c = classifyMovement(m, { ownAccountDetector: detector() });
+    expect(c.kind).toBe('internal');
+    expect(c.reason).toBe('own-account');
+  });
+});

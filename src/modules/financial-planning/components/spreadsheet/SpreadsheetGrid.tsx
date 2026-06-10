@@ -15,6 +15,7 @@ import {
   parseNumericInput,
   ROW_HEIGHT,
   colWidthForGranularity,
+  computeVirtualWindow,
 } from './gridGeometry';
 import { bucketVisual } from './bucketVisuals';
 import {
@@ -246,21 +247,25 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
     if (scrollRaf.current != null) cancelAnimationFrame(scrollRaf.current);
   }, []);
 
+  // Ventana de columnas. El clamp de `computeVirtualWindow` es necesario aquí
+  // también: un flip de granularidad (daily → monthly) con el scroll a la
+  // derecha deja `scroll.left` apuntando más allá de las columnas nuevas; sin
+  // clamp, el spacer izquierdo mantenía el ancho inflado y el grid quedaba en
+  // blanco sin que el navegador pudiera re-acotar scrollLeft.
   const colCount = columns.length;
-  let colStart = 0;
-  let colEnd = colCount;
-  if (measured && colCount > 0) {
-    const originLeft = scroll.left - LABEL_COL_WIDTH;
-    colStart = Math.max(0, Math.floor(originLeft / colWidth) - COL_OVERSCAN);
-    colEnd = Math.min(
-      colCount,
-      Math.ceil((scroll.left + viewport.w - LABEL_COL_WIDTH) / colWidth) + COL_OVERSCAN,
-    );
-    if (colEnd < colStart) colEnd = colStart;
-  }
-  const colLeftPad = colStart * colWidth;
-  const colRightPad = Math.max(0, (colCount - colEnd) * colWidth);
-  const visibleColumns = columns.slice(colStart, colEnd);
+  const colWindow = computeVirtualWindow({
+    count: colCount,
+    itemSize: colWidth,
+    scrollOffset: scroll.left,
+    viewportSize: viewport.w,
+    originOffset: LABEL_COL_WIDTH,
+    overscan: COL_OVERSCAN,
+    measured,
+  });
+  const colStart = colWindow.start;
+  const colLeftPad = colWindow.leadPx;
+  const colRightPad = colWindow.trailPx;
+  const visibleColumns = columns.slice(colWindow.start, colWindow.end);
 
   const leftSpacer = colLeftPad > 0
     ? <div aria-hidden="true" style={{ width: colLeftPad, flex: `0 0 ${colLeftPad}px` }} />
@@ -991,22 +996,27 @@ function VirtualRowList({
     }
   });
 
+  // El clamp de `computeVirtualWindow` preserva la altura total de la sección
+  // (padTop + filas + padBottom == n × ROW_HEIGHT) aunque el scroll esté más
+  // allá de su final — p.ej. scrolleando profundo en Egresos, la ventana de
+  // Ingresos queda pasada de largo. Sin clamp, padTop crecía 1px por cada 1px
+  // de scroll y el fondo del grid se volvía inalcanzable.
   const n = list.length;
-  let start = 0;
-  let end = n;
-  if (measured && n > 0) {
-    start = Math.max(0, Math.floor((scrollTop - top) / ROW_HEIGHT) - ROW_OVERSCAN);
-    end = Math.min(n, Math.ceil((scrollTop + viewportH - top) / ROW_HEIGHT) + ROW_OVERSCAN);
-    if (end < start) end = start;
-  }
-  const padTop = start * ROW_HEIGHT;
-  const padBottom = Math.max(0, (n - end) * ROW_HEIGHT);
+  const win = computeVirtualWindow({
+    count: n,
+    itemSize: ROW_HEIGHT,
+    scrollOffset: scrollTop,
+    viewportSize: viewportH,
+    originOffset: top,
+    overscan: ROW_OVERSCAN,
+    measured,
+  });
 
   return (
     <div ref={wrapRef}>
-      {padTop > 0 && <div aria-hidden="true" style={{ height: padTop }} />}
-      {list.slice(start, end).map((displayRow, i) => renderRow(displayRow, rowIndexOffset + start + i))}
-      {padBottom > 0 && <div aria-hidden="true" style={{ height: padBottom }} />}
+      {win.leadPx > 0 && <div aria-hidden="true" style={{ height: win.leadPx }} />}
+      {list.slice(win.start, win.end).map((displayRow, i) => renderRow(displayRow, rowIndexOffset + win.start + i))}
+      {win.trailPx > 0 && <div aria-hidden="true" style={{ height: win.trailPx }} />}
     </div>
   );
 }

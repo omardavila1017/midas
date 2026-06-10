@@ -277,6 +277,38 @@ export function buildOwnAccountsIndex(
 }
 
 /**
+ * Línea bancaria mínima que examina el detector de cuenta-destino-interna.
+ * Además de `concepto`/`referencia`, escanea los campos `InF_ADI` crudos de
+ * JDE: cuando `InF_ADI_1` trae una leyenda limpia ("PAGO A TERCEROS"), el
+ * parser de concepto (`parseConcepto` en jde.ts) nunca expone `InF_ADI_2`
+ * ("P589  00877732401 a 7013870885 1 SERVICIOS T DE N?21 Pago de …") — que es
+ * exactamente donde viene la cuenta DESTINO del traspaso. Esos traspasos
+ * escapaban a la detección y acababan en Planeación como AP_PAYMENT
+ * "Sin identificar · BANCO cuenta" bajo "Proveedores sin categoría".
+ *
+ * Los campos InF_ADI se escanean SOLO con los identificadores de cuenta
+ * (números + CLABE, con auto-exclusión de la cuenta origen). Los patrones de
+ * nombre/RFC de `isInternalTransfer` NO aplican ahí a propósito: InF_ADI
+ * imprime también al ORDENANTE ("Pago de <empresa propia>") en pagos reales a
+ * terceros, así que escanear nombres marcaría como interno todo pago legítimo.
+ */
+export type OwnAccountProbe = Pick<
+  BankStatementLine,
+  'concepto' | 'referencia' | 'cuenta' | 'infAdi1' | 'infAdi2' | 'infAdi3'
+>;
+
+/**
+ * Colapsa whitespace ENTRE dígitos ("7013870885 1" → "70138708851"). JDE
+ * trocea los números de cuenta en los campos InF_ADI con espacios de ancho
+ * fijo; sin re-unirlos, el substring match nunca encuentra la cuenta destino.
+ * Se aplica POR CAMPO (los campos nunca se concatenan antes de normalizar)
+ * para no fabricar un número uniendo dígitos de campos distintos.
+ */
+function joinDigitRuns(text: string): string {
+  return text.replace(/(\d)\s+(?=\d)/g, '$1');
+}
+
+/**
  * Precomputa un detector de cuenta-destino-interna para reusar en un
  * batch grande de movimientos. Evita reconstruir el regex por llamada.
  *
@@ -289,7 +321,7 @@ export function buildOwnAccountsIndex(
  */
 export function buildOwnAccountDetector(
   ownAccounts: Set<string> | undefined,
-): (mov: Pick<BankStatementLine, 'concepto' | 'referencia' | 'cuenta'>) => boolean {
+): (mov: OwnAccountProbe) => boolean {
   if (!ownAccounts || ownAccounts.size === 0) return () => false;
   const allAccounts = Array.from(ownAccounts);
   // ¿El identificador pertenece a la cuenta origen? Compara por dígitos
@@ -309,9 +341,12 @@ export function buildOwnAccountDetector(
   const patternCache = new Map<string, RegExp | null>();
 
   return (mov) => {
-    const concepto = mov.concepto ?? '';
-    const referencia = mov.referencia ?? '';
-    if (!concepto && !referencia) return false;
+    // `InF_ADI_1..3` van al final: son el detalle de trazabilidad que el
+    // parser de concepto descarta cuando InF_ADI_1 ya trae leyenda limpia,
+    // pero es donde el banco imprime la cuenta/CLABE destino del traspaso.
+    const fields = [mov.concepto, mov.referencia, mov.infAdi1, mov.infAdi2, mov.infAdi3]
+      .filter((value): value is string => typeof value === 'string' && value.length > 0);
+    if (fields.length === 0) return false;
 
     const ownKey = stripLeadingZeros(accountDigits(mov.cuenta));
     let pattern: RegExp | null;
@@ -327,15 +362,18 @@ export function buildOwnAccountDetector(
       patternCache.set(ownKey, pattern);
     }
     if (!pattern) return false;
-    if (concepto && pattern.test(concepto)) return true;
-    if (referencia && pattern.test(referencia)) return true;
+    for (const field of fields) {
+      // joinDigitRuns no rompe números contiguos, así que todo match previo
+      // sigue matcheando — sólo agrega los casos con dígitos troceados.
+      if (pattern.test(joinDigitRuns(field))) return true;
+    }
     return false;
   };
 }
 
 export function isInternalTransfer(
-  mov: Pick<BankStatementLine, 'concepto' | 'referencia' | 'cuenta'>,
-  ownAccountDetector?: (m: Pick<BankStatementLine, 'concepto' | 'referencia' | 'cuenta'>) => boolean,
+  mov: OwnAccountProbe,
+  ownAccountDetector?: (m: OwnAccountProbe) => boolean,
 ): boolean {
   const concepto = mov.concepto ?? '';
   const referencia = mov.referencia ?? '';
@@ -588,7 +626,7 @@ export const INTERNAL_REASON_LABELS: Record<InternalReason, string> = {
 };
 
 export interface ClassificationContext {
-  ownAccountDetector?: (m: Pick<BankStatementLine, 'concepto' | 'referencia' | 'cuenta'>) => boolean;
+  ownAccountDetector?: (m: OwnAccountProbe) => boolean;
   pairedKeys?: Set<string>;
 }
 
@@ -602,7 +640,7 @@ export interface ClassificationContext {
  * detector se omite y la función se comporta igual que `isInternalTransfer`.
  */
 export function classifyMovement(
-  mov: Pick<BankStatementLine, 'concepto' | 'referencia' | 'cuenta' | 'fechaOperacion' | 'tipoMovimiento' | 'importe'>,
+  mov: OwnAccountProbe & Pick<BankStatementLine, 'fechaOperacion' | 'tipoMovimiento' | 'importe'>,
   ctx?: ClassificationContext,
   accCia?: string,
   accCuenta?: string,
