@@ -395,3 +395,81 @@ describe('buildOwnAccountsIndex (sanity)', () => {
     expect(idx.has('12345')).toBe(false);
   });
 });
+
+describe('buildOwnAccountsIndex — catálogo estático de cuentas del grupo', () => {
+  it('incluye dígitos y CLABE del catálogo aunque no haya estados de cuenta cargados', () => {
+    const idx = buildOwnAccountsIndex([]);
+    // BANAMEX "PAGADORA - PROVEEDORES CM" (SERVICIOS ESPECIALIZADOS SENDA).
+    expect(idx.has('70138199310')).toBe(true);
+    expect(idx.has('002580701381993103')).toBe(true); // su CLABE
+    // BANORTE "PAGADORA CM" — forma con y sin cero a la izquierda.
+    expect(idx.has('0120022571')).toBe(true);
+    expect(idx.has('120022571')).toBe(true);
+  });
+
+  it('detecta traspaso a cuenta del grupo SIN estado de cuenta cargado (CLABE destino en concepto)', () => {
+    // Caso raíz del bug "traspasos internos disfrazados de Proveedores sin
+    // categoría": el SPEI saliente de una pagadora referencia la CLABE de
+    // otra cuenta del grupo, pero esa cuenta no tiene estado de cuenta
+    // cargado, así que el índice derivado de bankStatements no la conocía.
+    const detector = buildOwnAccountDetector(buildOwnAccountsIndex([]));
+    const m = mov({
+      cuenta: '0190047839',
+      concepto: 'SPEI ENVIADO CLABE 002580701381993103 FOLIO 991',
+      referencia: '',
+    });
+    const c = classifyMovement(m, { ownAccountDetector: detector });
+    expect(c.kind).toBe('internal');
+    expect(c.reason).toBe('own-account');
+  });
+
+  it('detecta traspaso cuando el concepto menciona el número de cuenta de catálogo', () => {
+    const detector = buildOwnAccountDetector(buildOwnAccountsIndex([]));
+    const m = mov({ cuenta: '0190047839', concepto: 'ENVIO A CTA 70141027881', referencia: '' });
+    const c = classifyMovement(m, { ownAccountDetector: detector });
+    expect(c.kind).toBe('internal');
+    expect(c.reason).toBe('own-account');
+  });
+
+  it('NO marca interno cuando el concepto sólo imprime la CLABE de la PROPIA cuenta (SPEI real entrante)', () => {
+    // Un SPEI real de un tercero imprime la CLABE beneficiaria — la propia.
+    // La auto-exclusión por estructura de CLABE evita el falso positivo.
+    const detector = buildOwnAccountDetector(buildOwnAccountsIndex([]));
+    const m = mov({
+      cuenta: '70138199310',
+      tipoMovimiento: 'ABONO',
+      concepto: 'DEPOSITO CUENTA CLABE 002580701381993103 DE ACME EXTERIORES SA',
+      referencia: '',
+    });
+    expect(classifyMovement(m, { ownAccountDetector: detector }).kind).toBe('real');
+  });
+
+  it('NO marca interno por los dígitos de la propia cuenta con padding distinto', () => {
+    const detector = buildOwnAccountDetector(buildOwnAccountsIndex([]));
+    // La cuenta llega del API sin el cero inicial; el concepto la repite
+    // con el padding del catálogo. Sigue siendo la MISMA cuenta.
+    const m = mov({ cuenta: '120022571', concepto: 'COMISION MANEJO CTA 0120022571', referencia: '' });
+    expect(classifyMovement(m, { ownAccountDetector: detector }).kind).toBe('real');
+  });
+});
+
+describe('INTERNAL_BENEFICIARIES — razones sociales del grupo (catálogo de cuentas)', () => {
+  it('detecta beneficiario TURIMEX DEL NORTE', () => {
+    const m = mov({ concepto: 'BCO 002 BENEF TURIMEX DEL NORTE SA DE CV', referencia: '' });
+    const c = classifyMovement(m);
+    expect(c.kind).toBe('internal');
+    expect(c.reason).toBe('beneficiary');
+  });
+
+  it('detecta beneficiario truncado SERVICIO INDUSTRIAL REGIOMONT', () => {
+    const m = mov({ concepto: 'PAGO CTA TERCERO SERVICIO INDUSTRIAL REGIOMONT', referencia: '' });
+    const c = classifyMovement(m);
+    expect(c.kind).toBe('internal');
+    expect(c.reason).toBe('beneficiary');
+  });
+
+  it('NO atrapa proveedores externos con nombres parecidos', () => {
+    expect(classifyMovement(mov({ concepto: 'PAGO SERVICIOS INDUSTRIALES DEL BAJIO SA', referencia: '' })).kind).toBe('real');
+    expect(classifyMovement(mov({ concepto: 'MULTISERVICIOS SA DE CV', referencia: '' })).kind).toBe('real');
+  });
+});

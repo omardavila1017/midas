@@ -14,6 +14,7 @@ import { CollectionEvent, ConfirmedPayment, eventKey } from './types';
 import { CXPRecord } from './persistence';
 import type { ComprasRecord } from '../services/jdeTypes';
 import { enrichFromCatalog, Flexibility, Criticidad } from './providerCatalog';
+import { BANK_ACCOUNTS } from './bankAccountsCatalog';
 import type { BankAccountStatement, BankStatementLine } from '../services/jdeTypes';
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -115,6 +116,25 @@ const INTERNAL_RFCS: readonly string[] = [
  */
 const INTERNAL_BENEFICIARIES: readonly string[] = [
   'TRANSPORTES TAMAULIP', // "TRANSPORTES TAMAULIPAS" — aparece como "BCO 002 BENEF TRANSPORTES TAMAULIP"
+  // Razones sociales del grupo según el catálogo de cuentas de banco
+  // (`src/assets/bankAccountsCatalog.json`, 2026-06-10). Un CARGO cuyo
+  // beneficiario es una de estas empresas es un traspaso interno aunque no
+  // lleve leyenda TRASPASO/REF. Fragmentos elegidos para tolerar el truncado
+  // bancario (~20-30 chars) manteniendo ≥12 chars distintivos.
+  'GRUPO SENDA AUTOTRA',           // GRUPO SENDA AUTOTRANSPORTE
+  'SENDA SERVICIO INDUS',          // SENDA SERVICIO INDUSTRIAL
+  'SENDA SERVICIOS FINAN',         // SENDA SERVICIOS FINANCIEROS
+  'SERVICIOS INDUSTRIALES SENDA',
+  'ESPECIALIZADOS SENDA',          // SERVICIOS ESPECIALIZADOS SENDA
+  'SERVICIO INDUSTRIAL REGIOMONT', // SERVICIO INDUSTRIAL REGIOMONTANO
+  'SERVICIO INDUSTRIAL POTOSIN',   // SERVICIO INDUSTRIAL POTOSINO
+  'TRANSPORTES INDUSTRIALES CHIH', // TRANSPORTES INDUSTRIALES CHIHUAHUENSES
+  'TURIMEX DEL NORTE',
+  'MULTICARGA SA',                 // MULTICARGA SA DE CV
+  'SERVICIOS T DE N',              // SERVICIOS T DE N SA DE CV
+  'AUTOTRANSPORTES ADVENTUR',
+  'OPERADORA DE VENTAS GRUPO',     // Operadora de Ventas Grupo Senda
+  'OFICIOS Y PROYECTOS EN REC',    // Oficios y Proyectos en Rec Clas de Per
 ];
 
 /**
@@ -183,25 +203,75 @@ const INTERNAL_COMPANY_CODE_PATTERN = buildWordPattern(INTERNAL_COMPANY_CODES);
  */
 const MIN_ACCOUNT_LENGTH = 6;
 
+/** Sólo dígitos (descarta espacios, guiones y cualquier otro separador). */
+function accountDigits(s: string | null | undefined): string {
+  return (s ?? '').replace(/\D+/g, '');
+}
+
+function stripLeadingZeros(s: string): string {
+  return s.replace(/^0+/, '');
+}
+
 /**
- * Construye un Set con todas las cuentas que pertenecen al grupo, extraídas
- * de los estados de cuenta que ya estamos consumiendo del API de JDE.
+ * Identificadores de cuenta del catálogo estático de cuentas del grupo
+ * (`src/assets/bankAccountsCatalog.json`): dígitos de cuenta (con y sin ceros
+ * a la izquierda — los bancos rellenan con padding distinto) y CLABE completa.
+ *
+ * Por qué existe: el índice derivado de `bankStatements` sólo conoce cuentas
+ * CON estado de cuenta cargado, y nunca conoce CLABEs. Un traspaso a una
+ * cuenta del grupo sin estado de cuenta (reserva, dotación de efectivo, otra
+ * cía) o referenciado por CLABE (SPEI imprime la CLABE destino en el concepto)
+ * escapaba a la detección y acababa disfrazado de pago a proveedor en
+ * Planeación ("Sin identificar · BANCO cuenta" bajo Proveedores sin
+ * categoría). El catálogo es la verdad estática de qué cuentas son nuestras.
+ */
+const CATALOG_ACCOUNT_IDENTIFIERS: ReadonlySet<string> = (() => {
+  const out = new Set<string>();
+  const push = (raw: string | null | undefined, { isClabe = false } = {}) => {
+    const digits = accountDigits(raw);
+    if (digits.length < MIN_ACCOUNT_LENGTH) return;
+    out.add(digits);
+    // Las CLABEs se indexan SOLO completas (18 dígitos): los SPEI imprimen la
+    // CLABE íntegra, y la forma sin ceros iniciales rompería la auto-exclusión
+    // estructural del detector (que reconoce la CLABE propia por sus 18 dígitos).
+    if (isClabe) return;
+    const stripped = stripLeadingZeros(digits);
+    if (stripped.length >= MIN_ACCOUNT_LENGTH) out.add(stripped);
+  };
+  for (const entry of BANK_ACCOUNTS) {
+    push(entry.cuentaDigits);
+    push(entry.cuenta);
+    push(entry.clabe, { isClabe: true });
+  }
+  return out;
+})();
+
+/**
+ * Construye un Set con todas las cuentas que pertenecen al grupo: las del
+ * catálogo estático de cuentas (dígitos + CLABE, siempre presentes) más las
+ * extraídas de los estados de cuenta que ya estamos consumiendo del API de
+ * JDE (cubre cuentas aún no catalogadas).
  *
  * Si el concepto o la referencia de un movimiento menciona cualquiera de
- * estos números (p.ej. "TRASPASO REF 123 CTA DESTINO 0190047839"), se trata
- * como transferencia interna aunque no tenga la leyenda TRASPASO/TRANSFERENCIA
- * ni un RFC/beneficiario del grupo.
+ * estos números (p.ej. "TRASPASO REF 123 CTA DESTINO 0190047839" o la CLABE
+ * destino de un SPEI entre cuentas propias), se trata como transferencia
+ * interna aunque no tenga la leyenda TRASPASO/TRANSFERENCIA ni un
+ * RFC/beneficiario del grupo.
  *
  * Se descartan cuentas demasiado cortas para evitar colisiones accidentales.
  */
 export function buildOwnAccountsIndex(
   statements: readonly BankAccountStatement[] | undefined,
 ): Set<string> {
-  const out = new Set<string>();
+  const out = new Set<string>(CATALOG_ACCOUNT_IDENTIFIERS);
   if (!statements) return out;
   for (const statement of statements) {
     const cuenta = (statement.cuenta ?? '').trim();
-    if (cuenta.length >= MIN_ACCOUNT_LENGTH) out.add(cuenta);
+    if (cuenta.length >= MIN_ACCOUNT_LENGTH) {
+      out.add(cuenta);
+      const digits = accountDigits(cuenta);
+      if (digits.length >= MIN_ACCOUNT_LENGTH) out.add(digits);
+    }
   }
   return out;
 }
@@ -210,19 +280,32 @@ export function buildOwnAccountsIndex(
  * Precomputa un detector de cuenta-destino-interna para reusar en un
  * batch grande de movimientos. Evita reconstruir el regex por llamada.
  *
- * El detector excluye la cuenta origen de cada movimiento: si un banco
- * repite el número de cuenta origen en el concepto (p.ej. "COMISION CTA
- * 0190..."), esa referencia apunta a la misma cuenta y no indica traspaso
- * interno. Solo marcamos como interno cuando aparece OTRA cuenta del grupo.
+ * El detector excluye los identificadores de la cuenta origen de cada
+ * movimiento (dígitos con/sin padding Y su CLABE): si un banco repite el
+ * número o la CLABE de la cuenta origen en el concepto (p.ej. "COMISION CTA
+ * 0190..." o un SPEI entrante que imprime la CLABE beneficiaria — la propia),
+ * esa referencia apunta a la misma cuenta y no indica traspaso interno. Solo
+ * marcamos como interno cuando aparece OTRA cuenta del grupo.
  */
 export function buildOwnAccountDetector(
   ownAccounts: Set<string> | undefined,
 ): (mov: Pick<BankStatementLine, 'concepto' | 'referencia' | 'cuenta'>) => boolean {
   if (!ownAccounts || ownAccounts.size === 0) return () => false;
   const allAccounts = Array.from(ownAccounts);
-  // Pre-built pattern cuando cuenta origen NO está en el set (usa todas).
+  // ¿El identificador pertenece a la cuenta origen? Compara por dígitos
+  // normalizados (sin ceros a la izquierda — el padding varía por banco) y,
+  // para CLABEs (18 dígitos: 3 banco + 3 plaza + 11 cuenta + 1 control), por
+  // el segmento de cuenta embebido.
+  const belongsToOwn = (identifier: string, ownKey: string): boolean => {
+    const digits = accountDigits(identifier);
+    if (!digits) return false;
+    if (stripLeadingZeros(digits) === ownKey) return true;
+    if (digits.length === 18 && stripLeadingZeros(digits.slice(6, 17)) === ownKey) return true;
+    return false;
+  };
+  // Pre-built pattern cuando el movimiento no trae cuenta origen (usa todas).
   const fullPattern = buildSubstringPattern(allAccounts);
-  // Cache por cuenta origen — el set "todas menos ésta".
+  // Cache por cuenta origen (normalizada) — el set "todas menos las de ésta".
   const patternCache = new Map<string, RegExp | null>();
 
   return (mov) => {
@@ -230,16 +313,18 @@ export function buildOwnAccountDetector(
     const referencia = mov.referencia ?? '';
     if (!concepto && !referencia) return false;
 
-    const ownCuenta = (mov.cuenta ?? '').trim();
+    const ownKey = stripLeadingZeros(accountDigits(mov.cuenta));
     let pattern: RegExp | null;
-    if (!ownCuenta || !ownAccounts.has(ownCuenta)) {
+    if (!ownKey) {
       pattern = fullPattern;
-    } else if (patternCache.has(ownCuenta)) {
-      pattern = patternCache.get(ownCuenta)!;
+    } else if (patternCache.has(ownKey)) {
+      pattern = patternCache.get(ownKey)!;
     } else {
-      const rest = allAccounts.filter(a => a !== ownCuenta);
-      pattern = buildSubstringPattern(rest);
-      patternCache.set(ownCuenta, pattern);
+      const rest = allAccounts.filter(a => !belongsToOwn(a, ownKey));
+      pattern = rest.length === allAccounts.length
+        ? fullPattern
+        : buildSubstringPattern(rest);
+      patternCache.set(ownKey, pattern);
     }
     if (!pattern) return false;
     if (concepto && pattern.test(concepto)) return true;
