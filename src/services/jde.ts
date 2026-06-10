@@ -22,6 +22,8 @@ import {
   hasDailyCached,
   getDailyCachedAsync,
   setDailyCached,
+  deleteDailyCached,
+  isoDaysBefore,
   primeDailyCache,
 } from './dailyApiCache';
 import { apiConfig } from '../config/api.config';
@@ -687,6 +689,22 @@ function groupByAccount(
 }
 
 /**
+ * Ventana (días hacia atrás desde hoy) en la que un día pasado cacheado
+ * VACÍO se vuelve a pedir al API en vez de servirse del daily-cache.
+ *
+ * Por qué: tesorería/JDE cargan los estados de cuenta con atraso (fines de
+ * semana, festivos, cierres tardíos). Si un cliente consultó el día ANTES de
+ * que el estado de cuenta llegara a JDE, el daily-cache guardaba `[]` para
+ * ese día PARA SIEMPRE — y ese navegador nunca volvía a ver los movimientos
+ * aunque el servidor ya los tuviera (el clásico "a otro usuario sí le
+ * aparecen y a mí no"). Los días vacíos FUERA de la ventana se siguen
+ * sirviendo del cache (fines de semana / festivos legítimos no se re-piden
+ * en cada boot). El refetch reescribe la entrada, así que en cuanto el dato
+ * llega a JDE el cache queda saneado.
+ */
+export const BANKS_EMPTY_DAY_REVALIDATE_DAYS = 14;
+
+/**
  * POST /JDEdwards/bancos
  * Retorna el estado de cuenta agrupado por cuenta bancaria.
  */
@@ -713,7 +731,14 @@ export async function fetchBankStatements(
         cacheApiKey,
         req.fechaEstadoCuenta,
       );
-      if (cached !== null) return cached;
+      // Día VACÍO dentro de la ventana de revalidación → cae al fetch: puede
+      // ser un estado de cuenta que llegó tarde a JDE (ver
+      // BANKS_EMPTY_DAY_REVALIDATE_DAYS). El resultado reescribe el cache.
+      const staleEmpty =
+        cached !== null &&
+        cached.length === 0 &&
+        req.fechaEstadoCuenta >= isoDaysBefore(today, BANKS_EMPTY_DAY_REVALIDATE_DAYS);
+      if (cached !== null && !staleEmpty) return cached;
     }
   }
 
@@ -780,6 +805,13 @@ export async function fetchBankStatementsRange(
     concurrency?: number;
     onProgress?: (done: number, total: number) => void;
     config?: JdeClientConfig;
+    /**
+     * Días cacheados VACÍOS con fecha >= este YYYY-MM-DD se re-piden al API
+     * en vez de servirse del cache (estados de cuenta que llegaron tarde a
+     * JDE). Default: hoy − BANKS_EMPTY_DAY_REVALIDATE_DAYS. El saneo one-time
+     * de AppCore pasa una ventana más amplia (60d).
+     */
+    revalidateEmptySince?: string;
   } = {},
 ): Promise<BankAccountStatement[]> {
   const concurrency = Math.max(1, options.concurrency ?? 6);
@@ -819,6 +851,8 @@ export async function fetchBankStatementsRange(
   await primeDailyCache();
   const cacheApiKey = `banks.${formato}`;
   const today = todayISO();
+  const revalidateEmptySince =
+    options.revalidateEmptySince ?? isoDaysBefore(today, BANKS_EMPTY_DAY_REVALIDATE_DAYS);
   const results: BankAccountStatement[][] = new Array(dates.length);
   const needsFetch: number[] = [];
   // Membership es sync (keyIndex). El payload vive en IDB → leerlo es async;
@@ -836,6 +870,7 @@ export async function fetchBankStatementsRange(
   console.info(
     `[banks-range trace] from=${from} to=${to} days=${dates.length} cached=${cachedIdx.length} needsFetch=${needsFetch.length}`,
   );
+  let revalidatedEmpty = 0;
   {
     let rc = 0;
     const READ_CONCURRENCY = 8;
@@ -849,7 +884,16 @@ export async function fetchBankStatementsRange(
           dates[idx],
         );
         if (cached !== null) {
-          results[idx] = cached;
+          if (cached.length === 0 && dates[idx] >= revalidateEmptySince) {
+            // Día vacío reciente: puede ser un estado de cuenta que llegó
+            // tarde a JDE. Borramos la entrada (para que el fetch per-día
+            // del worker no la re-sirva) y lo re-pedimos al API.
+            deleteDailyCached(cacheApiKey, dates[idx]);
+            revalidatedEmpty++;
+            needsFetch.push(idx);
+          } else {
+            results[idx] = cached;
+          }
         } else {
           // Carrera con un prune/delete: re-fetch ese día.
           needsFetch.push(idx);
@@ -875,7 +919,7 @@ export async function fetchBankStatementsRange(
   }
   // eslint-disable-next-line no-console
   console.info(
-    `[banks-range trace] post-read · ${postReadNonEmpty} días con data del cache · ${postReadTotalMovs} movs en cache · needsFetch ahora=${needsFetch.length}`,
+    `[banks-range trace] post-read · ${postReadNonEmpty} días con data del cache · ${postReadTotalMovs} movs en cache · ${revalidatedEmpty} días vacíos a revalidar (>= ${revalidateEmptySince}) · needsFetch ahora=${needsFetch.length}`,
   );
   let done = dates.length - needsFetch.length;
 

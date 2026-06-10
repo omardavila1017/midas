@@ -44,6 +44,7 @@ export const MIDAS_STORAGE_REGISTRY: StorageEntry[] = [
 
   // ── App.tsx (caches de banco + UI) ──────────────────────────────────────
   { key: 'midas.bankLastQuery.v2', scope: 'localStorage', owner: 'App.tsx', description: 'Último rango/estado de consulta de bancos. Guardado idle-debounced (~2.5s).' },
+  { key: 'midas.banks.emptyDayHeal.v1', scope: 'localStorage', owner: 'AppCore.tsx', description: 'Marker del saneo one-time (ventana 60d) de días de banco cacheados vacíos por carga tardía en JDE. Presente → la revalidación usa la ventana normal de 14d.' },
   { key: 'midas.navFocus', scope: 'localStorage', owner: 'App.tsx', description: 'Foco de navegación entre tabs.' },
   { key: 'midas.bankStatements.v2', scope: 'localStorage', owner: 'App.tsx', description: 'Cache de estados de cuenta JDE.', legacy: true },
   { key: 'midas.bankSupplementalStatements.v1', scope: 'localStorage', owner: 'App.tsx', description: 'Cache de estados de cuenta subidos manualmente.', legacy: true },

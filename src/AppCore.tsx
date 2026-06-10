@@ -19,7 +19,7 @@ import { loadProviderScoreOverlay } from './domain/loadProvidersCatalog';
 import { setProviderCatalogForCategoryLookup } from './modules/financial-planning/services/providerCategoryGeneralization';
 import { clearAuth } from './components/Login';
 import { fetchClientCatalog } from './services/catalog.service';
-import { primeDailyCache, getMaxCachedDay, nextIsoDay, isDailyCachePersistent, dailyCacheStats } from './services/dailyApiCache';
+import { primeDailyCache, getMaxCachedDay, nextIsoDay, isoDaysBefore, isDailyCachePersistent, dailyCacheStats } from './services/dailyApiCache';
 import {
   loadBankStatementsFromIDB,
   saveBankJdeStatementsToIDB,
@@ -40,6 +40,7 @@ import {
   fetchAuxiliarContableRange,
   fetchAuxiliarContableIvaRange,
   AUX_IVA_LEDGER_VERSION,
+  BANKS_EMPTY_DAY_REVALIDATE_DAYS,
   type Company,
   type AuxiliarContableRecord,
   type BankAccountStatement,
@@ -4145,9 +4146,26 @@ export default function App() {
       if (!force && lastSeen && lastSeen > rangeStart) {
         rangeStart = nextIsoDay(lastSeen);
       }
+      // Revalidación de días vacíos recientes. El daily-cache puede tener
+      // días pasados cacheados como `[]` porque el navegador los consultó
+      // ANTES de que tesorería subiera el estado de cuenta a JDE (la carga
+      // llega con atraso). El watermark `lastSeen` los saltaría para siempre
+      // (el día "ya está cacheado"), así que el rango SIEMPRE incluye la
+      // ventana reciente: fetchBankStatementsRange re-pide solo los días
+      // vacíos de esa ventana; los días con datos siguen saliendo del cache.
+      // One-time heal: la primera vez tras este fix (marker ausente) la
+      // ventana se amplía a 60 días para sanear caches envenenados viejos.
+      const BANKS_EMPTY_HEAL_KEY = 'midas.banks.emptyDayHeal.v1';
+      let emptyHealDone = true;
+      try { emptyHealDone = localStorage.getItem(BANKS_EMPTY_HEAL_KEY) !== null; } catch { /* ignore */ }
+      const revalidateEmptySince = isoDaysBefore(
+        today,
+        emptyHealDone ? BANKS_EMPTY_DAY_REVALIDATE_DAYS : 60,
+      );
+      if (rangeStart > revalidateEmptySince) rangeStart = revalidateEmptySince;
       // eslint-disable-next-line no-console
       console.info(
-        `[banks v3-fix] backfill sync · maxCachedIDB=${maxCachedBanks ?? 'none'} (${cachedDayCount}d) · hydratedState=${bankJdeStatements.length} stmts / ${distinctStateDates.size} dates · stateSpansHistory=${stateSpansHistory} · cacheSpansHistory=${cacheSpansHistory} · trustedStateMax=${trustedStateMax ?? 'null'} · trustedCacheMax=${trustedCacheMax ?? 'null'} · force=${force} · idbPersist=${isDailyCachePersistent()} · range ${rangeStart}→${today} (${force ? 'FULL' : 'DELTA'} via daily cache)`,
+        `[banks v3-fix] backfill sync · maxCachedIDB=${maxCachedBanks ?? 'none'} (${cachedDayCount}d) · hydratedState=${bankJdeStatements.length} stmts / ${distinctStateDates.size} dates · stateSpansHistory=${stateSpansHistory} · cacheSpansHistory=${cacheSpansHistory} · trustedStateMax=${trustedStateMax ?? 'null'} · trustedCacheMax=${trustedCacheMax ?? 'null'} · force=${force} · idbPersist=${isDailyCachePersistent()} · revalidateEmptySince=${revalidateEmptySince}${emptyHealDone ? '' : ' (HEAL 60d)'} · range ${rangeStart}→${today} (${force ? 'FULL' : 'DELTA'} via daily cache)`,
       );
 
       if (rangeStart > today) {
@@ -4165,6 +4183,7 @@ export default function App() {
         defaultFormat,
         {
           concurrency: 10,
+          revalidateEmptySince,
           onProgress: (done, total) => {
             lastTotal = total;
             const now = performance.now();
@@ -4200,6 +4219,9 @@ export default function App() {
           hasUploadedSantander: bankSupplementalStatements.length > 0,
         });
         ranged = true;
+        // El rango regresó datos → el API es alcanzable; el saneo amplio
+        // one-time ya corrió. Las siguientes pasadas usan la ventana de 14d.
+        try { localStorage.setItem(BANKS_EMPTY_HEAL_KEY, today); } catch { /* ignore */ }
       } else {
         // eslint-disable-next-line no-console
         console.warn('[banks v3-fix] backfill sync · fetch retornó 0 statements — no merge');

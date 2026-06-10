@@ -750,6 +750,40 @@ function buildDayList(from: string, to: string): string[] {
 }
 
 /**
+ * Borra la entrada cacheada de UN día (si existe). Best-effort en IDB; la
+ * caída del keyIndex/buffer es inmediata, así que el siguiente
+ * `hasDailyCached` del mismo día ya es miss.
+ *
+ * Lo usa la revalidación de días vacíos recientes (ver
+ * `fetchBankStatementsRange` en jde.ts): JDE carga datos con atraso, así que
+ * un día pasado cacheado como `[]` puede tener datos hoy — borrar la entrada
+ * fuerza al fetcher per-día a ir a la red en vez de re-servir el vacío.
+ */
+export function deleteDailyCached(api: string, day: string, cia?: string): void {
+  const key = cacheKey(api, day, cia);
+  if (keyIndex) keyIndex.delete(key);
+  recentWrites.delete(key);
+  void openDb().then((db) => {
+    if (!db) return;
+    try {
+      const tx = db.transaction(STORE_NAME, 'readwrite');
+      tx.objectStore(STORE_NAME).delete(key);
+    } catch { /* best-effort */ }
+  });
+}
+
+/**
+ * Devuelve el día `n` días antes de `day` (YYYY-MM-DD). Complemento de
+ * `nextIsoDay`; útil para ventanas relativas a hoy ("últimos N días").
+ */
+export function isoDaysBefore(day: string, n: number): string {
+  const d = new Date(day + 'T00:00:00Z');
+  if (Number.isNaN(d.getTime())) return day;
+  d.setUTCDate(d.getUTCDate() - n);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
  * Borra todas las entradas del cache por día para un API (y opcionalmente cía).
  */
 export async function clearDailyCache(api: string, cia?: string): Promise<number> {

@@ -1,9 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { clearDailyCache, primeDailyCache } from './dailyApiCache';
+import { clearDailyCache, isoDaysBefore, primeDailyCache, setDailyCached } from './dailyApiCache';
+import { todayISO } from '../formatters';
 import {
   __internal,
   type AuxiliarContableRecord,
+  type BankAccountStatement,
+  BANKS_EMPTY_DAY_REVALIDATE_DAYS,
   fetchBankStatements,
+  fetchBankStatementsRange,
   fetchIndicadoresCobranza,
   fetchIndicadoresCobranzaRange,
   fetchNomina,
@@ -420,6 +424,161 @@ describe('fetchBankStatements — cuenta canónica', () => {
 
     expect(statements).toHaveLength(1);
     expect(statements[0].cuenta).toBe('70144758151');
+  });
+});
+
+describe('bancos — revalidación de días pasados cacheados vacíos', () => {
+  // Contexto del bug: tesorería sube los estados de cuenta a JDE con atraso.
+  // Si el navegador consultó un día ANTES de que el dato llegara, el
+  // daily-cache guardaba `[]` para ese día PARA SIEMPRE y ese usuario nunca
+  // veía los movimientos aunque el servidor ya los tuviera. La ventana
+  // BANKS_EMPTY_DAY_REVALIDATE_DAYS re-pide los días vacíos recientes.
+  const today = todayISO();
+  const daysAgo = (n: number) => isoDaysBefore(today, n);
+
+  function bankRow(fecha: string, importe: number) {
+    return {
+      cia: '11',
+      Cuenta_Contable: '11.1020.0011302',
+      Cuenta_Bancos: '000123',
+      Nombre_cuenta_Contable: 'BANAMEX CTA',
+      Fecha_Estado_Cuenta: fecha,
+      Importe: String(importe),
+      Tipo_Movimiento: 'CREDITO',
+      Referencia_Cliente: 'SPEI',
+      No_Recibo: 'RI-1',
+    };
+  }
+
+  function jsonResponse(rows: unknown[]): Response {
+    return new Response(JSON.stringify(rows), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  it('re-pide un día reciente cacheado vacío y reescribe el cache con el dato', async () => {
+    const day = daysAgo(3);
+    await primeDailyCache();
+    setDailyCached('banks.SWIFT', day, []);
+
+    const fetchMock = vi.fn(async () => jsonResponse([bankRow(day, 1500)]));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const statements = await fetchBankStatements({
+      fechaEstadoCuenta: day,
+      formatoElectronico: 'SWIFT',
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(statements).toHaveLength(1);
+    expect(statements[0].movimientos[0].importe).toBe(1500);
+
+    // El refetch reescribió la entrada: la siguiente llamada sale del cache.
+    fetchMock.mockClear();
+    const again = await fetchBankStatements({
+      fechaEstadoCuenta: day,
+      formatoElectronico: 'SWIFT',
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(again).toHaveLength(1);
+  });
+
+  it('sirve del cache un día vacío FUERA de la ventana (festivo/fin de semana legítimo)', async () => {
+    const day = daysAgo(BANKS_EMPTY_DAY_REVALIDATE_DAYS + 5);
+    await primeDailyCache();
+    setDailyCached('banks.SWIFT', day, []);
+
+    const fetchMock = vi.fn(async () => jsonResponse([bankRow(day, 999)]));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const statements = await fetchBankStatements({
+      fechaEstadoCuenta: day,
+      formatoElectronico: 'SWIFT',
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(statements).toEqual([]);
+  });
+
+  it('sirve del cache un día reciente que SÍ tiene datos (no re-pide)', async () => {
+    const day = daysAgo(2);
+    await primeDailyCache();
+    const cachedStatement = { cia: '00011', cuenta: '000123', moneda: 'MXP', movimientos: [] };
+    setDailyCached('banks.SWIFT', day, [cachedStatement as unknown as BankAccountStatement]);
+
+    const fetchMock = vi.fn(async () => jsonResponse([bankRow(day, 777)]));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const statements = await fetchBankStatements({
+      fechaEstadoCuenta: day,
+      formatoElectronico: 'SWIFT',
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(statements).toHaveLength(1);
+    expect(statements[0].cia).toBe('00011');
+  });
+
+  it('fetchBankStatementsRange re-pide SOLO los días vacíos recientes y mergea con los cacheados', async () => {
+    const dayWithData = daysAgo(5);
+    const poisonedDay = daysAgo(4);
+    await primeDailyCache();
+
+    // Cachea dayWithData con datos reales pasando por el mapper.
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse([bankRow(dayWithData, 111)])));
+    await fetchBankStatements({ fechaEstadoCuenta: dayWithData, formatoElectronico: 'SWIFT' });
+
+    // Envenena poisonedDay como vacío (consultado antes de que JDE lo tuviera).
+    setDailyCached('banks.SWIFT', poisonedDay, []);
+
+    const rangeMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as { fechaEstadoCuenta: string };
+      return jsonResponse([bankRow(body.fechaEstadoCuenta, 222)]);
+    });
+    vi.stubGlobal('fetch', rangeMock);
+
+    const merged = await fetchBankStatementsRange(dayWithData, poisonedDay, 'SWIFT');
+
+    // Solo el día envenenado pegó a la red.
+    expect(rangeMock).toHaveBeenCalledTimes(1);
+    const [, init] = rangeMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(String(init?.body)).fechaEstadoCuenta).toBe(poisonedDay);
+
+    // El merge trae los movimientos de ambos días.
+    const importes = merged.flatMap(s => s.movimientos.map(m => m.importe)).sort();
+    expect(importes).toEqual([111, 222]);
+
+    // Y el cache del día envenenado quedó saneado: una segunda pasada ya no
+    // toca la red.
+    rangeMock.mockClear();
+    const second = await fetchBankStatementsRange(dayWithData, poisonedDay, 'SWIFT');
+    expect(rangeMock).not.toHaveBeenCalled();
+    expect(second.flatMap(s => s.movimientos.map(m => m.importe)).sort()).toEqual([111, 222]);
+  });
+
+  it('fetchBankStatementsRange NO re-pide días vacíos fuera de la ventana por default, pero sí con revalidateEmptySince amplio (saneo one-time)', async () => {
+    const oldDay = daysAgo(30);
+    await primeDailyCache();
+    setDailyCached('banks.SWIFT', oldDay, []);
+
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as { fechaEstadoCuenta: string };
+      return jsonResponse([bankRow(body.fechaEstadoCuenta, 333)]);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    // Default (ventana 14d): el día de hace 30 se sirve del cache vacío.
+    const byDefault = await fetchBankStatementsRange(oldDay, oldDay, 'SWIFT');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(byDefault).toEqual([]);
+
+    // Saneo one-time (ventana 60d): el día se re-pide y trae el dato.
+    const healed = await fetchBankStatementsRange(oldDay, oldDay, 'SWIFT', {
+      revalidateEmptySince: daysAgo(60),
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(healed.flatMap(s => s.movimientos.map(m => m.importe))).toEqual([333]);
   });
 });
 

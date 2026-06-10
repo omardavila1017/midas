@@ -117,6 +117,16 @@ El asistente (`src/modules/midas-ai/`, burbuja en Proyección y Planeación) hab
 - **Verificación:** `npm run ai:check` (smoke-test credencial→modelo→chat, opcional `-- --proxy http://localhost:5173` para la cadena completa) y `npm run ai:eval` (5 conversaciones de analista contra el modelo REAL usando el prompt/contexto reales, con outlier e inconsistencia plantados y un check de no-invención). Ambos requieren `OPENAI_API_KEY` en `.env.local` y fallan con diagnóstico claro si no está.
 - **Contexto analítico (Fase 3):** `MidasContext` ganó `buckets` (serie por periodo del run activo — entradas/salidas/neto/caja cierre/déficit, cap 36) y `alerts` (alertas del motor, CRITICAL primero, cap 12), ambos derivados del `ForecastRun` que ya llega a `MidasBubble` — cero fetches nuevos. `buildContextBlock` los emite como `seriePorPeriodo` y `alertasDelMotor`; el system prompt ganó la regla anti-invención absoluta ("No tengo ese dato en el contexto actual") y el charter de analista senior (tendencias, comparación de periodos, outliers, inconsistencias, hipótesis marcadas; respuesta Hallazgos · Riesgos · Oportunidades · Recomendaciones). El flujo de propuestas (`propose_adjustment` → `parseProposal` → `FinancialAdjustment` DRAFT) NO cambió.
 
+## Bancos: revalidación de días cacheados vacíos (2026-06-10)
+
+El daily-cache (IDB) guardaba `[]` PARA SIEMPRE para un día pasado de `/bancos` si el API respondió vacío — pero tesorería sube los estados de cuenta a JDE **con atraso**, así que un navegador que consultó el día antes de que el dato llegara quedaba envenenado: nunca volvía a pedir ese día (el delta-watermark `lastSeen` además lo excluía del rango) y ese usuario veía días en blanco que a otros usuarios sí les aparecían. Fix en tres capas:
+
+- **`BANKS_EMPTY_DAY_REVALIDATE_DAYS = 14`** (`src/services/jde.ts`): un día pasado cacheado **vacío** dentro de la ventana se re-pide en vez de servirse del cache; el refetch reescribe la entrada (sana en cuanto JDE tiene el dato). Días vacíos fuera de la ventana (festivos/fines de semana legítimos) siguen saliendo del cache. Aplica en `fetchBankStatements` (single-day, prime) y en `fetchBankStatementsRange` (el reader borra la entrada con `deleteDailyCached` y re-encola el día; opción `revalidateEmptySince` para ampliar la ventana).
+- **Delta-sync floor** (`refreshBankStatementsRange`, `AppCore.tsx`): el rango del backfill SIEMPRE incluye la ventana de revalidación (`rangeStart = min(rangeStart, today − ventana)`) — sin esto el watermark saltaba los días envenenados para siempre. Días con datos siguen saliendo del cache (barato).
+- **Saneo one-time 60d**: marker `midas.banks.emptyDayHeal.v1` (localStorage, registrado en `storageRegistry.ts`). Ausente → la primera pasada amplía la ventana a 60 días para sanear caches envenenados viejos; se escribe cuando el rango regresa datos. Tests: `jde.test.ts` ("revalidación de días pasados cacheados vacíos").
+
+Costo: ~4-7 requests extra a `/bancos` por boot (los días genuinamente vacíos de las últimas 2 semanas). NO quitar la escritura de `[]` en días vacíos (evita repegar al API dentro de la misma sesión); la ventana es quien repara.
+
 ## Stack
 
 - React 18 + Vite 5 + TypeScript 5.5 + Tailwind 3.4 (with `darkMode: 'class'`)
