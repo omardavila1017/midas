@@ -210,13 +210,18 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
   // del "scroll jala mal".
   const scrollSelectionIntoView = useRef(false);
 
-  // ---- Virtualization scaffolding -----------------------------------------
-  // Column width and row height are uniform, so windowing is exact arithmetic
-  // (no measurement of individual cells). Until the container is measured
-  // (jsdom/tests/first layout) we render everything, preserving prior behavior.
+  // ---- Virtualization DISABLED (2026-06-10) -------------------------------
+  // El scroll virtualizado daba problemas persistentes; por decisión del
+  // usuario se renderiza TODO (todas las filas y columnas) y el grid crece a su
+  // alto natural — sin scroll vertical interno. Se reutiliza la rama
+  // `measured === false` que `computeVirtualWindow`/`VirtualRowList` ya usaban
+  // en jsdom/primer paint para renderizar la lista completa, así que no hay que
+  // reescribir el render. La infraestructura de medición se conserva (inerte)
+  // para no propagar cambios; sólo el scroll horizontal nativo sigue activo
+  // (necesario para la columna sticky de etiquetas).
   const [viewport, setViewport] = useState({ w: 0, h: 0 });
   const [scroll, setScroll] = useState({ top: 0, left: 0 });
-  const measured = viewport.w > 0 && viewport.h > 0;
+  const measured = false;
 
   useLayoutEffect(() => {
     const el = containerRef.current;
@@ -789,14 +794,12 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
       role="grid"
       aria-readonly={isReadOnly}
       aria-rowcount={displayRows.length}
-      className="relative overflow-auto overscroll-contain rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)]"
-      // overflowAnchor: la virtualización recicla filas y redimensiona spacers
-      // en cada frame de scroll; el scroll anchoring del navegador elige una
-      // fila como ancla y reajusta scrollTop para mantenerla fija, peleando
-      // contra el viewport (scroll "trabado" arriba/abajo con buckets grandes
-      // expandidos, p.ej. Proveedores sin categoría). Desactivarlo es el
-      // estándar en listas virtualizadas.
-      style={{ maxHeight: 560, overflowAnchor: 'none' }}
+      className="relative overflow-x-auto overflow-y-visible overscroll-contain rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)]"
+      // Sin virtualización: el grid se muestra completo, a su alto natural (sin
+      // `maxHeight` → no hay scroll vertical interno; el desbordamiento vertical
+      // lo maneja la página). Sólo queda `overflow-x-auto` para el scroll
+      // horizontal nativo, que la columna sticky de etiquetas necesita.
+      style={{}}
     >
       {/* Header row */}
       <div className="sticky top-0 z-30 flex border-b border-[var(--gray-200)] bg-[var(--gray-50)]" style={{ height: HEADER_HEIGHT, minWidth: contentWidth }}>
