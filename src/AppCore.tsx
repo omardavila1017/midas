@@ -992,11 +992,14 @@ export default function App() {
   useEffect(() => {
     if (!isBooted) return;
     return scheduleIdleTask(() => {
-      void import('./modules/financial-projection/pages/FinancialProjectionDashboard');
-      void import('./modules/financial-planning/pages/FinancialPlanningDashboard');
-      void import('./components/CXP');
-      void import('./components/Bancos');
-      void import('./components/CollectionProjection');
+      // Best-effort: si un chunk no baja (offline / redeploy), el lazy() real
+      // reintenta al click — el prefetch fallido no debe ser unhandled rejection.
+      const swallow = () => {};
+      void import('./modules/financial-projection/pages/FinancialProjectionDashboard').catch(swallow);
+      void import('./modules/financial-planning/pages/FinancialPlanningDashboard').catch(swallow);
+      void import('./components/CXP').catch(swallow);
+      void import('./components/Bancos').catch(swallow);
+      void import('./components/CollectionProjection').catch(swallow);
     }, 5000);
   }, [isBooted]);
 
@@ -1229,6 +1232,10 @@ export default function App() {
               cobranzaPayments,
             });
             if (!cancelled && reconciliationJobRef.current === jobId) setCobranzaReconciliation(result);
+          })
+          .catch((err) => {
+            // eslint-disable-next-line no-console
+            console.warn('[reconciliation] fallback no disponible (chunk/compute falló)', err);
           });
       };
 

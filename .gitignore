@@ -42,6 +42,10 @@ vite.config.ts.timestamp-*.mjs
 # Stale build artifacts from older configurations (use dist/).
 dist2/
 
+# Playwright output (regenerated on every e2e run).
+test-results/
+playwright-report/
+
 # Legacy / backup copies of the project — retained in git history only.
 _legacy_v1_original/
 _rebuild_backup/

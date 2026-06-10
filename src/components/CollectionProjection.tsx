@@ -1899,6 +1899,10 @@ function CobranzaRealView({
         if (cancelled) return;
         const raw = reconcileRealCollections(records, bankStatements, { cobranzaPayments: payments });
         if (!cancelled) setFallbackReconciliation(applyManualConfirmations(raw, confirmedReviewKeys));
+      })
+      .catch((err) => {
+        // eslint-disable-next-line no-console
+        console.warn('[reconciliation] fallback no disponible (chunk/compute falló)', err);
       });
 
     return () => {
