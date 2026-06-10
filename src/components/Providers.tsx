@@ -9,6 +9,7 @@ import {
   AlertTriangle,
   Calendar,
   Clock3,
+  Download,
   Info,
   Plus,
   RefreshCw,
@@ -19,6 +20,7 @@ import PageHeader from './ui/PageHeader';
 import ProviderDetailModal from './ProviderDetailModal';
 import type { CXPRecord } from '../domain/persistence';
 import { lookupRecentSpend, type ProviderSpendIndex } from '../domain/providerRecentSpend';
+import { toCSV, downloadFile } from '../utils/export';
 
 /**
  * Catálogo de Proveedores — pestaña Catálogos → Proveedores.
@@ -194,20 +196,58 @@ export default function Providers({ providers, cxpRecords, spendIndex, onReplace
     }
   };
 
+  // Exporta la vista actual (respeta los filtros activos) a CSV — Excel lo
+  // abre nativamente. Las columnas reflejan la tabla en pantalla.
+  const handleExport = () => {
+    const rows = filtered.map((p) => {
+      const recentStats = spendIndex ? lookupRecentSpend(spendIndex, p) : null;
+      const monthlyAvg = recentStats?.monthlyAverage ?? p.gastoMinimoMensual ?? null;
+      const avgPerPayment = recentStats && recentStats.paymentCount > 0
+        ? recentStats.totalSpend / recentStats.paymentCount
+        : (p.montoPromedioPago ?? null);
+      const bucket = bucketOf(p);
+      return {
+        Proveedor: p.name,
+        Categoría: p.type ?? '',
+        Clasificación: SCORE_STYLES[bucket].label,
+        Score: p.score ?? '',
+        Frecuencia: p.frecuenciaHistorica ?? '',
+        'Monto promedio': avgPerPayment ?? '',
+        '# Pagos 2025': p.numPagos2025 ?? '',
+        'Total pagado 2025': p.montoTotal2025 ?? '',
+        'Gasto mínimo / mes': monthlyAvg ?? '',
+        'Num JDE': p.numProveedorJDE ?? '',
+      };
+    });
+    const segment = showEmployees ? 'prestaciones' : 'comerciales';
+    downloadFile(toCSV(rows), `proveedores-midas-${segment}.csv`);
+  };
+
   return (
     <div className="space-y-5">
       <PageHeader
         title="Proveedores"
         actions={
-          <button
-            onClick={handleSyncCatalog}
-            disabled={syncing}
-            title="Sincronizar plantilla"
-            aria-label="Sincronizar plantilla"
-            className="flex items-center justify-center w-9 h-9 rounded-[var(--radius-md)] text-[var(--gray-400)] hover:text-[var(--primary)] hover:bg-[var(--gray-50)] hover-press disabled:opacity-40"
-          >
-            <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} strokeWidth={1.5} />
-          </button>
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={handleExport}
+              disabled={filtered.length === 0}
+              title="Descargar catálogo a Excel (CSV)"
+              aria-label="Descargar catálogo a Excel"
+              className="flex items-center justify-center w-9 h-9 rounded-[var(--radius-md)] text-[var(--gray-400)] hover:text-[var(--primary)] hover:bg-[var(--gray-50)] hover-press disabled:opacity-40"
+            >
+              <Download className="w-4 h-4" strokeWidth={1.5} />
+            </button>
+            <button
+              onClick={handleSyncCatalog}
+              disabled={syncing}
+              title="Sincronizar plantilla"
+              aria-label="Sincronizar plantilla"
+              className="flex items-center justify-center w-9 h-9 rounded-[var(--radius-md)] text-[var(--gray-400)] hover:text-[var(--primary)] hover:bg-[var(--gray-50)] hover-press disabled:opacity-40"
+            >
+              <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} strokeWidth={1.5} />
+            </button>
+          </div>
         }
       />
 
