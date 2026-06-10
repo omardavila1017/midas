@@ -29,7 +29,15 @@ const ALLOWED_METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
 function pathFromQuery(query: ApiProxyRequest['query']): string {
   const rawPath = query?.path;
   const segments = Array.isArray(rawPath) ? rawPath : rawPath ? [rawPath] : [];
-  return segments.map(encodeURIComponent).join('/');
+  // Algunos runtimes entregan el catch-all como UN string con slashes
+  // ("chat/completions") en vez de array. Encodear ese string completo
+  // produce "chat%2Fcompletions" → 404 garantizado en upstream. Se parte
+  // por '/' antes de encodear cada segmento.
+  return segments
+    .flatMap((segment) => segment.split('/'))
+    .filter(Boolean)
+    .map(encodeURIComponent)
+    .join('/');
 }
 
 function resolveTimeoutMs(label: string): number {
@@ -53,6 +61,11 @@ export function createApiProxy(options: ApiProxyOptions) {
     );
     const upstreamBase = (process.env[options.upstreamEnvVar] ?? options.defaultUpstream).replace(/\/+$/, '');
     if (!token || !upstreamBase) {
+      console.error(`[api-proxy:${options.label}] proxy not configured`, {
+        hasToken: Boolean(token),
+        tokenEnvVar: options.tokenEnvVar,
+        upstreamEnvVar: options.upstreamEnvVar,
+      });
       res.status(500).json({ error: `${options.label} proxy not configured` });
       return;
     }
@@ -91,6 +104,14 @@ export function createApiProxy(options: ApiProxyOptions) {
       });
       clearTimeout(timer);
 
+      if (upstreamRes.status >= 400) {
+        // Log de auditoría: con esto el 404/401 upstream queda atribuible
+        // al target exacto sin exponer el token.
+        console.error(`[api-proxy:${options.label}] upstream ${upstreamRes.status}`, {
+          method,
+          targetUrl,
+        });
+      }
       res.setHeader('Content-Type', upstreamRes.headers.get('content-type') ?? 'application/json');
       res.setHeader('Cache-Control', 'no-store');
       res.status(upstreamRes.status);
@@ -98,6 +119,12 @@ export function createApiProxy(options: ApiProxyOptions) {
     } catch (error) {
       clearTimeout(timer);
       const timeout = error instanceof Error && error.name === 'AbortError';
+      console.error(`[api-proxy:${options.label}] upstream unreachable`, {
+        method,
+        targetUrl,
+        timeout,
+        error: error instanceof Error ? error.message : String(error),
+      });
       res.status(timeout ? 504 : 502).json({
         error: timeout ? `${options.label} upstream timeout after ${timeoutMs}ms` : `${options.label} upstream unreachable`,
       });

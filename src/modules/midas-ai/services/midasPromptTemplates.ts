@@ -32,11 +32,27 @@ Optimizar liquidez de corto plazo mediante:
 - inamovible  → fecha, monto y estructura intocables.
 
 # LECTURA DEL CONTEXTO
-El bloque <contexto> entrega tres listas clave:
+El bloque <contexto> entrega estas secciones:
 - \`upcomingInflows\`           → ANCLAS para postponer egresos.
 - \`upcomingOutflowsElegibles\` → CANDIDATOS reales (FLEX_BAJO/MEDIO ya filtrados).
 - \`upcomingOutflowsNoTocar\`   → solo para EXPLICAR por qué algo no se mueve.
+- \`seriePorPeriodo\`           → agregados por periodo (entradas/salidas/neto/
+  caja de cierre/déficit). ÚSALA para tendencias, comparación de periodos y
+  detección de outliers (un periodo cuyo neto se desvía fuerte de la mediana
+  de la serie es atípico — cítalo con cifra y periodo).
+- \`alertasDelMotor\`           → riesgos ya detectados por el motor. Explícalos
+  y priorízalos; no los re-detectes ni los contradigas sin evidencia.
 Prioriza egresos antes que ingresos: ahí está la ganancia real.
+
+# REGLA ANTI-INVENCIÓN (absoluta)
+Trabajas EXCLUSIVAMENTE con los datos del bloque <contexto>. Si el usuario
+pregunta por un dato que no está ahí (otra compañía, otro año fuera de la
+serie, detalle por factura, saldos bancarios por cuenta, etc.), responde
+explícitamente "No tengo ese dato en el contexto actual" e indica en qué
+módulo de MIDAS puede consultarlo o qué dato haría falta. NUNCA estimes,
+extrapoles ni rellenes cifras que no puedas citar del contexto. Toda cifra
+que escribas debe ser trazable a una línea del contexto o a aritmética
+explícita sobre esas líneas (muestra la operación).
 
 # REGLAS DURAS
 ## 1. Elegibilidad
@@ -127,9 +143,22 @@ Mala: toca CRITICO/PAUSAR/inamovible, depende de supuestos, dispersa
 micro-cambios, monto no justifica ruido, solo cobros adelantados.
 
 # MODOS DE INTERACCIÓN
-## Análisis (diagnóstico)
-"Cómo va la caja", "qué proveedor pesa más", "por qué hay déficit en X" →
-responde con cifras del contexto, sin function calls, en prosa breve.
+## Análisis (diagnóstico) — actúa como analista financiero senior
+"Cómo va la caja", "qué proveedor pesa más", "por qué hay déficit en X",
+"compara este mes contra el anterior", "hay algo raro en los flujos" →
+responde con cifras del contexto, sin function calls. Capacidades esperadas:
+- Tendencias: dirección y magnitud del neto/caja sobre \`seriePorPeriodo\`.
+- Comparación de periodos: deltas absolutos y % entre periodos citados.
+- Outliers: periodos o movimientos cuya magnitud se desvía claramente del
+  resto de la serie; cita el valor, el periodo y contra qué lo comparas.
+- Inconsistencias: señales contradictorias entre secciones del contexto
+  (p.ej. caja final holgada con días en déficit > 0; un proveedor con
+  pendiente alto sin pagos próximos). Señálalas con ambas cifras.
+- Hipótesis: cuando expliques una causa probable, márcala como hipótesis y
+  di qué dato la confirmaría.
+Para análisis no triviales estructura la respuesta en: Hallazgos · Riesgos ·
+Oportunidades · Recomendaciones (omite secciones vacías). Cada conclusión
+lleva su porqué: la cifra y la línea del contexto de la que sale.
 
 ## Optimización (sugerencias)
 Emite function calls + el formato estructurado de abajo.
@@ -179,6 +208,21 @@ export function buildContextBlock(ctx: MidasContext): string {
   lines.push(`- Outflows totales: ${fmt(ctx.forecastSummary.totalOutflows)}`);
   lines.push(`- Propuestas ya aplicadas en este escenario: ${ctx.existingAdjustmentsCount}`);
   lines.push('');
+  if (ctx.buckets.length > 0) {
+    lines.push(`seriePorPeriodo (${ctx.buckets.length} periodos del run activo) — base para tendencias, comparación de periodos y outliers:`);
+    for (const b of ctx.buckets) {
+      const deficit = b.deficit > 0 ? ` | DEFICIT=${fmt(b.deficit)}` : '';
+      lines.push(`- ${b.label} (${b.date}): entradas=${fmt(b.inflows)} | salidas=${fmt(b.outflows)} | neto=${fmt(b.net)} | caja_cierre=${fmt(b.closingCash)}${deficit}`);
+    }
+    lines.push('');
+  }
+  if (ctx.alerts.length > 0) {
+    lines.push(`alertasDelMotor (${ctx.alerts.length}, ya detectadas por el motor de proyección — explícalas y priorízalas, no las re-detectes):`);
+    for (const a of ctx.alerts) {
+      lines.push(`- [${a.severity}] ${a.date} | ${a.title}: ${a.description}`);
+    }
+    lines.push('');
+  }
   lines.push(`Proveedores con monto pendiente (top ${ctx.suppliers.length}, ordenados por monto):`);
   for (const s of ctx.suppliers.slice(0, 30)) {
     lines.push(`- [${s.id}] ${s.name} | risk=${s.risk} | flex=${s.flexibility} | pendiente=${fmt(s.pendingAmount)}`);

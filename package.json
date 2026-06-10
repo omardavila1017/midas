@@ -10,6 +10,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
+    "ai:check": "node scripts/check-openai.mjs",
+    "ai:eval": "vite-node scripts/midas-ai-eval.ts",
     "security:secrets": "node scripts/secret-scan.mjs",
     "security:gitleaks": "gitleaks detect --no-git --redact --source ."
   },

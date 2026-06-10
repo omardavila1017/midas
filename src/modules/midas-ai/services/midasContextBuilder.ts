@@ -4,10 +4,14 @@ import type {
   FinancialMovement,
   ForecastRun,
 } from '../../shared-finance/types';
-import type { MidasContext, MidasSupplierContext } from '../types';
+import type { MidasAlertContext, MidasBucketContext, MidasContext, MidasSupplierContext } from '../types';
 
 const MAX_UPCOMING_MOVEMENTS = 60;
 const MAX_SUPPLIERS = 50;
+// 36 buckets cubren 3 años en mensual o ~5 semanas en diario; suficiente
+// para tendencia/comparación sin inflar el prompt.
+const MAX_BUCKETS = 36;
+const MAX_ALERTS = 12;
 
 export interface BuildMidasContextInput {
   cia: string;
@@ -37,12 +41,32 @@ export function buildMidasContext(input: BuildMidasContextInput): MidasContext {
 
   const suppliers = buildSuppliers(input.providers, input.activeRun.movements);
 
+  // Serie agregada por periodo: si el run trae más buckets que el cap, se
+  // conserva el tramo más reciente + futuro (los buckets vienen ordenados).
+  const buckets: MidasBucketContext[] = input.activeRun.buckets.slice(-MAX_BUCKETS).map((b) => ({
+    date: b.date,
+    label: b.label,
+    inflows: b.inflows,
+    outflows: b.outflows,
+    net: b.net,
+    closingCash: b.closingCash,
+    deficit: b.deficit,
+  }));
+
+  const severityRank = { CRITICAL: 0, WARNING: 1, INFO: 2 } as const;
+  const alerts: MidasAlertContext[] = [...input.activeRun.alerts]
+    .sort((a, b) => severityRank[a.severity] - severityRank[b.severity] || a.date.localeCompare(b.date))
+    .slice(0, MAX_ALERTS)
+    .map((a) => ({ date: a.date, severity: a.severity, title: a.title, description: a.description }));
+
   return {
     cia: input.cia,
     asOfDate: input.asOfDate,
     forecastSummary: input.activeRun.summary,
     upcomingMovements: upcoming,
     suppliers,
+    buckets,
+    alerts,
     existingAdjustmentsCount: input.adjustments.filter((a) => a.scenarioIds.includes(input.activeScenarioId)).length,
     activeScenarioId: input.activeScenarioId,
     activeScenarioKind: input.activeScenarioKind,

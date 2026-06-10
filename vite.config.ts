@@ -100,6 +100,15 @@ export default defineConfig(({ mode }) => {
   const jdeUp = parseUpstream(env.VITE_JDE_UPSTREAM || 'https://api.gruposenda.com/JDEdwards')
   const tressUp = parseUpstream(env.VITE_TRESS_UPSTREAM || 'https://api.gruposenda.com/v1/erp/tress')
   const openaiUp = parseUpstream(env.OPENAI_UPSTREAM || 'https://api.openai.com/v1')
+  // Diagnóstico temprano MIDAS AI: sin OPENAI_API_KEY el proxy responde 401
+  // upstream; un OPENAI_UPSTREAM de api.openai.com SIN /v1 responde 404
+  // "Invalid URL". Avisar al arrancar evita perseguir el error en el chat.
+  if (!env.OPENAI_API_KEY) {
+    console.warn('[vite] OPENAI_API_KEY no está en el entorno — /api/openai (MIDAS AI) responderá 401. Agrégala a .env.local.')
+  }
+  if (openaiUp.origin.includes('api.openai.com') && openaiUp.path === '') {
+    console.warn(`[vite] OPENAI_UPSTREAM (${env.OPENAI_UPSTREAM}) no incluye /v1 — OpenAI responderá 404 "Invalid URL". Usa https://api.openai.com/v1.`)
+  }
   const jdeToken = env.JDE_TOKEN || env.VITE_JDE_TOKEN
   // CITI: red interna srv-desarrollo:92/CITI. En prod requiere proxy server-side
   // (nginx/cloudflare) que reescriba /api/citi → http://srv-desarrollo:92/CITI.

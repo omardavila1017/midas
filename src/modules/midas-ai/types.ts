@@ -45,6 +45,28 @@ export interface MidasSupplierContext {
   priority?: string;
 }
 
+/** Agregado por periodo del run activo (bucket) — habilita análisis de
+ *  tendencias, comparación de periodos y detección de outliers sin mandar
+ *  los movimientos crudos. */
+export interface MidasBucketContext {
+  date: string;
+  label: string;
+  inflows: number;
+  outflows: number;
+  net: number;
+  closingCash: number;
+  deficit: number;
+}
+
+/** Alerta ya detectada por el motor de proyección — la IA la explica y
+ *  prioriza, no la re-detecta. */
+export interface MidasAlertContext {
+  date: string;
+  severity: 'INFO' | 'WARNING' | 'CRITICAL';
+  title: string;
+  description: string;
+}
+
 export interface MidasContext {
   cia: string;
   asOfDate: string;
@@ -54,6 +76,8 @@ export interface MidasContext {
     'id' | 'concept' | 'type' | 'category' | 'projectedAmount' | 'projectedDate' | 'counterpartyName' | 'counterpartyId'
   >[];
   suppliers: MidasSupplierContext[];
+  buckets: MidasBucketContext[];
+  alerts: MidasAlertContext[];
   existingAdjustmentsCount: number;
   activeScenarioId: string;
   activeScenarioKind: string;
