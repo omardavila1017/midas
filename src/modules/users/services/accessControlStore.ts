@@ -22,11 +22,12 @@ import { GRANTABLE_TABS, isAdminOnlyTab } from '../../../config/appTabs';
 import { listLocalUsers } from '../../../services/localAuth';
 import { listConfiguredUsers } from '../../../config/userRoles';
 
-// v2 (2026-06-09): re-siembra forzada tras hardcodear el roster + roles en
-// `authLocalUsers.json`. Subir la versión abandona el registro `v1` previo para
-// que TODOS los navegadores vuelvan a sembrar del JSON nuevo (correos + roles
-// admin/user actualizados) en vez de quedarse con el roster viejo en cache.
-export const ACCESS_REGISTRY_KEY = 'midas.users.registry.v2';
+// v3 (2026-06-10): re-siembra forzada tras hardcodear los PERMISOS por usuario
+// en `authLocalUsers.json` (antes solo el rol). Subir la versión abandona el
+// registro `v2` previo para que TODOS los navegadores vuelvan a sembrar del JSON
+// nuevo (correos + roles + permisos por módulo) en vez de quedarse con el roster
+// viejo en cache. Sube esta versión cada vez que cambies roles/permisos en el JSON.
+export const ACCESS_REGISTRY_KEY = 'midas.users.registry.v3';
 const ACCESS_CHANGED_EVENT = 'midas:access-changed';
 
 /** Rol del registro: nunca `none` (un usuario registrado es admin o user). */
@@ -47,6 +48,36 @@ type Registry = Record<string, StoredUser>;
 
 function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
+}
+
+/**
+ * Rol HARDCODEADO del roster (`authLocalUsers.json`), o `null` si el correo no
+ * está en él (o el modo local está deshabilitado). Es la fuente autoritativa del
+ * rol: un correo listado como `admin` SIEMPRE es admin, sin importar el estado
+ * del registro en localStorage. Esto blinda el acceso de los admins contra un
+ * registro stale/corrupto (causa del bug "los admins no pueden entrar").
+ */
+function hardcodedRoleFor(email: string): ManagedRole | null {
+  const key = normalizeEmail(email);
+  for (const u of listLocalUsers()) {
+    if (u.email === key) {
+      const role = coerceRole(u.role);
+      return role === 'admin' || role === 'user' ? role : null;
+    }
+  }
+  return null;
+}
+
+/**
+ * Rol EFECTIVO de un correo para decisiones de acceso. Un admin hardcodeado del
+ * roster manda sobre cualquier cosa (no se puede degradar desde el registro);
+ * si no, el override del registro (p.ej. un admin promovió a un user dado de alta
+ * en el portal) y, si tampoco, el rol de la sesión backend.
+ */
+export function effectiveRole(email: string | null, sessionRole: Role): Role {
+  if (email && hardcodedRoleFor(email) === 'admin') return 'admin';
+  const registryRole = email ? getRegistryRole(email) : null;
+  return registryRole ?? sessionRole;
 }
 
 function storage(): Storage | undefined {
@@ -71,15 +102,15 @@ function sanitizePermissions(tabs: unknown): AppTabId[] {
 
 /** Construye la siembra inicial desde la fuente de auth conocida. */
 function buildSeed(): Registry {
-  // En modo local-auth el JSON trae roles granulares legacy; si no, `.env`.
+  // En modo local-auth el JSON trae rol + permisos hardcodeados; si no, `.env`.
   const localUsers = listLocalUsers();
-  const seedSource: { email: string; role: string }[] =
+  const seedSource: { email: string; role: string; permissions?: string[] }[] =
     localUsers.length > 0
       ? localUsers
       : listConfiguredUsers().map((u) => ({ email: u.email, role: u.role }));
 
   const registry: Registry = {};
-  for (const { email, role: rawRole } of seedSource) {
+  for (const { email, role: rawRole, permissions } of seedSource) {
     const key = normalizeEmail(email);
     if (!key) continue;
     const role = coerceRole(rawRole);
@@ -87,9 +118,10 @@ function buildSeed(): Registry {
     if (role === 'admin') {
       registry[key] = { role: 'admin', permissions: [] };
     } else {
-      // Siembra permisos por defecto desde el rol granular previo, para no
-      // tumbar el acceso de los usuarios ya conocidos en la migración.
-      const seeded = LEGACY_ROLE_TABS[rawRole] ?? [];
+      // Permisos hardcodeados del roster local (`authLocalUsers.json`). En modo
+      // env/backend (sin permisos en la fuente) caemos al mapeo del rol granular
+      // legacy para no tumbar el acceso de los usuarios ya conocidos al migrar.
+      const seeded = permissions ?? LEGACY_ROLE_TABS[rawRole] ?? [];
       registry[key] = { role: 'user', permissions: sanitizePermissions(seeded) };
     }
   }
@@ -192,11 +224,10 @@ export function getGrantedTabs(email: string): AppTabId[] {
  *   - none → nada.
  */
 export function canAccess(email: string | null, sessionRole: Role, tab: AppTabId): boolean {
-  const registryRole = email ? getRegistryRole(email) : null;
-  const effectiveRole: Role = registryRole ?? sessionRole;
-  if (effectiveRole === 'admin') return true;
+  const role = effectiveRole(email, sessionRole);
+  if (role === 'admin') return true;
   if (isAdminOnlyTab(tab)) return false;
-  if (effectiveRole === 'user') {
+  if (role === 'user') {
     if (!email) return false;
     return getGrantedTabs(email).includes(tab);
   }

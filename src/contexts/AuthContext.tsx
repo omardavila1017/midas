@@ -20,7 +20,7 @@ import { getRoleForEmail } from '../config/userRoles';
 import { isRole, type Role } from '../config/roles';
 import {
   canAccess,
-  getRegistryRole,
+  effectiveRole,
   subscribeAccessChanged,
 } from '../modules/users/services/accessControlStore';
 import { getCurrentAuthSession } from './authSession';
@@ -65,11 +65,11 @@ export function AuthProvider({
   const [accessVersion, setAccessVersion] = useState(0);
   useEffect(() => subscribeAccessChanged(() => setAccessVersion((v) => v + 1)), []);
 
-  // Rol efectivo: el override del registro (p.ej. admin promovió al usuario)
-  // gana sobre el rol de la sesión; si no hay override, el de la sesión.
+  // Rol efectivo: un admin hardcodeado del roster manda siempre; si no, el
+  // override del registro (p.ej. admin promovió al usuario) y, si tampoco, la
+  // sesión. Ver `effectiveRole` en accessControlStore.
   const role = useMemo<Role>(() => {
-    const registryRole = email ? getRegistryRole(email) : null;
-    return registryRole ?? sessionRole;
+    return effectiveRole(email, sessionRole);
     // accessVersion fuerza recálculo cuando cambia el registro.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [email, sessionRole, accessVersion]);

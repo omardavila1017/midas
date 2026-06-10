@@ -20,6 +20,9 @@ import { AuthApiError } from './authError';
 interface LocalUser {
   email: string;
   role: string;
+  // Módulos (AppTabId) hardcodeados que ve este usuario. Solo aplica a `user`
+  // (admin ve todo). Se siembran al registro de permisos; ver accessControlStore.
+  permissions?: string[];
   // Opcional: los usuarios del JSON arrancan SIN contraseña (pre-registrados).
   // La contraseña la define el usuario en su primer ingreso y vive en el overlay.
   passwordHash?: string;
@@ -145,13 +148,19 @@ export function getLocalUserRole(email: string): Role | null {
 }
 
 /**
- * Lista cruda de usuarios del JSON local (correo + rol tal cual viene en el
- * archivo, que puede ser granular legacy). Solo para SEMBRAR el registro de
- * usuarios/permisos cuando el modo local está activo. Vacío si está deshabilitado.
+ * Lista cruda de usuarios del JSON local (correo + rol + permisos hardcodeados
+ * tal cual vienen en el archivo; el rol puede ser granular legacy). Solo para
+ * SEMBRAR el registro de usuarios/permisos cuando el modo local está activo.
+ * Vacío si está deshabilitado. `permissions` siempre es un arreglo (puede estar
+ * vacío para los usuarios sin módulos asignados).
  */
-export function listLocalUsers(): { email: string; role: string }[] {
+export function listLocalUsers(): { email: string; role: string; permissions: string[] }[] {
   if (!isLocalAuthEnabled()) return [];
-  return config.users.map((u) => ({ email: normalizeEmail(u.email), role: u.role }));
+  return config.users.map((u) => ({
+    email: normalizeEmail(u.email),
+    role: u.role,
+    permissions: Array.isArray(u.permissions) ? u.permissions : [],
+  }));
 }
 
 /**

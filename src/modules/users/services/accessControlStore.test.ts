@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   __resetAccessRegistryForTests,
   canAccess,
+  effectiveRole,
   exportRegistryJson,
   getGrantedTabs,
   getManagedUser,
@@ -13,10 +14,12 @@ import {
 } from './accessControlStore';
 
 // Sembrado desde el JSON local (authLocalUsers.json, enabled). El roster está
-// hardcodeado con roles admin/user: este usuario arranca como `user` SIN
-// permisos (un admin se los prende desde el portal).
+// hardcodeado con roles admin/user + permisos por usuario.
 const ADMIN = 'agustin.blanco@gruposenda.com';
+// `user` con permisos hardcodeados (Fideicomiso/Venta/Cobranza/Clientes).
 const SEEDED_USER = 'blanca.reyes@gruposenda.com';
+// `user` hardcodeado SIN permisos (arranca sin acceso a ningún módulo).
+const SEEDED_USER_NO_PERMS = 'marco.guajardo@gruposenda.com';
 
 beforeEach(() => {
   localStorage.clear();
@@ -32,10 +35,19 @@ describe('accessControlStore seeding', () => {
     const users = listManagedUsers();
     expect(users.length).toBeGreaterThan(0);
     expect(getManagedUser(ADMIN)?.role).toBe('admin');
-    const seeded = getManagedUser(SEEDED_USER);
+    const seeded = getManagedUser(SEEDED_USER_NO_PERMS);
     expect(seeded?.role).toBe('user');
-    // Roster hardcodeado: arranca como `user` sin permisos (se otorgan en el portal).
+    // Roster hardcodeado sin permisos: arranca como `user` sin acceso.
     expect(seeded?.permissions).toEqual([]);
+  });
+
+  it('seeds the hardcoded per-user permissions from the JSON roster', () => {
+    const blanca = getManagedUser(SEEDED_USER);
+    expect(blanca?.role).toBe('user');
+    // Permisos hardcodeados en authLocalUsers.json (orden no garantizado).
+    expect([...(blanca?.permissions ?? [])].sort()).toEqual(
+      ['clients', 'collections', 'fideicomiso', 'venta'].sort(),
+    );
   });
 });
 
@@ -46,18 +58,33 @@ describe('canAccess', () => {
     expect(canAccess(ADMIN, 'admin', 'permisos')).toBe(true);
   });
 
-  it('registry admin role overrides a weaker session role', () => {
+  it('hardcoded admin role overrides a weaker session role', () => {
     expect(canAccess(ADMIN, 'none', 'financialProjection')).toBe(true);
+  });
+
+  it('a hardcoded admin can always enter even with a stale/demoted registry', () => {
+    // Simula un registro corrupto que degrada al admin a `user` sin permisos
+    // (la causa del bug "los admins no pueden entrar"): el rol hardcodeado manda.
+    setUserRole(ADMIN, 'user');
+    expect(effectiveRole(ADMIN, 'none')).toBe('admin');
+    expect(canAccess(ADMIN, 'none', 'financialProjection')).toBe(true);
+    expect(canAccess(ADMIN, 'user', 'users')).toBe(true);
+  });
+
+  it('serves the hardcoded permissions to a seeded user', () => {
+    expect(canAccess(SEEDED_USER, 'user', 'collections')).toBe(true);
+    expect(canAccess(SEEDED_USER, 'user', 'venta')).toBe(true);
+    expect(canAccess(SEEDED_USER, 'user', 'taxes')).toBe(false);
   });
 
   it('limits a user to granted tabs and blocks admin-only tabs', () => {
     // Arranca sin permisos; un admin le prende `collections` desde el portal.
-    expect(canAccess(SEEDED_USER, 'user', 'collections')).toBe(false);
-    setPermission(SEEDED_USER, 'collections', true);
-    expect(canAccess(SEEDED_USER, 'user', 'collections')).toBe(true);
-    expect(canAccess(SEEDED_USER, 'user', 'taxes')).toBe(false);
-    expect(canAccess(SEEDED_USER, 'user', 'users')).toBe(false);
-    expect(canAccess(SEEDED_USER, 'user', 'permisos')).toBe(false);
+    expect(canAccess(SEEDED_USER_NO_PERMS, 'user', 'collections')).toBe(false);
+    setPermission(SEEDED_USER_NO_PERMS, 'collections', true);
+    expect(canAccess(SEEDED_USER_NO_PERMS, 'user', 'collections')).toBe(true);
+    expect(canAccess(SEEDED_USER_NO_PERMS, 'user', 'taxes')).toBe(false);
+    expect(canAccess(SEEDED_USER_NO_PERMS, 'user', 'users')).toBe(false);
+    expect(canAccess(SEEDED_USER_NO_PERMS, 'user', 'permisos')).toBe(false);
   });
 
   it('falls back to the session role for emails not in the registry', () => {
