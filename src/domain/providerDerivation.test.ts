@@ -89,4 +89,84 @@ describe('deriveProvidersFromJde — clasificación de empleados', () => {
     expect(providers[0].isEmployee).toBeFalsy();
     expect(providers[0].type).toBe('DIESEL');
   });
+
+  it('marca empleado por pensión alimenticia', () => {
+    const providers = deriveProvidersFromJde({
+      pagoProveedorRecords: [pago({
+        claveProveedor: '52783473',
+        nombreProveedor: 'ALMA ROSA CHAVES CASTAÑUELA',
+        clasificacionProveedor: 'PENSION ALIMENTICIA',
+      })],
+    });
+    expect(providers).toHaveLength(1);
+    expect(providers[0].isEmployee).toBe(true);
+    expect(providers[0].type).toBe(EMPLOYEE_PROVIDER_TYPE);
+  });
+
+  it('persona física con categoría Recursos Humanos → empleado', () => {
+    const providers = deriveProvidersFromJde({
+      agedBalanceRecords: [aged({
+        noProveedor: '71675620',
+        nombre: 'ANA LIZETH LOPEZ GAYTAN',
+        clasificacionProveedor: 'Recursos Humanos',
+      })],
+    });
+    expect(providers).toHaveLength(1);
+    expect(providers[0].isEmployee).toBe(true);
+    expect(providers[0].type).toBe(EMPLOYEE_PROVIDER_TYPE);
+  });
+
+  it('razón social con categoría Recursos Humanos sigue siendo proveedor comercial', () => {
+    const providers = deriveProvidersFromJde({
+      agedBalanceRecords: [aged({
+        noProveedor: '88001122',
+        nombre: 'SERVICIOS DE CAPITAL HUMANO SA DE CV',
+        clasificacionProveedor: 'Recursos Humanos',
+      })],
+    });
+    expect(providers).toHaveLength(1);
+    expect(providers[0].isEmployee).toBeFalsy();
+    expect(providers[0].type).toBe('Recursos Humanos');
+  });
+});
+
+describe('deriveProvidersFromJde — llaves JDE en notación científica', () => {
+  it('fusiona por nombre el registro con llave científica en el de número íntegro', () => {
+    const providers = deriveProvidersFromJde({
+      agedBalanceRecords: [aged({
+        noProveedor: '52783473',
+        nombre: 'ALMA ROSA CHAVES CASTAÑUELA',
+        importePendientePesos: 1000,
+      })],
+      pagoProveedorRecords: [pago({
+        claveProveedor: '5.27835e+007',
+        nombreProveedor: 'ALMA ROSA CHAVES CASTAÑUELA',
+        importePesos: 5000,
+      })],
+    });
+    expect(providers).toHaveLength(1);
+    expect(providers[0].numProveedorJDE).toBe('52783473');
+  });
+
+  it('llave científica sin contraparte por nombre queda como fila aparte con la llave expandida', () => {
+    const providers = deriveProvidersFromJde({
+      pagoProveedorRecords: [pago({
+        claveProveedor: '5.27835e+007',
+        nombreProveedor: 'PROVEEDOR HUERFANO',
+      })],
+    });
+    expect(providers).toHaveLength(1);
+    expect(providers[0].id).toBe('derived-52783500');
+  });
+
+  it('no fusiona cuando hay más de un candidato homónimo con número íntegro', () => {
+    const providers = deriveProvidersFromJde({
+      agedBalanceRecords: [
+        aged({ noProveedor: '100001', nombre: 'JUAN PEREZ' }),
+        aged({ noProveedor: '100002', nombre: 'JUAN PEREZ' }),
+      ],
+      pagoProveedorRecords: [pago({ claveProveedor: '1.0e+005', nombreProveedor: 'JUAN PEREZ' })],
+    });
+    expect(providers).toHaveLength(3);
+  });
 });

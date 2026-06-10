@@ -38,11 +38,30 @@ export interface ProviderBusinessClassification {
   label: string;
 }
 
+/**
+ * Algunos endpoints JDE serializan el número de proveedor como float .NET
+ * ("5.27835e+007"). La mantisa ya perdió precisión (52783500 ≠ 52783473),
+ * así que la llave expandida NO es confiable para join — sólo sirve como
+ * llave estable; el dedup real ocurre por nombre en providerDerivation.
+ */
+const SCIENTIFIC_NOTATION_RE = /^\d+(?:\.\d+)?[eE][+-]?\d+$/;
+
+export function isScientificJdeKey(value: string | number | undefined | null): boolean {
+  if (value === undefined || value === null) return false;
+  return SCIENTIFIC_NOTATION_RE.test(String(value).trim());
+}
+
 /** Normaliza un número de proveedor JDE a un string canónico. */
 export function normalizeJdeKey(value: string | number | undefined | null): string {
   if (value === undefined || value === null) return '';
   const text = String(value).trim();
   if (!text) return '';
+  if (SCIENTIFIC_NOTATION_RE.test(text)) {
+    // Expandir en vez de strip de dígitos (que mezclaba mantisa + exponente
+    // en una llave basura: "5.27835e+007" → "527835007").
+    const num = Number(text);
+    if (Number.isFinite(num) && Math.abs(num) < 1e15) return String(Math.round(num));
+  }
   const digits = text.replace(/\D+/g, '');
   if (digits) return String(Number(digits));
   return text.toUpperCase();

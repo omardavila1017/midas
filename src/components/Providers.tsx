@@ -62,6 +62,12 @@ const PAUSAR_BADGE: ChipStyle = {
   label: CLASIFICACION_LABELS.PAUSAR, description: 'Alberto pidió pausar pagos. Bandera operativa independiente del score.',
 };
 
+const EMPLOYEE_CHIP: ChipStyle = {
+  bg: 'var(--gray-50)', text: 'var(--gray-600)', border: 'var(--gray-200)', dot: 'var(--gray-400)',
+  label: 'Prestaciones',
+  description: 'Empleados pagados vía CXP (nómina, finiquitos, pensiones alimenticias, reembolsos). No son proveedores comerciales — clic para verlos.',
+};
+
 const FREQ_ORDER = ['Diario', 'Semanal', 'Quincenal', 'Mensual', 'Bimestral/Trimestral', 'Bimestral', 'Trimestral', 'Semestral', 'Anual/Esporádico', 'Anual', 'Pago único', 'Esporádico'];
 
 interface Props {
@@ -92,21 +98,31 @@ export default function Providers({ providers, cxpRecords, spendIndex, onReplace
   const [scoreFilter, setScoreFilter] = useState<ScoreFilter>('all');
   const [freqFilter, setFreqFilter] = useState<FreqFilter>('all');
   const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>('all');
+  const [showEmployees, setShowEmployees] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [selectedProvider, setSelectedProvider] = useState<Provider | null>(null);
 
+  // ─── Segmento empleados (Prestaciones) vs proveedores comerciales ─────
+  // Los empleados pagados vía CXP (isEmployee) salen del listado y de los
+  // conteos por default; el chip "Prestaciones" los muestra aparte.
+  const employeeCount = useMemo(() => providers.reduce((n, p) => n + (p.isEmployee ? 1 : 0), 0), [providers]);
+  const baseProviders = useMemo(
+    () => providers.filter((p) => (showEmployees ? p.isEmployee : !p.isEmployee)),
+    [providers, showEmployees],
+  );
+
   // ─── Conteos por bucket de score ──────────────────────────────────────
   const scoreCounts = useMemo(() => {
     const out: Record<ScoreBucket, number> = { CRITICO: 0, ALTO: 0, MEDIO: 0, BAJO: 0 };
-    for (const p of providers) out[bucketOf(p)]++;
+    for (const p of baseProviders) out[bucketOf(p)]++;
     return out;
-  }, [providers]);
+  }, [baseProviders]);
 
   // ─── Listas únicas para filtros ───────────────────────────────────────
   const frequencies = useMemo(() => {
     const set = new Set<string>();
-    providers.forEach((p) => {
+    baseProviders.forEach((p) => {
       if (p.frecuenciaHistorica) set.add(p.frecuenciaHistorica);
     });
     return Array.from(set).sort((a, b) => {
@@ -115,20 +131,20 @@ export default function Providers({ providers, cxpRecords, spendIndex, onReplace
       if (ai !== -1 && bi !== -1) return ai - bi;
       return a.localeCompare(b);
     });
-  }, [providers]);
+  }, [baseProviders]);
 
   const categories = useMemo(() => {
     const set = new Set<string>();
-    providers.forEach((p) => {
+    baseProviders.forEach((p) => {
       if (p.type) set.add(p.type);
     });
     return Array.from(set).sort();
-  }, [providers]);
+  }, [baseProviders]);
 
   // ─── Filtrado ─────────────────────────────────────────────────────────
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return providers
+    return baseProviders
       .filter((p) => {
         if (scoreFilter !== 'all' && bucketOf(p) !== scoreFilter) return false;
         if (freqFilter !== 'all' && p.frecuenciaHistorica !== freqFilter) return false;
@@ -151,14 +167,15 @@ export default function Providers({ providers, cxpRecords, spendIndex, onReplace
         if (aScore !== bScore) return bScore - aScore;
         return a.name.localeCompare(b.name, 'es');
       });
-  }, [providers, query, scoreFilter, freqFilter, categoryFilter]);
+  }, [baseProviders, query, scoreFilter, freqFilter, categoryFilter]);
 
-  const filtersActive = query.length > 0 || scoreFilter !== 'all' || freqFilter !== 'all' || categoryFilter !== 'all';
+  const filtersActive = query.length > 0 || scoreFilter !== 'all' || freqFilter !== 'all' || categoryFilter !== 'all' || showEmployees;
   const clearFilters = () => {
     setQuery('');
     setScoreFilter('all');
     setFreqFilter('all');
     setCategoryFilter('all');
+    setShowEmployees(false);
   };
 
   const handleSyncCatalog = async () => {
@@ -216,6 +233,15 @@ export default function Providers({ providers, cxpRecords, spendIndex, onReplace
               />
             );
           })}
+          {employeeCount > 0 && (
+            <StatChip
+              label={EMPLOYEE_CHIP.label}
+              count={employeeCount}
+              style={EMPLOYEE_CHIP}
+              active={showEmployees}
+              onClick={() => setShowEmployees((v) => !v)}
+            />
+          )}
         </div>
       )}
 
@@ -258,9 +284,9 @@ export default function Providers({ providers, cxpRecords, spendIndex, onReplace
             </button>
           )}
           <div className="ml-auto text-[12px] text-[var(--gray-400)] tabular-nums">
-            {filtered.length === providers.length
-              ? `${providers.length} total`
-              : `${filtered.length} de ${providers.length}`}
+            {filtered.length === baseProviders.length
+              ? `${baseProviders.length} total`
+              : `${filtered.length} de ${baseProviders.length}`}
           </div>
         </div>
       )}

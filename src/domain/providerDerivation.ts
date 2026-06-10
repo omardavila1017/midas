@@ -15,7 +15,8 @@
 
 import type { Provider, ProviderFlexibility, ProviderRisk } from './types';
 import type { ComprasRecord, PagoProveedorRecord } from '../services/jdeTypes';
-import { normalizeJdeKey, normalizeProviderName } from './providerIdentity';
+import { isScientificJdeKey, normalizeJdeKey, normalizeProviderName } from './providerIdentity';
+import { isPersonName } from './personNameHeuristic';
 
 /**
  * Tipo/categoría canónica asignada a los "proveedores" que en realidad son
@@ -25,7 +26,14 @@ import { normalizeJdeKey, normalizeProviderName } from './providerIdentity';
 export const EMPLOYEE_PROVIDER_TYPE = 'Prestaciones';
 
 /** Patrones de clasificación textual que delatan un pago a empleado. */
-const EMPLOYEE_CLASS_RE = /\b(N[OÓ]MINA|REEMBOLSO|VALE|VI[AÁ]TIC|FINIQUITO|AGUINALDO)/i;
+const EMPLOYEE_CLASS_RE = /\b(N[OÓ]MINA|REEMBOLSO|VALE|VI[AÁ]TIC|FINIQUITO|AGUINALDO|PENSI[OÓ]N(?:ES)?\s+ALIMENT)/i;
+
+/**
+ * "Recursos Humanos" como categoría es ambigua: una agencia de RH es proveedor
+ * real, pero una PERSONA con esa categoría es un empleado pagado vía CXP.
+ * Sólo dispara combinada con `isPersonName` (ver paso 4 del derivador).
+ */
+const HR_CATEGORY_RE = /\bRECURSOS\s+HUMANOS\b/i;
 
 /**
  * Señal autoritativa del API: `PagoProveedorRecord.tipoBusqueda === 'Employees'`
@@ -119,6 +127,12 @@ interface ProviderAccumulator {
   lastSeen?: string;
   /** Empleado disfrazado de proveedor (nómina/reembolsos) según señal del API. */
   isEmployee?: boolean;
+  /**
+   * TODOS los registros fuente traían el número JDE como float .NET en
+   * notación científica ("5.27835e+007") — la llave perdió precisión y no es
+   * confiable para join; candidata a merge por nombre (ver paso 3.5).
+   */
+  lossyKey?: boolean;
 }
 
 type CategorySource =
@@ -191,6 +205,7 @@ function pushSignal(acc: ProviderAccumulator, source: CategorySource, value: str
 function ensureAcc(map: Map<string, ProviderAccumulator>, num: string): ProviderAccumulator | null {
   const jdeKey = normalizeJdeKey(num);
   if (!jdeKey) return null;
+  const scientific = isScientificJdeKey(num);
   let acc = map.get(jdeKey);
   if (!acc) {
     acc = {
@@ -201,8 +216,13 @@ function ensureAcc(map: Map<string, ProviderAccumulator>, num: string): Provider
       volume: 0,
       txCount: 0,
       sources: new Set(),
+      lossyKey: scientific,
     };
     map.set(jdeKey, acc);
+  } else if (!scientific && acc.lossyKey) {
+    // Al menos un registro trae el número íntegro → la llave es confiable.
+    acc.lossyKey = false;
+    acc.numProveedor = num;
   }
   return acc;
 }
@@ -313,6 +333,10 @@ export function deriveProvidersFromJde(inputs: DeriveProvidersInputs): Provider[
     updateLastSeen(acc, rec.fechaPago);
   }
 
+  // 3.5) Fusionar acumuladores con llave científica (precisión perdida) en su
+  // contraparte con número íntegro, vía nombre normalizado.
+  mergeLossyKeyAccumulators(accs);
+
   // 4) Build Provider[] desde acumuladores. Sin match con overlay → SIN SCORE.
   const overlay = inputs.scoreOverlay;
   const providers: Provider[] = [];
@@ -321,6 +345,18 @@ export function deriveProvidersFromJde(inputs: DeriveProvidersInputs): Provider[
     const rawName = pickBestName(acc.names) || `Proveedor ${acc.numProveedor}`;
     const categoriaRaw = pickCategorySignal(acc.categorySignals);
     const categoria = applyBusinessRules(rawName, categoriaRaw);
+    // Última pasada de detección de empleado sobre TODAS las señales de
+    // categoría acumuladas (cubre compras y pp-financiera, que los loops por
+    // fuente no inspeccionan) + persona física clasificada "Recursos Humanos".
+    if (!acc.isEmployee) {
+      const signalTexts = acc.categorySignals.map((s) => s.value);
+      if (
+        isEmployeeClassificationText(...signalTexts)
+        || (signalTexts.some((t) => HR_CATEGORY_RE.test(t)) && isPersonName(rawName))
+      ) {
+        acc.isEmployee = true;
+      }
+    }
     // Empleados disfrazados de proveedor: tipo canónico propio para sacarlos
     // del bucket "Sin clasificar" / del conteo de proveedores sin catálogo.
     const resolvedType = acc.isEmployee
@@ -372,6 +408,56 @@ export function deriveProvidersFromJde(inputs: DeriveProvidersInputs): Provider[
 
   providers.sort((a, b) => a.name.localeCompare(b.name, 'es'));
   return providers;
+}
+
+function accNameKeys(acc: ProviderAccumulator): Set<string> {
+  const keys = new Set<string>();
+  for (const n of acc.names) {
+    const key = normalizeProviderName(n.name);
+    if (key) keys.add(key);
+  }
+  return keys;
+}
+
+/**
+ * Fusiona acumuladores cuya llave JDE vino SIEMPRE en notación científica
+ * (float .NET — mantisa truncada, irrecuperable) en el acumulador con número
+ * íntegro que comparta nombre normalizado. Sólo fusiona con candidato ÚNICO;
+ * homónimos o sin match quedan como fila aparte (con la llave expandida).
+ */
+function mergeLossyKeyAccumulators(accs: Map<string, ProviderAccumulator>): void {
+  const lossy: ProviderAccumulator[] = [];
+  const byName = new Map<string, ProviderAccumulator[]>();
+  for (const acc of accs.values()) {
+    if (acc.lossyKey) {
+      lossy.push(acc);
+      continue;
+    }
+    for (const key of accNameKeys(acc)) {
+      const list = byName.get(key);
+      if (list) list.push(acc);
+      else byName.set(key, [acc]);
+    }
+  }
+  if (lossy.length === 0) return;
+
+  for (const acc of lossy) {
+    const candidates = new Set<ProviderAccumulator>();
+    for (const key of accNameKeys(acc)) {
+      for (const candidate of byName.get(key) ?? []) candidates.add(candidate);
+    }
+    if (candidates.size !== 1) continue;
+    const target = candidates.values().next().value as ProviderAccumulator;
+    target.names.push(...acc.names);
+    target.categorySignals.push(...acc.categorySignals);
+    target.volume += acc.volume;
+    target.txCount += acc.txCount;
+    for (const source of acc.sources) target.sources.add(source);
+    if (target.diasCreditoHint === undefined) target.diasCreditoHint = acc.diasCreditoHint;
+    if (acc.lastSeen && (!target.lastSeen || acc.lastSeen > target.lastSeen)) target.lastSeen = acc.lastSeen;
+    if (acc.isEmployee) target.isEmployee = true;
+    accs.delete(acc.jdeKey);
+  }
 }
 
 function parseCondPagoToDays(condPago: string | undefined): number | undefined {

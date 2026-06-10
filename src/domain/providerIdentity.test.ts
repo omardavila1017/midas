@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { Provider } from './types';
 import {
   buildProviderIndex,
+  isScientificJdeKey,
+  normalizeJdeKey,
   providerBusinessClassification,
   provierClassificationLabel,
   reportUnmatchedProviders,
@@ -59,5 +61,27 @@ describe('reportUnmatchedProviders', () => {
     expect(report.matched).toBe(1);
     expect(report.unmatched).toBe(1);
     expect(report.unmatchedSamples.map((s) => s.jdeCode)).toEqual(['999999']);
+  });
+});
+
+describe('normalizeJdeKey — notación científica', () => {
+  it('expande floats .NET en vez de mezclar mantisa y exponente', () => {
+    expect(normalizeJdeKey('5.27835e+007')).toBe('52783500');
+    expect(normalizeJdeKey('1.0e+005')).toBe('100000');
+    expect(normalizeJdeKey('7.16756e+007')).toBe('71675600');
+  });
+
+  it('no altera números íntegros ni el strip de ceros a la izquierda', () => {
+    expect(normalizeJdeKey('52783473')).toBe('52783473');
+    expect(normalizeJdeKey('00107671')).toBe('107671');
+    expect(normalizeJdeKey(' 107671 ')).toBe('107671');
+    expect(normalizeJdeKey('')).toBe('');
+  });
+
+  it('detecta la forma científica con isScientificJdeKey', () => {
+    expect(isScientificJdeKey('5.27835e+007')).toBe(true);
+    expect(isScientificJdeKey('1E5')).toBe(true);
+    expect(isScientificJdeKey('52783473')).toBe(false);
+    expect(isScientificJdeKey(undefined)).toBe(false);
   });
 });
