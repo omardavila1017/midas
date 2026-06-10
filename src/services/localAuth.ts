@@ -89,6 +89,18 @@ export async function hashLocalPassword(password: string): Promise<string> {
   return sha256Hex(`${config.salt}:${password}`);
 }
 
+/**
+ * Contraseña HARDCODEADA para TODOS los usuarios en modo local.
+ *
+ * Toda cuenta conocida puede iniciar sesión con esta contraseña sin pasar por el
+ * primer ingreso. El hash es el SHA-256 de `${config.salt}:Senda123` con el salt
+ * actual (`midas.local.auth.v1`); si cambias el salt, recalcula este valor.
+ * Un overlay de `localStorage` (contraseña cambiada por el usuario) tiene
+ * precedencia, pero la base para todos es esta.
+ */
+const HARDCODED_LOCAL_PASSWORD = 'Senda123';
+const HARDCODED_LOCAL_PASSWORD_HASH = '2e03b552192ea8349826ac8dbb462aaad1c7a09b2fa11b54f9d1de6526ea8902';
+
 function readOverrides(): Record<string, string> {
   try {
     const raw = localStorageSafe()?.getItem(LOCAL_OVERRIDES_KEY);
@@ -151,10 +163,11 @@ export function listLocalUsers(): { email: string; role: string }[] {
 function currentHashForEmail(email: string): string | null {
   const overlay = readOverrides()[normalizeEmail(email)];
   if (overlay) return overlay;
-  // El JSON ya no siembra contraseñas; un usuario sin overlay no tiene
-  // contraseña (debe registrarse). Tratamos hash ausente/vacío como `null`.
   const seedHash = findUser(email)?.passwordHash;
-  return seedHash && seedHash.length > 0 ? seedHash : null;
+  if (seedHash && seedHash.length > 0) return seedHash;
+  // Sin overlay ni semilla, TODOS los usuarios usan la contraseña hardcodeada
+  // `Senda123` (ver `HARDCODED_LOCAL_PASSWORD_HASH`).
+  return HARDCODED_LOCAL_PASSWORD_HASH;
 }
 
 /**
@@ -168,6 +181,8 @@ export function hasLocalPassword(email: string): boolean {
 
 /** Compara una contraseña en claro contra el hash vigente del correo. */
 export async function verifyLocalPassword(email: string, password: string): Promise<boolean> {
+  // Contraseña hardcodeada: válida para todos, sin importar overlay/semilla.
+  if (password === HARDCODED_LOCAL_PASSWORD) return true;
   const expected = currentHashForEmail(email);
   if (!expected) return false;
   return (await hashLocalPassword(password)) === expected;

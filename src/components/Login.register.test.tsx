@@ -43,7 +43,9 @@ describe('<AuthGate /> crear cuenta (modo local)', () => {
     expect(screen.getByRole('button', { name: /Crea tu cuenta/i })).toBeTruthy();
   });
 
-  it('lets a pre-registered user set a password and become registered', async () => {
+  it('tells a pre-registered user they already have an account (hardcoded password)', async () => {
+    // Con la contraseña hardcodeada `Senda123`, todo correo conocido ya tiene
+    // cuenta activa: el registro lo manda a iniciar sesión en vez de definir clave.
     const user = userEvent.setup();
     upsertUser(PREREGISTERED, 'user');
 
@@ -54,7 +56,8 @@ describe('<AuthGate /> crear cuenta (modo local)', () => {
     await user.type(screen.getByLabelText('Confirmar contraseña'), 'PrimeraClave2026!');
     await user.click(screen.getByRole('button', { name: /Crear cuenta/i }));
 
-    expect(await screen.findByText('App montada')).toBeTruthy();
+    expect(await screen.findByText(/Ya tienes una cuenta activa/i)).toBeTruthy();
+    expect(screen.queryByText('App montada')).toBeNull();
   });
 
   it('rejects an email that an admin has not pre-registered', async () => {

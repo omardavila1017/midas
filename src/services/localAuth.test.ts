@@ -36,15 +36,21 @@ describe('localAuth', () => {
     );
   });
 
-  it('reports a JSON user as passwordless until a password is defined', () => {
-    // El JSON ya no trae hash semilla: el usuario está pre-registrado pero sin
-    // contraseña hasta que la define (primer ingreso / admin).
-    expect(hasLocalPassword(ADMIN)).toBe(false);
-    expect(hasLocalPassword('nuevo@gruposenda.com')).toBe(false);
+  it('treats every user as having the hardcoded password by default', async () => {
+    // Todos los correos tienen la contraseña hardcodeada `Senda123` mientras no
+    // exista un overlay propio, así que `hasLocalPassword` es siempre true.
+    expect(hasLocalPassword(ADMIN)).toBe(true);
+    expect(hasLocalPassword('nuevo@gruposenda.com')).toBe(true);
+    await expect(verifyLocalPassword(ADMIN, 'Senda123')).resolves.toBe(true);
   });
 
-  it('rejects login for a passwordless JSON user', async () => {
-    // Sin contraseña definida no se puede iniciar sesión (debe registrarse).
+  it('logs in any JSON user with the hardcoded password', async () => {
+    const session = await localLogin(ADMIN, 'Senda123');
+    expect(session.email).toBe(ADMIN);
+    expect(session.role).toBe('admin');
+  });
+
+  it('rejects login for a JSON user with a non-hardcoded password', async () => {
     await expect(localLogin(ADMIN, PWD)).rejects.toMatchObject({ code: 'invalid_credentials' });
   });
 
@@ -117,14 +123,17 @@ describe('localAuth', () => {
     });
   });
 
-  it('sets a password for an email outside the JSON (admin / first login)', async () => {
+  it('sets a password overlay for an email outside the JSON (admin / first login)', async () => {
     const NEW = 'nuevo@gruposenda.com';
-    expect(hasLocalPassword(NEW)).toBe(false);
+    // Arranca con la contraseña hardcodeada (sin overlay propio).
+    expect(hasLocalPassword(NEW)).toBe(true);
+    await expect(verifyLocalPassword(NEW, 'Senda123')).resolves.toBe(true);
 
     await setLocalPassword(NEW, PWD);
 
     expect(hasLocalPassword(NEW)).toBe(true);
     await expect(verifyLocalPassword(NEW, PWD)).resolves.toBe(true);
+    // 'otra' no es ni el overlay ni la hardcodeada → inválida.
     await expect(verifyLocalPassword(NEW, 'otra')).resolves.toBe(false);
   });
 });

@@ -27,43 +27,38 @@ describe('authApi (modo local)', () => {
     __resetAccessRegistryForTests();
   });
 
-  it('routes a passwordless JSON user through first login, then accepts the password', async () => {
-    // El JSON ya no siembra contraseñas: el usuario está pre-registrado pero sin
-    // contraseña, así que primero la define (igual que un alta de admin).
-    expect(requiresPasswordSetup(JSON_ADMIN)).toBe(true);
-    await completeFirstLogin(JSON_ADMIN, 'PrimeraClave2026!');
-    await expect(login(JSON_ADMIN, 'PrimeraClave2026!')).resolves.toMatchObject({
+  it('logs in any JSON user with the hardcoded password, no setup needed', async () => {
+    // Con la contraseña hardcodeada `Senda123`, nadie pasa por el primer ingreso.
+    expect(requiresPasswordSetup(JSON_ADMIN)).toBe(false);
+    await expect(login(JSON_ADMIN, 'Senda123')).resolves.toMatchObject({
       email: JSON_ADMIN,
       role: 'admin',
       passwordExpired: false,
     });
   });
 
-  it('flags a registered-but-passwordless user as needing setup', () => {
+  it('never flags a known user as needing setup (hardcoded password)', () => {
     upsertUser(REGISTERED, 'user');
-    expect(requiresPasswordSetup(REGISTERED)).toBe(true);
-    // Un usuario del JSON ahora también arranca sin contraseña → necesita setup.
-    expect(requiresPasswordSetup(JSON_ADMIN)).toBe(true);
-    // Un correo desconocido no es "registrado": tampoco entra al primer ingreso.
+    expect(requiresPasswordSetup(REGISTERED)).toBe(false);
+    expect(requiresPasswordSetup(JSON_ADMIN)).toBe(false);
+    // Un correo desconocido tampoco entra al primer ingreso.
     expect(requiresPasswordSetup('desconocido@gruposenda.com')).toBe(false);
   });
 
-  it('signals password_setup_required when a registered user logs in without a password', async () => {
+  it('logs in a registered user with the hardcoded password', async () => {
     upsertUser(REGISTERED, 'user');
-    await expect(login(REGISTERED, 'loquesea')).rejects.toMatchObject({
-      code: 'password_setup_required',
-    });
+    await expect(login(REGISTERED, 'Senda123')).resolves.toMatchObject({ email: REGISTERED, role: 'user' });
+    await expect(login(REGISTERED, 'loquesea')).rejects.toMatchObject({ code: 'invalid_credentials' });
   });
 
-  it('completes a first login (register), then accepts the new password', async () => {
+  it('rejects completeFirstLogin because every account already has the hardcoded password', async () => {
     upsertUser(REGISTERED, 'user');
 
-    const session = await completeFirstLogin(REGISTERED, 'PrimeraClave2026!');
-    expect(session).toMatchObject({ email: REGISTERED, role: 'user' });
-
-    // Ya no necesita setup y la contraseña recién creada entra.
-    expect(requiresPasswordSetup(REGISTERED)).toBe(false);
-    await expect(login(REGISTERED, 'PrimeraClave2026!')).resolves.toMatchObject({ email: REGISTERED });
+    await expect(completeFirstLogin(REGISTERED, 'PrimeraClave2026!')).rejects.toMatchObject({
+      code: 'validation',
+    });
+    // El usuario simplemente inicia sesión con la contraseña hardcodeada.
+    await expect(login(REGISTERED, 'Senda123')).resolves.toMatchObject({ email: REGISTERED });
   });
 
   it('refuses a first login for an unregistered email', async () => {
