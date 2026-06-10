@@ -28,7 +28,8 @@ import { listConfiguredUsers } from '../../../config/userRoles';
 // nuevo (correos + roles + permisos por módulo) en vez de quedarse con el roster
 // viejo en cache. Sube esta versión cada vez que cambies roles/permisos en el JSON.
 // v4 (2026-06-10): alta de jesus.villarreal@gruposenda.com (compras + pagos + providers).
-export const ACCESS_REGISTRY_KEY = 'midas.users.registry.v4';
+// v5 (2026-06-10): alta de maximiliano.rodriguez@gruposenda.com (admin).
+export const ACCESS_REGISTRY_KEY = 'midas.users.registry.v5';
 const ACCESS_CHANGED_EVENT = 'midas:access-changed';
 
 /** Rol del registro: nunca `none` (un usuario registrado es admin o user). */

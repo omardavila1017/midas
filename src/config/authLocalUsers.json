@@ -6,6 +6,7 @@
   "users": [
     { "email": "blanca.reyes@gruposenda.com", "role": "user", "permissions": ["fideicomiso", "venta", "collections", "clients"] },
     { "email": "marco.guajardo@gruposenda.com", "role": "admin" },
+    { "email": "maximiliano.rodriguez@gruposenda.com", "role": "admin" },
     { "email": "francisco.boils@gruposenda.com", "role": "admin" },
     { "email": "jose.gallegos@gruposenda.com", "role": "user", "permissions": ["taxes"] },
     { "email": "agustin.blanco@gruposenda.com", "role": "admin" },
