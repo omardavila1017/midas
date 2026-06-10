@@ -39,8 +39,6 @@ import { computeMinimumOperatingExpense } from '../../../domain/minimumOperating
 import { ScenarioComparisonBar } from '../components/ScenarioComparisonBar';
 import { DeferredMount } from '../components/DeferredMount';
 import { ChartSkeleton } from '../components/SectionSkeletons';
-import { CollapsibleSection } from '../components/CollapsibleSection';
-import { InternalTransfersDebugPanel } from '../components/InternalTransfersDebugPanel';
 import { clearProjectionRunCache, fingerprintArray, primeProjectionRunCache } from '../services/projectionCache';
 import { clearProjectionSourceCache } from '../services/financialProjectionService';
 import { onMemoryPressure } from '../../../services/runtimeGuardian';
@@ -513,7 +511,7 @@ async function runPreloadProjectionScenarioRuns(input: {
   const taxStore = loadTaxStore(defaultTaxStore());
   const initialCash = calculateInitialCash(props.bankStatements, props.startingBalance, { companyCode: props.companyCode });
   const supplierInitialCash = calculateCurrentBankCash(props.bankStatements, props.companyCode, initialCash);
-  const minimumCash = minimumCashFor();
+  const minimumCash = operatingFloorMonthlyFor(props.providers, props.payrollMonthlyActualJDE);
   const sharedInputsKey = [
     fingerprintArray(source.movements, (m) => m.id + ':' + (m.adjustedAmount ?? m.projectedAmount)),
     fingerprintArray(bootstrap.adjustments, (a) => a.id + ':' + a.status + ':' + a.createdAt),
@@ -849,7 +847,10 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
     () => calculateCurrentBankCash(props.bankStatements, props.companyCode, initialCash),
     [props.bankStatements, props.companyCode, initialCash],
   );
-  const minimumCash = useMemo(() => minimumCashFor(), []);
+  const minimumCash = useMemo(
+    () => operatingFloorMonthlyFor(props.providers, props.payrollMonthlyActualJDE),
+    [props.providers, props.payrollMonthlyActualJDE],
+  );
 
   // Pre-index storage by scenario for O(1) per-scenario lookups.
   const customRowsByScenario = useMemo(() => {
@@ -1380,21 +1381,6 @@ const commitQuickAdjustment = useCallback((movement: FinancialMovement, kind: 'S
           />
         </Suspense>
       </DeferredMount>
-
-      {/* TEMPORAL — depuración de traspasos internos. Cerrado + lazy: no corre
-          hasta que se abre. Se puede borrar sin afectar la proyección. */}
-      <CollapsibleSection
-        title="🔧 Traspasos internos (depuración temporal)"
-        description="Bruto mensual de traspasos internos (Σ ABONO vs Σ CARGO) con detalle por movimiento, para depurar la asimetría que no empata."
-        storageKey="proj.debug.internal-transfers"
-        defaultOpen={false}
-        lazy
-      >
-        <InternalTransfersDebugPanel
-          bankStatements={props.bankStatements}
-          companyCode={props.companyCode}
-        />
-      </CollapsibleSection>
       </>}
 
       <Suspense fallback={null}>
@@ -1575,9 +1561,15 @@ function shiftIsoDate(date: string, days: number, floorDate: string): string {
   return days < 0 && shifted < floorDate ? floorDate : shifted;
 }
 
-function minimumCashFor(): number {
-  const fallback = 20_000_000;
-  return fallback;
+/**
+ * Piso operativo mensual (proveedores Operación + nómina/finiquitos). Es el
+ * umbral de "Días en déficit": un día cuenta como déficit cuando la caja
+ * proyectada cae por debajo de este piso, no sólo cuando se vuelve negativa.
+ * Debe computarse idéntico en `preloadProjectionScenarioRuns` y en el
+ * dashboard interno para que el cache-key empate.
+ */
+function operatingFloorMonthlyFor(providers: Provider[], payrollMonthlyActualJDE?: number): number {
+  return computeMinimumOperatingExpense(providers, null, payrollMonthlyActualJDE).totalMonthly;
 }
 
 function addUtcDays(date: string, days: number): string {

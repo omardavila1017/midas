@@ -1,7 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Snowflake, AlertTriangle, Pause, Play } from 'lucide-react';
-import { clearAllMidasStorage } from '../domain/storageRegistry';
-import { clearAuth } from './Login';
+import { AlertTriangle, Pause, Play } from 'lucide-react';
 import { jdeFetchPauseGate } from '../services/pauseGate';
 
 export type BootTaskStatus = 'pending' | 'loading' | 'done' | 'error';
@@ -126,26 +124,11 @@ function heartbeatFor(taskId: string, tick: number, variantIndex: number): strin
   return lines[tick % lines.length];
 }
 
-// Cold-boot copy institucional. Centralizado para que header + splash usen
-// los mismos strings.
-export const COLD_BOOT_STRINGS = {
-  triggerButton: 'Restablecer almacenamiento local',
-  triggerButtonShort: 'Restablecer almacenamiento',
-  confirmationTitle: 'Restablecimiento y Rehidratación del Sistema',
-  confirmationBody:
-    'Esta acción eliminará la caché local del navegador y forzará una descarga completa de datos desde las fuentes raíz (JDE, TRESS y CITI). Debido al volumen de transferencia de la infraestructura corporativa, el proceso de rehidratación puede demorar aproximadamente 30 minutos. ¿Desea continuar con la sincronización forzada?',
-  btnCancel: 'Regresar al inicio',
-  btnConfirm: 'Iniciar rehidratación profunda',
-  btnExecuting: 'Restableciendo base de datos local…',
-} as const;
-
 export default function MidasSplash({ visible, tasks, startedAt }: MidasSplashProps) {
   const [leaving, setLeaving] = useState(false);
   const [heartbeatTick, setHeartbeatTick] = useState(0);
   const [elapsedSec, setElapsedSec] = useState(() => Math.max(0, Math.floor((Date.now() - startedAt) / 1000)));
   const startedAtRef = useRef(startedAt);
-  const [coldBootConfirming, setColdBootConfirming] = useState(false);
-  const [coldBootRunning, setColdBootRunning] = useState(false);
   // Pause/resume de TODOS los fetches JDE. El gate vive en jdeClient — pausar
   // bloquea cualquier nueva request (boot + refresh + manual) sin cancelar
   // in-flight. Tracking `lastError` permite mostrar el endpoint que rompió.
@@ -372,160 +355,35 @@ export default function MidasSplash({ visible, tasks, startedAt }: MidasSplashPr
         )}
 
         <div style={{ marginTop: 8, minHeight: 28, display: 'flex', justifyContent: 'center', gap: 12, alignItems: 'center' }}>
-          {!coldBootConfirming ? (
-            <>
-              <button
-                type="button"
-                onClick={() => jdeFetchPauseGate.toggle()}
-                aria-label={fetchPaused ? 'Reanudar descargas' : 'Pausar descargas'}
-                title={fetchPaused
-                  ? 'Reanudar todos los fetches'
-                  : 'Pausar todos los fetches (in-flight terminan; nuevos esperan)'}
-                style={{
-                  background: fetchPaused ? 'var(--skeuo-brass-deep)' : 'transparent',
-                  border: fetchPaused ? 'none' : '1px solid var(--skeuo-brass-deep)',
-                  color: fetchPaused ? 'var(--skeuo-paper)' : 'var(--skeuo-brass-deep)',
-                  opacity: fetchPaused ? 1 : 0.75,
-                  fontSize: 11,
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 5,
-                  padding: '4px 10px',
-                  borderRadius: 999,
-                  transition: 'opacity 120ms, background 120ms',
-                }}
-                onMouseEnter={e => { if (!fetchPaused) e.currentTarget.style.opacity = '1'; }}
-                onMouseLeave={e => { if (!fetchPaused) e.currentTarget.style.opacity = '0.75'; }}
-              >
-                {fetchPaused
-                  ? <><Play className="w-3 h-3" strokeWidth={2} /> Reanudar descargas</>
-                  : <><Pause className="w-3 h-3" strokeWidth={2} /> Pausar descargas</>}
-              </button>
-              <button
-                type="button"
-                onClick={() => setColdBootConfirming(true)}
-                style={{
-                  background: 'transparent',
-                  border: 'none',
-                  color: 'var(--skeuo-brass-deep)',
-                  opacity: 0.55,
-                  fontSize: 11,
-                  fontWeight: 500,
-                  cursor: 'pointer',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 5,
-                  padding: '4px 8px',
-                  borderRadius: 6,
-                }}
-                onMouseEnter={e => (e.currentTarget.style.opacity = '0.9')}
-                onMouseLeave={e => (e.currentTarget.style.opacity = '0.55')}
-              >
-                <Snowflake className="w-3 h-3" strokeWidth={1.75} />
-                {COLD_BOOT_STRINGS.triggerButton}
-              </button>
-            </>
-          ) : (
-            <div
-              role="dialog"
-              aria-label={COLD_BOOT_STRINGS.confirmationTitle}
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 8,
-                alignItems: 'center',
-                maxWidth: 360,
-                padding: '12px 16px',
-                borderRadius: 8,
-                background: 'var(--skeuo-paper)',
-                border: '1px solid var(--skeuo-paper-edge)',
-                boxShadow: 'var(--skeuo-emboss-md)',
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-                <AlertTriangle
-                  className="w-4 h-4"
-                  strokeWidth={2}
-                  style={{ color: '#d97706', flexShrink: 0, marginTop: 1 }}
-                />
-                <div style={{ textAlign: 'left' }}>
-                  <p
-                    style={{
-                      margin: 0,
-                      fontSize: 12,
-                      fontWeight: 600,
-                      color: 'var(--skeuo-brass-deep)',
-                      lineHeight: 1.3,
-                    }}
-                  >
-                    {COLD_BOOT_STRINGS.confirmationTitle}
-                  </p>
-                  <p
-                    style={{
-                      margin: '6px 0 0',
-                      fontSize: 11.5,
-                      lineHeight: 1.45,
-                      color: 'var(--skeuo-brass-deep)',
-                      opacity: 0.85,
-                    }}
-                  >
-                    {COLD_BOOT_STRINGS.confirmationBody}
-                  </p>
-                </div>
-              </div>
-              <div style={{ display: 'flex', gap: 6, marginTop: 4, alignSelf: 'flex-end' }}>
-                <button
-                  type="button"
-                  onClick={() => setColdBootConfirming(false)}
-                  disabled={coldBootRunning}
-                  style={{
-                    padding: '6px 12px',
-                    borderRadius: 6,
-                    border: '1px solid var(--skeuo-paper-edge)',
-                    background: 'transparent',
-                    color: 'var(--skeuo-brass-deep)',
-                    fontSize: 11,
-                    fontWeight: 500,
-                    cursor: coldBootRunning ? 'not-allowed' : 'pointer',
-                    opacity: coldBootRunning ? 0.5 : 1,
-                  }}
-                >
-                  {COLD_BOOT_STRINGS.btnCancel}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setColdBootRunning(true);
-                    try {
-                      clearAllMidasStorage();
-                      clearAuth();
-                    } finally {
-                      window.location.reload();
-                    }
-                  }}
-                  disabled={coldBootRunning}
-                  style={{
-                    padding: '6px 12px',
-                    borderRadius: 6,
-                    border: '1px solid #b45309',
-                    background: '#d97706',
-                    color: '#fff',
-                    fontSize: 11,
-                    fontWeight: 600,
-                    cursor: coldBootRunning ? 'not-allowed' : 'pointer',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 4,
-                  }}
-                >
-                  <Snowflake className="w-3 h-3" strokeWidth={2} />
-                  {coldBootRunning ? COLD_BOOT_STRINGS.btnExecuting : COLD_BOOT_STRINGS.btnConfirm}
-                </button>
-              </div>
-            </div>
-          )}
+          <button
+            type="button"
+            onClick={() => jdeFetchPauseGate.toggle()}
+            aria-label={fetchPaused ? 'Reanudar descargas' : 'Pausar descargas'}
+            title={fetchPaused
+              ? 'Reanudar todos los fetches'
+              : 'Pausar todos los fetches (in-flight terminan; nuevos esperan)'}
+            style={{
+              background: fetchPaused ? 'var(--skeuo-brass-deep)' : 'transparent',
+              border: fetchPaused ? 'none' : '1px solid var(--skeuo-brass-deep)',
+              color: fetchPaused ? 'var(--skeuo-paper)' : 'var(--skeuo-brass-deep)',
+              opacity: fetchPaused ? 1 : 0.75,
+              fontSize: 11,
+              fontWeight: 600,
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 5,
+              padding: '4px 10px',
+              borderRadius: 999,
+              transition: 'opacity 120ms, background 120ms',
+            }}
+            onMouseEnter={e => { if (!fetchPaused) e.currentTarget.style.opacity = '1'; }}
+            onMouseLeave={e => { if (!fetchPaused) e.currentTarget.style.opacity = '0.75'; }}
+          >
+            {fetchPaused
+              ? <><Play className="w-3 h-3" strokeWidth={2} /> Reanudar descargas</>
+              : <><Pause className="w-3 h-3" strokeWidth={2} /> Pausar descargas</>}
+          </button>
         </div>
       </div>
     </div>

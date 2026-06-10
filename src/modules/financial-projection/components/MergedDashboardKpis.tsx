@@ -22,6 +22,15 @@ function isRealMovement(movement: { status?: string; actualDate?: string; source
     || movement.sourceSystem === 'BANK';
 }
 
+/**
+ * Traspasos internos netos (`internal-recon:`, categoría `INTERNAL_RECON`).
+ * Anclan la caja al saldo bancario real pero NO son ingreso/egreso económico,
+ * así que se excluyen de los brutos YTD de Ingresos/Egresos operativos.
+ */
+function isInternalReconMovement(movement: { category?: string }): boolean {
+  return movement.category === 'INTERNAL_RECON';
+}
+
 export interface RunYtd {
   ingresosYtd: number;
   egresosYtd: number;
@@ -69,6 +78,8 @@ export function computeRunYtd(
     for (const id of bucket.movementIds) {
       const movement = movementById.get(id);
       if (!movement || !isRealMovement(movement)) continue;
+      // Los traspasos internos netos anclan la caja pero no son flujo económico.
+      if (isInternalReconMovement(movement)) continue;
       if (movement.type === 'INFLOW') realIncome += effectiveAmount(movement);
       else realExpense += effectiveAmount(movement);
     }
@@ -180,7 +191,7 @@ export const MinimumExpenseKpi: React.FC<{
         <div className="flex items-center justify-between text-[11px]">
           <span style={{ color: 'var(--gray-700)' }}>
             Nómina + finiquitos
-            <span className="ml-1" style={{ color: 'var(--gray-500)' }}>· TRESS prom 3m</span>
+            <span className="ml-1" style={{ color: 'var(--gray-500)' }}>· TRESS últ. semana × 4.33</span>
           </span>
           <span
             className="font-medium tabular-nums"

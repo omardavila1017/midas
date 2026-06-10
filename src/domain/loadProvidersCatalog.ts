@@ -31,6 +31,11 @@ interface ClasificacionRawEntry {
     riesgoLegal: number;
     diasCredito: number;
   } | null;
+  frecuencia?: string | null;
+  montoPromedioPago?: number | null;
+  numPagos2025?: number | null;
+  montoTotal2025?: number | null;
+  gastoMinimoMensual?: number | null;
 }
 
 interface ClasificacionShape {
@@ -40,9 +45,12 @@ interface ClasificacionShape {
 const clasificacion = clasificacionRaw as unknown as ClasificacionShape;
 
 /**
- * Score-only overlay. Solo entradas con `score` válido entran al overlay;
+ * Score overlay. Solo entradas con `score` válido entran al overlay;
  * proveedores del JSON sin score quedan fuera (el sistema los marcará como
- * "Sin score" cuando aparezcan en los datos transaccionales).
+ * "Sin score" cuando aparezcan en los datos transaccionales). Además del score
+ * se arrastra el gasto operativo precalculado (montoPromedioPago × frecuencia)
+ * que alimenta el piso "Gasto mínimo operativo" — sin esto los críticos salen
+ * en $0 al derivarse desde JDE.
  */
 export function loadProviderScoreOverlay(): ScoreOverlay {
   const entries: ScoreEntry[] = [];
@@ -53,6 +61,11 @@ export function loadProviderScoreOverlay(): ScoreOverlay {
       nombre: raw.nombre?.trim() ?? '',
       score: raw.score,
       scoreCriterios: raw.scoreCriterios ?? null,
+      frecuencia: raw.frecuencia ?? null,
+      montoPromedioPago: raw.montoPromedioPago ?? null,
+      numPagos2025: raw.numPagos2025 ?? null,
+      montoTotal2025: raw.montoTotal2025 ?? null,
+      gastoMinimoMensual: raw.gastoMinimoMensual ?? null,
     });
   }
   return buildScoreOverlay(entries);

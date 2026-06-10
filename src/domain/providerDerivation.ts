@@ -72,6 +72,16 @@ export interface ScoreEntry {
     riesgoLegal: number;
     diasCredito: number;
   } | null;
+  /**
+   * Gasto operativo precalculado del histórico de pagos (montoPromedioPago ×
+   * multiplicador de frecuencia). Alimenta el piso "Gasto mínimo operativo";
+   * sin esto los proveedores críticos derivados de JDE salen en $0.
+   */
+  frecuencia?: string | null;
+  montoPromedioPago?: number | null;
+  numPagos2025?: number | null;
+  montoTotal2025?: number | null;
+  gastoMinimoMensual?: number | null;
 }
 
 /** Umbrales fijos (mismos del JSON original): score → clasificación. */
@@ -398,11 +408,13 @@ export function deriveProvidersFromJde(inputs: DeriveProvidersInputs): Provider[
       score: score ?? undefined,
       scoreCriterios: overlayEntry?.scoreCriterios ?? undefined,
       numProveedorJDE: acc.numProveedor,
-      frecuenciaHistorica: undefined,
-      montoPromedioPago: undefined,
-      numPagos2025: undefined,
-      montoTotal2025: undefined,
-      gastoMinimoMensual: undefined,
+      // Gasto operativo precalculado del overlay (montoPromedioPago × frecuencia
+      // del histórico). Sin esto el piso "Gasto mínimo operativo" sale en $0.
+      frecuenciaHistorica: overlayEntry?.frecuencia ?? undefined,
+      montoPromedioPago: overlayEntry?.montoPromedioPago ?? undefined,
+      numPagos2025: overlayEntry?.numPagos2025 ?? undefined,
+      montoTotal2025: overlayEntry?.montoTotal2025 ?? undefined,
+      gastoMinimoMensual: overlayEntry?.gastoMinimoMensual ?? undefined,
     });
   }
 

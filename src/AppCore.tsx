@@ -89,7 +89,7 @@ const UsersDashboard = lazy(() => import('./modules/users/pages/UsersDashboard')
 const PermissionsDashboard = lazy(() => import('./modules/users/pages/PermissionsDashboard'));
 const SalesCalendarDashboard = lazy(() => import('./modules/sales/pages/SalesCalendarDashboard'));
 import ErrorBoundary from './components/ErrorBoundary';
-import MidasSplash, { type BootTask, type BootTaskStatus, COLD_BOOT_STRINGS } from './components/MidasSplash';
+import MidasSplash, { type BootTask, type BootTaskStatus } from './components/MidasSplash';
 import ChangePasswordModal from './components/ChangePasswordModal';
 import DarkModeToggle from './components/ui/DarkModeToggle';
 import { ActivityFeedPanel } from './components/ActivityFeed';
@@ -108,12 +108,11 @@ import {
   HandCoins, ChevronRight, BookUser, TrendingUp,
   Receipt, Wallet, FolderOpen,
   LogOut, ClipboardList, BarChart3, ShieldCheck, CreditCard, Scale,
-  Snowflake, AlertTriangle, Target, KeyRound,
+  Target, KeyRound,
   ShoppingCart, SlidersHorizontal,
   Menu, X,
   type LucideIcon,
 } from 'lucide-react';
-import { clearAllMidasStorage } from './domain/storageRegistry';
 import { filterActiveCompanies, matchesExclusionIdentity } from './domain/companyExclusion';
 import { applyViajesEspecialesGroup } from './domain/viajesEspecialesCatalog';
 import {
@@ -1504,42 +1503,56 @@ export default function App() {
     if (nominaRecordsDeferred.length === 0) return undefined;
     // Company filter removed → never scope payroll by cia (all companies).
     const ciaFilter = '';
-    const grossByMonth = new Map<string, number>();
-    const cashCountByMonth = new Map<string, number>();
-    const reducCountByMonth = new Map<string, number>();
+    // Piso de nómina = lo que valió la ÚLTIMA semana de nómina cerrada × 4.33
+    // (semanas/mes). Refleja el run-rate reciente en vez del promedio de 3
+    // meses (que quedaba obsoleto). Agrupamos el cash-out por semana ISO
+    // (lunes) según la fecha de pago real del periodo.
+    const WEEKS_PER_MONTH = 4.33;
+    const weekKey = (iso: string): string | null => {
+      if (!iso || iso.length < 10) return null;
+      const d = new Date(`${iso.slice(0, 10)}T00:00:00Z`);
+      if (Number.isNaN(d.getTime())) return null;
+      // Lunes de la semana (getUTCDay: 0=domingo … 6=sábado).
+      const dow = (d.getUTCDay() + 6) % 7;
+      d.setUTCDate(d.getUTCDate() - dow);
+      return d.toISOString().slice(0, 10);
+    };
+    const grossByWeek = new Map<string, number>();
+    const cashCountByWeek = new Map<string, number>();
+    const reducCountByWeek = new Map<string, number>();
     for (const r of nominaRecordsDeferred) {
       if (ciaFilter && r.cia !== ciaFilter) continue;
-      const key = `${r.year}-${String(r.month).padStart(2, '0')}`;
+      const dateIso = r.paymentDate || r.periodEndDate || `${r.year}-${String(r.month).padStart(2, '0')}-01`;
+      const wk = weekKey(dateIso);
+      if (!wk) continue;
       if (r.cashTreatment === 'CASH_OUT') {
-        grossByMonth.set(key, (grossByMonth.get(key) ?? 0) + r.amount);
-        cashCountByMonth.set(key, (cashCountByMonth.get(key) ?? 0) + 1);
+        grossByWeek.set(wk, (grossByWeek.get(wk) ?? 0) + r.amount);
+        cashCountByWeek.set(wk, (cashCountByWeek.get(wk) ?? 0) + 1);
       } else if (r.cashTreatment === 'DEDUCTION' || r.cashTreatment === 'WITHHOLDING_PAYABLE') {
-        reducCountByMonth.set(key, (reducCountByMonth.get(key) ?? 0) + 1);
+        reducCountByWeek.set(wk, (reducCountByWeek.get(wk) ?? 0) + 1);
       }
     }
-    const now = new Date();
-    const currentKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const currentWeek = weekKey(new Date().toISOString().slice(0, 10));
+    // Una semana es "cerrada" si tiene cash-out y sus deducciones ya se
+    // contabilizaron (mismo guard que el cálculo mensual previo), y NO es la
+    // semana en curso (posible nómina parcial). El guard sólo nos puede llevar
+    // a una semana MÁS antigua (segura), nunca a una parcial.
     const PARTIAL_RATIO_THRESHOLD = 0.3;
-    const closedMonths = Array.from(grossByMonth.keys())
-      .filter((k) => {
-        if (k === currentKey) return false;
-        if ((grossByMonth.get(k) ?? 0) <= 0) return false;
-        const cashCnt = cashCountByMonth.get(k) ?? 0;
+    const closedWeeks = Array.from(grossByWeek.keys())
+      .filter((wk) => {
+        if (wk === currentWeek) return false;
+        if ((grossByWeek.get(wk) ?? 0) <= 0) return false;
+        const cashCnt = cashCountByWeek.get(wk) ?? 0;
         if (cashCnt === 0) return false;
-        const reducCnt = reducCountByMonth.get(k) ?? 0;
+        const reducCnt = reducCountByWeek.get(wk) ?? 0;
         return reducCnt / cashCnt >= PARTIAL_RATIO_THRESHOLD;
       })
       .sort()
       .reverse();
-    if (closedMonths.length === 0) return undefined;
-    const windowSize = Math.min(3, closedMonths.length);
-    const windowKeys = closedMonths.slice(0, windowSize);
-    let sumGross = 0;
-    for (const k of windowKeys) {
-      sumGross += grossByMonth.get(k) ?? 0;
-    }
-    const avg = sumGross / windowSize;
-    return avg > 0 ? avg : undefined;
+    if (closedWeeks.length === 0) return undefined;
+    const lastWeekGross = grossByWeek.get(closedWeeks[0]) ?? 0;
+    const monthly = lastWeekGross * WEEKS_PER_MONTH;
+    return monthly > 0 ? monthly : undefined;
   }, [isBooted, nominaRecordsDeferred, selectedCia]);
 
   const confirmPayment = (p: ConfirmedPayment) => setConfirmedPayments(prev => [...prev, p]);
@@ -1548,8 +1561,6 @@ export default function App() {
   // ── New UI features state ──
   const { open: cmdOpen, setOpen: setCmdOpen } = useCommandPalette();
   const [activityOpen, setActivityOpen] = useState(false);
-  const [coldBootOpen, setColdBootOpen] = useState(false);
-  const [coldBootRunning, setColdBootRunning] = useState(false);
 
   // Planning scenarios + adjustments for Cmd+K — refreshed on every palette open.
   const [paletteScenarios, setPaletteScenarios] = useState<{ id: string; name: string }[]>([]);
@@ -4640,14 +4651,6 @@ export default function App() {
               <span className="hidden md:inline-flex"><GlobalScenarioSelector /></span>
             )}
             <DarkModeToggle />
-            <button
-              onClick={() => setColdBootOpen(true)}
-              title={COLD_BOOT_STRINGS.triggerButton}
-              aria-label={COLD_BOOT_STRINGS.triggerButton}
-              className="hidden sm:flex shell-icon-btn items-center justify-center w-9 h-9 rounded-[var(--radius-md)] flex-shrink-0 transition-colors duration-150"
-            >
-              <Snowflake className="w-4 h-4" strokeWidth={1.5} />
-            </button>
             {userEmail && (
               <button
                 onClick={() => setChangePasswordOpen(true)}
@@ -4750,14 +4753,6 @@ export default function App() {
             </nav>
 
             <div className="border-t px-2 py-3 flex flex-col gap-0.5" style={{ borderColor: 'var(--gray-200)' }}>
-              <button
-                onClick={() => { setMobileNavOpen(false); setColdBootOpen(true); }}
-                className="flex items-center gap-2 px-3 py-2 rounded-md text-[14px] font-medium min-h-11"
-                style={{ color: 'var(--gray-600)' }}
-              >
-                <Snowflake className="w-4 h-4" strokeWidth={1.5} />
-                {COLD_BOOT_STRINGS.triggerButton}
-              </button>
               {userEmail && (
                 <button
                   onClick={() => { setMobileNavOpen(false); setChangePasswordOpen(true); }}
@@ -4775,113 +4770,6 @@ export default function App() {
               >
                 <LogOut className="w-4 h-4" strokeWidth={1.5} />
                 Cerrar sesión
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {coldBootOpen && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="cold-boot-title"
-          onClick={() => { if (!coldBootRunning) setColdBootOpen(false); }}
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0,0,0,0.45)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 100,
-            padding: 16,
-          }}
-        >
-          <div
-            onClick={e => e.stopPropagation()}
-            style={{
-              background: 'var(--card)',
-              color: 'var(--foreground)',
-              borderRadius: 'var(--radius-lg, 12px)',
-              border: '1px solid var(--gray-200)',
-              maxWidth: 460,
-              width: '100%',
-              padding: 24,
-              boxShadow: '0 20px 60px rgba(0,0,0,0.25)',
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
-              <div
-                style={{
-                  width: 36,
-                  height: 36,
-                  borderRadius: 9999,
-                  background: 'rgba(217, 119, 6, 0.12)',
-                  color: '#d97706',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  flexShrink: 0,
-                }}
-              >
-                <AlertTriangle className="w-5 h-5" strokeWidth={1.75} />
-              </div>
-              <div style={{ flex: 1 }}>
-                <h2 id="cold-boot-title" style={{ fontSize: 17, fontWeight: 600, margin: 0, lineHeight: 1.3 }}>
-                  {COLD_BOOT_STRINGS.confirmationTitle}
-                </h2>
-                <p style={{ fontSize: 13, lineHeight: 1.55, marginTop: 10, color: 'var(--shell-text-muted, var(--gray-600))' }}>
-                  {COLD_BOOT_STRINGS.confirmationBody}
-                </p>
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
-              <button
-                onClick={() => setColdBootOpen(false)}
-                disabled={coldBootRunning}
-                style={{
-                  padding: '8px 14px',
-                  borderRadius: 8,
-                  border: '1px solid var(--gray-200)',
-                  background: 'transparent',
-                  color: 'var(--foreground)',
-                  fontSize: 13,
-                  fontWeight: 500,
-                  cursor: coldBootRunning ? 'not-allowed' : 'pointer',
-                  opacity: coldBootRunning ? 0.6 : 1,
-                }}
-              >
-                {COLD_BOOT_STRINGS.btnCancel}
-              </button>
-              <button
-                onClick={() => {
-                  setColdBootRunning(true);
-                  try {
-                    clearAllMidasStorage();
-                    clearAuth();
-                  } finally {
-                    window.location.reload();
-                  }
-                }}
-                disabled={coldBootRunning}
-                style={{
-                  padding: '8px 14px',
-                  borderRadius: 8,
-                  border: '1px solid #b45309',
-                  background: '#d97706',
-                  color: '#fff',
-                  fontSize: 13,
-                  fontWeight: 600,
-                  cursor: coldBootRunning ? 'not-allowed' : 'pointer',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 6,
-                }}
-              >
-                <Snowflake className="w-3.5 h-3.5" strokeWidth={2} />
-                {coldBootRunning ? COLD_BOOT_STRINGS.btnExecuting : COLD_BOOT_STRINGS.btnConfirm}
               </button>
             </div>
           </div>
