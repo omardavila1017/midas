@@ -140,6 +140,16 @@ La pestaña Órdenes de Compras (`src/components/Compras.tsx`) se re-nutrió sob
 - **Estado derivado `compraEstado`** (precedencia cancelada > facturada > cerradaWorkflow > porPagar > sinEntrada) alimenta el chip (nuevo estado "Cerrada en JDE") y los buckets de KPI — las cerradas por workflow ya no inflan "Abiertas sin entrada" ni "Por pagar", alineado con el motor que las excluye.
 - **Export CSV** (`comprasToCsv`, BOM como en Venta) de las OCs filtradas/enfocadas con todos los campos del API + derivados — para entregar la lista de depuración al equipo JDE.
 
+## Pagos a Proveedores: pestaña nutrida + depuración JDE (2026-06-10)
+
+La pestaña Pagos (`src/components/Pagos.tsx`) se re-nutrió sobre **`src/domain/pagosInsights.ts`** (puro, testeado en `pagosInsights.test.ts`) — espejo del patrón de Compras. Display-only: NO toca el motor de conciliación ni la proyección.
+
+- **Definición de huérfano centralizada.** `pagoDisplayStatus` / `isRealOrphan` / `PAGO_STATUS_LABEL` / `isEmployeePago` / `pagoRecordKey` (clave `cia::noPago`, misma forma que el dedup de `fetchPagoProveedorRange`) se MOVIERON del componente al módulo de dominio; KPI, rollup, filtros y CSV consumen la misma fuente. No re-duplicar en `Pagos.tsx`.
+- **Depuración JDE** (`buildPagosDepuracionInsights(records, asOf, matches?)`): hallazgos por lógica sobre los campos del API + el cruce — **posibles dobles pagos** (misma cia/proveedor/fecha/importe en ≥2 `noPago` distintos, solo no-empleados: vales idénticos de empleados son rutina), **huérfanos +30 d** (`ORPHAN_STALE_DAYS`; UNMATCHED con cobertura bancaria que sugiere void en JDE no reflejado o cuenta mal capturada — solo se emite si se pasan `matches`), sin fecha de pago, fecha futura, sin cuenta bancaria, importe ≤0, pagos en divisa (causa documentada de huérfanos), y maestro de proveedores: sin RFC, RFC genérico XAXX/XEXX, "Por Clasificar", sin referencia de folio CXP (los 4 solo para no-empleados). Cards clicables → foco por claves exactas (enfocar resetea los demás filtros). El reporte se computa sobre el scope de la cía, no sobre los filtros de la tabla.
+- **Strip mensual** (`buildPagadoPorMes`): pagado por mes de `fechaPago` con split proveedores/empleados; clic enfoca la tabla al mes. Ignora el foco a propósito (como en Compras).
+- **Export CSV** (`pagosToCsv`, BOM): pagos filtrados/enfocados con todos los campos del API + derivados del cruce (estado, CXPs cubiertas, cargo bancario, tier) — para entregar la lista de depuración al equipo JDE.
+- **Campos del API antes sin usar ahora visibles:** `tipoPago` (lista plana + audit card), `batchPago` en la audit card, RFC en la lista plana, `nombreCia` como tooltip de la cía.
+
 ## Stack
 
 - React 18 + Vite 5 + TypeScript 5.5 + Tailwind 3.4 (with `darkMode: 'class'`)

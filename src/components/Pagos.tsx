@@ -29,12 +29,15 @@ import {
   CreditCard,
   Search,
   Database,
+  Download,
   Filter,
   X,
   CheckCircle2,
   Users,
   Building2,
+  AlertCircle,
   AlertTriangle,
+  Info,
   Link2,
   Receipt,
   Banknote,
@@ -45,15 +48,27 @@ import {
   ShieldAlert,
 } from 'lucide-react';
 import { type PagoProveedorRecord, type ComprasRecord } from '../services/jde';
-import { fmtCompact, fmtCurrency, fmtDate } from '../formatters';
+import { fmtCompact, fmtCurrency, fmtDate, todayISO } from '../formatters';
 import PageHeader from './ui/PageHeader';
 import ProviderBadge from './ProviderBadge';
 import { buildProviderIndex } from '../domain/providerIdentity';
-import { isEmployeeSearchType } from '../domain/providerDerivation';
 import type { Provider } from '../domain/types';
-import type { PaymentMatch, PaymentStatus, CxpMatchTier, CargoMatchTier } from '../domain/paymentReconciliationEngine';
+import type { PaymentMatch, CxpMatchTier, CargoMatchTier } from '../domain/paymentReconciliationEngine';
 import type { CXPRecord } from '../domain/persistence';
 import { isInternalCounterparty } from '../domain/netCashFlowEngine';
+import {
+  PAGO_STATUS_LABEL,
+  buildPagadoPorMes,
+  buildPagosDepuracionInsights,
+  isEmployeePago,
+  isRealOrphan,
+  pagoDisplayStatus,
+  pagoRecordKey,
+  pagosToCsv,
+  type PagoDisplayStatus,
+  type PagosInsight,
+  type PagosInsightSeverity,
+} from '../domain/pagosInsights';
 
 interface PagosProps {
   pagoProveedorRecords: PagoProveedorRecord[];
@@ -72,6 +87,13 @@ type StatusFilter = 'all' | 'matched' | 'cxp-only' | 'bank-only' | 'orphan' | 'n
 type ProviderSortKey = 'totalPagado' | 'conciliacionPct' | 'pagosCount' | 'orphanCount' | 'ultimoPago' | 'nombre';
 type FlatSortKey = 'fechaPago' | 'importePesos' | 'nombreProveedor' | 'banco' | 'noPago';
 type SortDirection = 'asc' | 'desc';
+
+/** Foco puntual sobre un set exacto de pagos (hallazgo de depuración o mes del strip). */
+interface PagoFocus {
+  id: string;
+  label: string;
+  keys: ReadonlySet<string>;
+}
 
 const PAGOS_CACHE_KEY = '__all__';
 const ROW_CAP = 500;
@@ -95,33 +117,13 @@ const CHIP_EMPLOYEE: ChipStyle = {
  * Pintarlo como warning generaba falsa alarma sobre cientos de pagos ya
  * conciliados. Lo tratamos como variante de "Pagado" — tono success suave y
  * etiqueta explícita "CXP cerrada".
+ *
+ * El estado visible (`pagoDisplayStatus`), la definición de huérfano real
+ * (`isRealOrphan`) y sus etiquetas (`PAGO_STATUS_LABEL`) viven en
+ * `src/domain/pagosInsights.ts` — única fuente de verdad compartida con el
+ * panel de depuración y el export CSV.
  */
-/**
- * Estado VISIBLE: `UNMATCHED` se desdobla según `bankCoverage`. Sin banco
- * cargado contra qué cruzar no hay discrepancia que alarme — el chip rojo
- * "Huérfano" queda reservado para cuentas con cobertura donde el cargo
- * realmente no apareció.
- */
-type DisplayStatus = PaymentStatus | 'NO_BANK_DATA';
-
-function displayStatusOf(m: PaymentMatch): DisplayStatus {
-  return m.status === 'UNMATCHED' && m.bankCoverage !== 'covered' ? 'NO_BANK_DATA' : m.status;
-}
-
-/** Huérfano real: hubo banco contra qué cruzar, no-empleado, y no cruzó. */
-function isRealOrphan(m: PaymentMatch): boolean {
-  return m.status === 'UNMATCHED' && m.bankCoverage === 'covered' && !isEmployeePayment(m.payment);
-}
-
-const STATUS_LABEL: Record<DisplayStatus, string> = {
-  MATCHED_FULL: 'Conciliado',
-  MATCHED_CXP_ONLY: 'CXP ✓ · Banco pendiente',
-  MATCHED_BANK_ONLY: 'Pagado · CXP cerrada',
-  UNMATCHED: 'Huérfano',
-  NO_BANK_DATA: 'Sin estado de cuenta',
-};
-
-const STATUS_STYLE: Record<DisplayStatus, ChipStyle> = {
+const STATUS_STYLE: Record<PagoDisplayStatus, ChipStyle> = {
   MATCHED_FULL: {
     bg: 'var(--success-muted)',
     border: 'oklch(88% 0.08 145)',
@@ -166,10 +168,6 @@ const CARGO_TIER_LABEL: Record<CargoMatchTier, string> = {
   unmatched: 'sin cruce',
 };
 
-function isEmployeePayment(r: PagoProveedorRecord): boolean {
-  return isEmployeeSearchType(r.tipoBusqueda);
-}
-
 /**
  * Un pago se considera interno y se oculta de Pagos cuando:
  *   1. El motor de conciliación ya lo marcó (matchea un CARGO interno por
@@ -188,7 +186,7 @@ function isInternalPaymentRecord(
   r: PagoProveedorRecord,
   engineInternalKeys: Set<string> | undefined,
 ): boolean {
-  if (engineInternalKeys && engineInternalKeys.has(paymentKey(r))) return true;
+  if (engineInternalKeys && engineInternalKeys.has(pagoRecordKey(r))) return true;
   if (isInternalCounterparty(r.rfcProveedor, r.nombreProveedor)) return true;
   if (r.comentarioPago && INTERNAL_COMMENT_PATTERN.test(r.comentarioPago)) return true;
   return false;
@@ -198,10 +196,6 @@ function bancoLabel(cuentaBancaria: string): string {
   const parts = cuentaBancaria.split(' - ');
   if (parts.length >= 2) return parts[1].trim();
   return cuentaBancaria.trim();
-}
-
-function paymentKey(r: PagoProveedorRecord): string {
-  return `${r.cia}::${r.noPago}`;
 }
 
 function normFactura(s: string): string {
@@ -303,7 +297,7 @@ function buildProviderRollups(matches: PaymentMatch[], bridge: ComprasBridge): P
         claveProveedor: p.claveProveedor,
         nombreProveedor: p.nombreProveedor,
         rfcProveedor: p.rfcProveedor,
-        isEmployee: isEmployeePayment(p),
+        isEmployee: isEmployeePago(p),
         clasificacion: p.clasificacionProveedorFinanciera || p.clasificacionProveedor,
         matches: [],
         totalPagado: 0,
@@ -378,7 +372,9 @@ export default function Pagos({
     dir: 'desc',
   });
   const [selectedProviderKey, setSelectedProviderKey] = useState<string | null>(null);
+  const [focus, setFocus] = useState<PagoFocus | null>(null);
 
+  const asOf = useMemo(() => todayISO(), []);
   const providerIndex = useMemo(() => buildProviderIndex(providers), [providers]);
 
   /* Visible matches: drop internal payments — engine flag + counterparty
@@ -393,7 +389,7 @@ export default function Pagos({
   /* Index by payment key for the flat view to look up its match in O(1). */
   const matchByPaymentKey = useMemo(() => {
     const map = new Map<string, PaymentMatch>();
-    for (const m of visibleMatches) map.set(paymentKey(m.payment), m);
+    for (const m of visibleMatches) map.set(pagoRecordKey(m.payment), m);
     return map;
   }, [visibleMatches]);
 
@@ -403,24 +399,33 @@ export default function Pagos({
 
   const lastLoadedAt = pagoProveedorLoadedCias[PAGOS_CACHE_KEY];
 
+  /* Reporte de depuración sobre TODO el scope de la cía (no sobre los filtros
+     de la tabla): es el estado del dataset, no de la vista. */
+  const insights = useMemo(() => {
+    const scoped = selectedCia === 'all'
+      ? visibleMatches
+      : visibleMatches.filter((m) => m.payment.cia === selectedCia);
+    return buildPagosDepuracionInsights(scoped.map((m) => m.payment), asOf, scoped);
+  }, [visibleMatches, selectedCia, asOf]);
+
   /* Apply scalar filters (cía/tipo/banco/fecha/monto/búsqueda/status) at the
      PaymentMatch level — single source of truth for both views. */
-  const filteredMatches = useMemo(() => {
+  const scalarFilteredMatches = useMemo(() => {
     const q = search.trim().toUpperCase();
     const min = parseAmountInput(amountMin);
     const max = parseAmountInput(amountMax);
     return visibleMatches.filter((m) => {
       const r = m.payment;
       if (selectedCia !== 'all' && r.cia !== selectedCia) return false;
-      if (tipoFilter === 'employees' && !isEmployeePayment(r)) return false;
-      if (tipoFilter === 'suppliers' && isEmployeePayment(r)) return false;
+      if (tipoFilter === 'employees' && !isEmployeePago(r)) return false;
+      if (tipoFilter === 'suppliers' && isEmployeePago(r)) return false;
       if (bancoFilter !== 'all' && bancoLabel(r.cuentaBancaria) !== bancoFilter) return false;
       if (dateFrom && (!r.fechaPago || r.fechaPago < dateFrom)) return false;
       if (dateTo && (!r.fechaPago || r.fechaPago > dateTo)) return false;
       if (min !== undefined && r.importePesos < min) return false;
       if (max !== undefined && r.importePesos > max) return false;
       if (statusFilter !== 'all') {
-        const display = displayStatusOf(m);
+        const display = pagoDisplayStatus(m);
         if (statusFilter === 'matched' && display !== 'MATCHED_FULL') return false;
         if (statusFilter === 'cxp-only' && display !== 'MATCHED_CXP_ONLY') return false;
         if (statusFilter === 'bank-only' && display !== 'MATCHED_BANK_ONLY') return false;
@@ -453,6 +458,18 @@ export default function Pagos({
     selectedCia,
   ]);
 
+  const filteredMatches = useMemo(() => {
+    if (!focus) return scalarFilteredMatches;
+    return scalarFilteredMatches.filter((m) => focus.keys.has(pagoRecordKey(m.payment)));
+  }, [scalarFilteredMatches, focus]);
+
+  /* El strip ignora el foco a propósito: enfocar un mes no debe colapsar el
+     propio strip a ese mes. */
+  const pagadoPorMes = useMemo(
+    () => buildPagadoPorMes(scalarFilteredMatches.map((m) => m.payment)),
+    [scalarFilteredMatches],
+  );
+
   const bancosDisponibles = useMemo(() => {
     const set = new Set<string>();
     for (const m of visibleMatches) {
@@ -476,7 +493,7 @@ export default function Pagos({
     for (const m of filteredMatches) {
       const r = m.payment;
       total += r.importePesos;
-      if (isEmployeePayment(r)) aEmpleados += r.importePesos;
+      if (isEmployeePago(r)) aEmpleados += r.importePesos;
       else aProveedores += r.importePesos;
       if (m.status === 'MATCHED_FULL') {
         conciliados += 1;
@@ -543,7 +560,8 @@ export default function Pagos({
     dateFrom !== '' ||
     dateTo !== '' ||
     amountMin !== '' ||
-    amountMax !== '';
+    amountMax !== '' ||
+    focus !== null;
 
   const clearFilters = () => {
     setSearch('');
@@ -554,6 +572,39 @@ export default function Pagos({
     setDateTo('');
     setAmountMin('');
     setAmountMax('');
+    setFocus(null);
+  };
+
+  /* Enfocar = "muéstrame EXACTAMENTE estos pagos": resetea los demás filtros
+     para que la tabla muestre el set completo del hallazgo/mes. */
+  const toggleFocus = (id: string, label: string, keys: string[]) => {
+    if (focus?.id === id) {
+      setFocus(null);
+      return;
+    }
+    setSearch('');
+    setTipoFilter('all');
+    setStatusFilter('all');
+    setBancoFilter('all');
+    setDateFrom('');
+    setDateTo('');
+    setAmountMin('');
+    setAmountMax('');
+    setFocus({ id, label, keys: new Set(keys) });
+  };
+
+  const handleExportCsv = () => {
+    if (filteredMatches.length === 0) return;
+    const csv = pagosToCsv(filteredMatches);
+    const blob = new Blob([`﻿${csv}`], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const scope = selectedCia === 'all' ? '' : `-${selectedCia}`;
+    const focused = focus ? `-${focus.id}` : '';
+    a.download = `pagos-${asOf}${scope}${focused}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   return (
@@ -617,6 +668,68 @@ export default function Pagos({
           tone={kpis.huerfanos === 0 ? 'success' : 'warning'}
         />
       </section>
+
+      {/* ─── Strip mensual: pagado por mes (split proveedores/empleados) ── */}
+      {pagadoPorMes.length > 0 && (
+        <section className="animate-card-in">
+          <h2 className="text-[11px] font-medium uppercase tracking-[0.08em] mb-1 text-[var(--gray-500)]">
+            Pagado por mes (fecha de pago)
+          </h2>
+          <p className="text-[11px] text-[var(--gray-400)] mb-2">
+            Egreso ejecutado por mes, desglosado en proveedores vs. empleados. Clic para enfocar la
+            tabla en el mes.
+          </p>
+          <div className="flex gap-2 flex-wrap">
+            {pagadoPorMes.map((bucket) => {
+              const focusId = `month:${bucket.ym}`;
+              const isFocused = focus?.id === focusId;
+              return (
+                <button
+                  key={bucket.ym}
+                  type="button"
+                  aria-pressed={isFocused}
+                  onClick={() => toggleFocus(focusId, `Pagos · ${bucket.ym}`, bucket.keys)}
+                  className="text-left bg-white border rounded-[var(--radius-md)] px-3 py-1.5 hover-press"
+                  style={{ borderColor: isFocused ? 'var(--primary)' : 'var(--gray-200)' }}
+                  title={`${bucket.count.toLocaleString()} pagos en ${bucket.ym} · proveedores ${fmtCompact(bucket.proveedoresMxn)} · empleados ${fmtCompact(bucket.empleadosMxn)}`}
+                >
+                  <div className="font-mono text-[10px] text-[var(--gray-400)]">{bucket.ym}</div>
+                  <div className="text-[13px] font-bold tabular-nums text-[var(--gray-950)]">
+                    {fmtCompact(bucket.totalMxn)}
+                  </div>
+                  <div className="text-[10px] tabular-nums text-[var(--gray-400)]">
+                    {bucket.count.toLocaleString()} pagos
+                    {bucket.empleadosMxn > 0 && ` · emp ${fmtCompact(bucket.empleadosMxn)}`}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      {/* ─── Depuración JDE: hallazgos detectados con lógica ───────────── */}
+      {insights.length > 0 && (
+        <section className="animate-card-in">
+          <h2 className="text-[11px] font-medium uppercase tracking-[0.08em] mb-1 text-[var(--gray-500)]">
+            Depuración JDE
+          </h2>
+          <p className="text-[11px] text-[var(--gray-400)] mb-2">
+            Pagos detectados con lógica sobre los datos del API — candidatos a corregir o depurar en
+            JDE. Clic para enfocar la tabla; exporta el CSV para entregar la lista.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-2">
+            {insights.map((insight) => (
+              <InsightCard
+                key={insight.id}
+                insight={insight}
+                active={focus?.id === insight.id}
+                onClick={() => toggleFocus(insight.id, insight.label, insight.keys)}
+              />
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* View toggle */}
       <section className="flex flex-wrap items-center gap-2">
@@ -728,6 +841,23 @@ export default function Pagos({
             onChange={(e) => setAmountMax(e.target.value)}
             min="0"
           />
+          {focus && (
+            <button
+              type="button"
+              onClick={() => setFocus(null)}
+              className="inline-flex items-center gap-1 px-3 h-9 rounded-full text-[12px] font-medium border hover-press"
+              style={{
+                backgroundColor: 'var(--primary-muted)',
+                borderColor: 'var(--primary)',
+                color: 'var(--primary)',
+              }}
+              title="Quitar el foco"
+            >
+              <Filter className="w-3.5 h-3.5" />
+              {focus.label}
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
           {filtersActive && (
             <button
               type="button"
@@ -737,6 +867,15 @@ export default function Pagos({
               <X className="w-3.5 h-3.5" /> Limpiar
             </button>
           )}
+          <button
+            type="button"
+            onClick={handleExportCsv}
+            disabled={filteredMatches.length === 0}
+            className="inline-flex items-center gap-1 px-3 h-9 rounded-[var(--radius-md)] text-[12px] font-medium text-[var(--gray-500)] hover:text-[var(--gray-950)] hover:bg-[var(--gray-50)] hover-press disabled:opacity-40"
+            title="Exportar los pagos filtrados a CSV (campos del API + cruce)"
+          >
+            <Download className="w-3.5 h-3.5" /> CSV
+          </button>
           <div className="ml-auto text-[12px] text-[var(--gray-400)] tabular-nums">
             {filteredMatches.length === visibleMatches.length
               ? `${visibleMatches.length.toLocaleString()} total`
@@ -1039,7 +1178,7 @@ function ProviderAuditDetail({
 
       <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
         {rollup.matches.map((m) => (
-          <PaymentAuditCard key={paymentKey(m.payment)} match={m} bridge={bridge} />
+          <PaymentAuditCard key={pagoRecordKey(m.payment)} match={m} bridge={bridge} />
         ))}
       </div>
     </div>
@@ -1053,7 +1192,7 @@ function ProviderAuditDetail({
 function PaymentAuditCard({ match, bridge }: { match: PaymentMatch; bridge: ComprasBridge }) {
   const [expanded, setExpanded] = useState(false);
   const p = match.payment;
-  const isEmployee = isEmployeePayment(p);
+  const isEmployee = isEmployeePago(p);
   const ocsByCxp = match.cxpMatches.map((hit) => ({
     cxp: hit.cxp,
     tier: hit.tier,
@@ -1064,7 +1203,7 @@ function PaymentAuditCard({ match, bridge }: { match: PaymentMatch; bridge: Comp
   // UNMATCHED también expande: el detalle explica POR QUÉ no cruzó (sin
   // estados de cuenta / fuera de rango / cargo candidato ya reclamado).
   const canExpand = (!isEmployee && match.cxpMatches.length > 0) || !!match.cargoMatch || match.status === 'UNMATCHED';
-  const display = displayStatusOf(match);
+  const display = pagoDisplayStatus(match);
 
   return (
     <div className="border border-[var(--gray-200)] rounded-[var(--radius-md)] bg-white">
@@ -1090,7 +1229,7 @@ function PaymentAuditCard({ match, bridge }: { match: PaymentMatch; bridge: Comp
               <span className="text-[10px] text-[var(--gray-400)]">{p.moneda}</span>
             )}
             <Chip style={STATUS_STYLE[display]} icon={statusIcon(display)}>
-              {STATUS_LABEL[display]}
+              {PAGO_STATUS_LABEL[display]}
             </Chip>
             {totalOCs > 0 && (
               <span className="inline-flex items-center gap-1 text-[11px] text-[var(--gray-500)] font-medium">
@@ -1100,6 +1239,8 @@ function PaymentAuditCard({ match, bridge }: { match: PaymentMatch; bridge: Comp
           </div>
           <div className="mt-1 flex items-center gap-2 flex-wrap text-[11px] text-[var(--gray-500)]">
             <span className="font-mono">Pago {p.noPago}</span>
+            {p.tipoPago && <span className="font-mono" title="Tipo de pago JDE">{p.tipoPago}</span>}
+            {p.batchPago && <span className="font-mono" title="Batch JDE">B·{p.batchPago}</span>}
             <span>·</span>
             <span>{bancoLabel(p.cuentaBancaria)}</span>
             {p.cuentaBanco && <span className="font-mono">·{p.cuentaBanco}</span>}
@@ -1339,17 +1480,19 @@ function FlatPaymentList({
           <tbody>
             {sorted.slice(0, ROW_CAP).map((m, idx) => {
               const r = m.payment;
-              const employee = isEmployeePayment(r);
+              const employee = isEmployeePago(r);
               const ocCount = m.cxpMatches.length;
               return (
                 <tr
-                  key={paymentKey(r)}
+                  key={pagoRecordKey(r)}
                   className={`group border-t border-[var(--gray-200)]/40 hover-row hover:bg-[var(--primary-muted)]/30 ${
                     idx % 2 === 1 ? 'bg-[var(--gray-50)]/40' : ''
                   }`}
                 >
                   <Td className="pl-5">
-                    <span className="font-mono text-[11px] text-[var(--gray-500)]">{r.cia}</span>
+                    <span className="font-mono text-[11px] text-[var(--gray-500)]" title={r.nombreCia}>
+                      {r.cia}
+                    </span>
                   </Td>
                   <Td>
                     <span className="text-[12px] tabular-nums text-[var(--gray-700)]">
@@ -1369,6 +1512,9 @@ function FlatPaymentList({
                         />
                       )}
                       <span className="font-mono text-[10px] text-[var(--gray-400)]">{r.claveProveedor}</span>
+                      {r.rfcProveedor && (
+                        <span className="font-mono text-[10px] text-[var(--gray-400)]">{r.rfcProveedor}</span>
+                      )}
                       {employee && <Chip style={CHIP_EMPLOYEE} icon={Users}>Empleado</Chip>}
                     </div>
                   </Td>
@@ -1390,6 +1536,11 @@ function FlatPaymentList({
                   </Td>
                   <Td>
                     <span className="font-mono text-[11px] text-[var(--gray-700)]">{r.noPago}</span>
+                    {r.tipoPago && (
+                      <span className="ml-1 text-[10px] font-mono text-[var(--gray-400)]" title="Tipo de pago JDE">
+                        {r.tipoPago}
+                      </span>
+                    )}
                     {r.batchPago && (
                       <div className="text-[10px] font-mono text-[var(--gray-400)] mt-0.5">
                         Batch {r.batchPago}
@@ -1397,8 +1548,8 @@ function FlatPaymentList({
                     )}
                   </Td>
                   <Td>
-                    <Chip style={STATUS_STYLE[displayStatusOf(m)]} icon={statusIcon(displayStatusOf(m))}>
-                      {STATUS_LABEL[displayStatusOf(m)]}
+                    <Chip style={STATUS_STYLE[pagoDisplayStatus(m)]} icon={statusIcon(pagoDisplayStatus(m))}>
+                      {PAGO_STATUS_LABEL[pagoDisplayStatus(m)]}
                     </Chip>
                   </Td>
                   <Td>
@@ -1519,7 +1670,60 @@ function ConciliationBar({
   );
 }
 
-function statusIcon(status: DisplayStatus): typeof CheckCircle2 {
+const SEVERITY_ICON: Record<PagosInsightSeverity, typeof AlertTriangle> = {
+  danger: AlertTriangle,
+  warning: AlertCircle,
+  info: Info,
+};
+const SEVERITY_COLOR: Record<PagosInsightSeverity, string> = {
+  danger: 'var(--danger)',
+  warning: 'var(--warning)',
+  info: 'var(--info)',
+};
+
+function InsightCard({
+  insight,
+  active,
+  onClick,
+}: {
+  insight: PagosInsight;
+  active: boolean;
+  onClick: () => void;
+}) {
+  const Icon = SEVERITY_ICON[insight.severity];
+  const color = SEVERITY_COLOR[insight.severity];
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      onClick={onClick}
+      title={insight.description}
+      className="text-left bg-white border rounded-[var(--radius-md)] p-3 hover-press"
+      style={{ borderColor: active ? 'var(--primary)' : 'var(--gray-200)' }}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-[var(--gray-950)]">
+          <Icon className="w-3.5 h-3.5 shrink-0" style={{ color }} />
+          {insight.label}
+        </span>
+        <span
+          className="text-[11px] font-bold tabular-nums px-1.5 py-0.5 rounded-full"
+          style={{ backgroundColor: `color-mix(in oklch, ${color} 12%, transparent)`, color }}
+        >
+          {insight.count.toLocaleString()}
+        </span>
+      </div>
+      <div className="mt-1 text-[14px] font-bold tabular-nums text-[var(--gray-950)]">
+        {fmtCompact(insight.totalMxn)}
+      </div>
+      <p className="mt-1 text-[11px] leading-snug text-[var(--gray-400)]">
+        {insight.description}
+      </p>
+    </button>
+  );
+}
+
+function statusIcon(status: PagoDisplayStatus): typeof CheckCircle2 {
   if (status === 'MATCHED_FULL') return CheckCircle2;
   if (status === 'MATCHED_BANK_ONLY') return CheckCircle2;
   if (status === 'UNMATCHED') return AlertTriangle;
