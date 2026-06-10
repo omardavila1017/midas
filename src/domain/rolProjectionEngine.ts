@@ -93,6 +93,13 @@ export function buildRolProjectedInflows(args: {
   asOfDate: string;
   /** Tope superior `yyyy-mm`: cobros más allá del horizonte se descartan. */
   horizonYm?: string;
+  /**
+   * Incluir cobros calendarizados ANTES de `asOfDate`. Default false (la
+   * proyección canónica/Base solo proyecta futuro). El calendario de Cobranza
+   * lo prende para mostrar, en días pasados, lo que el ROL ejecutado decía
+   * que debía caer y compararlo contra el ingreso real cruzado con banco.
+   */
+  includePastDates?: boolean;
   /** Lookup precomputado (el canónico ya lo arma — evita reconstruirlo). */
   clientLookup?: CollectionCalendarClientLookup;
 }): RolProjectionResult {
@@ -145,9 +152,10 @@ export function buildRolProjectedInflows(args: {
     if (!base) continue;
 
     const { calendarDate, reason } = resolveClientCalendarDate(client, base, assumptions);
-    // ROL proyecta SÓLO futuro. Un cobro calculado en el pasado debería ya
-    // estar facturado (cxc:) o cruzado en banco — no es trabajo de ROL.
-    if (calendarDate < asOfDate) continue;
+    // Por default ROL proyecta SÓLO futuro (un cobro calculado en el pasado
+    // debería ya estar facturado/cruzado). Con `includePastDates` se conserva
+    // para que el calendario de Cobranza compare lo esperado vs lo cobrado.
+    if (!args.includePastDates && calendarDate < asOfDate) continue;
     const ym = calendarDate.slice(0, 7);
     if (horizonYm && ym > horizonYm) continue;
 

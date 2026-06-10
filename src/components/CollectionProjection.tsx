@@ -1302,6 +1302,12 @@ const COLLECTION_CALENDAR_SOURCE_STYLES: Record<CollectionCalendarEventSource, {
     textClass: 'text-[var(--success)]',
     borderClass: 'border-[var(--success)]/30',
   },
+  BANK_FEDERAL: {
+    color: '#800020',
+    rgb: '128,0,32',
+    textClass: 'text-[#800020]',
+    borderClass: 'border-[#800020]/30',
+  },
   BANK_UNMATCHED: {
     color: '#f59e0b',
     rgb: '245,158,11',
@@ -1325,12 +1331,6 @@ const COLLECTION_CALENDAR_SOURCE_STYLES: Record<CollectionCalendarEventSource, {
     rgb: '8,145,178',
     textClass: 'text-[#0e7490]',
     borderClass: 'border-[#0891b2]/30',
-  },
-  CLIENT_PROJECTED: {
-    color: '#64748b',
-    rgb: '100,116,139',
-    textClass: 'text-[var(--gray-500)]',
-    borderClass: 'border-[var(--gray-300)]',
   },
 };
 
@@ -1373,10 +1373,8 @@ function CollectionSourceBadge({ source }: { source: CollectionCalendarEventSour
 
 function collectionEventMatchesCia(event: CollectionCalendarEvent, ciaFilter: string): boolean {
   if (ciaFilter === 'all') return true;
-  // Las proyecciones vienen del catalogo de clientes y no siempre tienen cia
-  // JDE; se mantienen visibles para que el calendario futuro no desaparezca
-  // al filtrar una compania.
-  if (event.source === 'CLIENT_PROJECTED') return true;
+  // La proyección ROL no siempre trae cia JDE; se mantiene visible para que
+  // el calendario futuro no desaparezca al filtrar una compañía.
   if (event.source === 'ROL_PROJECTED' && !event.cia) return true;
   return event.cia === ciaFilter;
 }
@@ -1470,12 +1468,16 @@ function CobranzaRealCalendar({
       const key = weekStart.toISOString().slice(0, 10);
       const slot = weeks[key] ?? { real: 0, projected: 0 };
       for (const e of evts) {
-        if (e.source === 'BANK_MATCHED' || e.source === 'JDE_PAID_UNMATCHED') {
+        // Federal suma al ingreso real de la semana (venta directa a banco).
+        if (
+          e.source === 'BANK_MATCHED'
+          || e.source === 'BANK_FEDERAL'
+          || e.source === 'JDE_PAID_UNMATCHED'
+        ) {
           slot.real += e.amount;
         } else if (
           e.source === 'JDE_OPEN_PROJECTED'
           || e.source === 'ROL_PROJECTED'
-          || e.source === 'CLIENT_PROJECTED'
         ) {
           slot.projected += e.amount;
         }
@@ -1525,8 +1527,12 @@ function CobranzaRealCalendar({
             <span><strong className="text-[var(--gray-950)]">Ingreso</strong> · cruzado con banco</span>
           </span>
           <span className="inline-flex items-center gap-1.5">
+            <span className="w-2.5 h-2.5 rounded-sm bg-[#800020]" />
+            <span><strong className="text-[var(--gray-950)]">Federal</strong> · venta directa a banco</span>
+          </span>
+          <span className="inline-flex items-center gap-1.5">
             <span className="w-2.5 h-2.5 rounded-sm bg-[#7c3aed]" />
-            <span><strong className="text-[var(--gray-950)]">Proyección</strong> · esperado sin cruce</span>
+            <span><strong className="text-[var(--gray-950)]">Proyección</strong> · ROL ejecutado por facturar</span>
           </span>
           <span className="inline-flex items-center gap-1.5">
             <span className="w-2.5 h-2.5 rounded-sm border border-[var(--gray-300)] bg-white" />
@@ -1550,17 +1556,21 @@ function CobranzaRealCalendar({
             const iso = d.toISOString().slice(0, 10);
             const dayEvents = byDay.get(iso) ?? [];
             const dayTotal = dayEvents.reduce((s, event) => s + event.amount, 0);
-            const dayRealTotal = dayEvents
+            const dayMatchedTotal = dayEvents
               .filter(event =>
                 event.source === 'BANK_MATCHED'
                 || event.source === 'JDE_PAID_UNMATCHED',
               )
               .reduce((s, event) => s + event.amount, 0);
+            const dayFederalTotal = dayEvents
+              .filter(event => event.source === 'BANK_FEDERAL')
+              .reduce((s, event) => s + event.amount, 0);
+            // Federal suma al ingreso del día (venta directa a banco).
+            const dayRealTotal = dayMatchedTotal + dayFederalTotal;
             const dayProjectedTotal = dayEvents
               .filter(event =>
                 event.source === 'JDE_OPEN_PROJECTED'
-                || event.source === 'ROL_PROJECTED'
-                || event.source === 'CLIENT_PROJECTED',
+                || event.source === 'ROL_PROJECTED',
               )
               .reduce((s, event) => s + event.amount, 0);
             const dayDiff = dayRealTotal - dayProjectedTotal;
@@ -1595,18 +1605,26 @@ function CobranzaRealCalendar({
                 </div>
                 {dayTotal > 0 && inMonth && (
                   <div className="mt-1 space-y-0.5">
-                    {dayRealTotal > 0 && (
+                    {dayMatchedTotal > 0 && (
                       <div
                         className="rounded-md bg-[#dbeafe] text-[#1d4ed8] px-1.5 py-0.5 text-[11px] font-bold tabular-nums w-fit"
                         title="Ingreso real (cruzado con banco o JDE pagada)"
                       >
-                        Ing. {fmtCompact(dayRealTotal)}
+                        Ing. {fmtCompact(dayMatchedTotal)}
+                      </div>
+                    )}
+                    {dayFederalTotal > 0 && (
+                      <div
+                        className="rounded-md bg-[#800020]/10 text-[#800020] px-1.5 py-0.5 text-[11px] font-bold tabular-nums w-fit"
+                        title="Ingreso Federal (venta directa a banco, sin factura JDE) — suma al ingreso del día"
+                      >
+                        Fed. {fmtCompact(dayFederalTotal)}
                       </div>
                     )}
                     {dayProjectedTotal > 0 && (
                       <div
                         className="rounded-md bg-[#ede9fe] text-[#5b21b6] px-1.5 py-0.5 text-[11px] font-semibold tabular-nums w-fit"
-                        title="Proyección esperada sin cruce con banco"
+                        title="Proyección desde ROL ejecutado / facturas JDE abiertas"
                       >
                         Proy. {fmtCompact(dayProjectedTotal)}
                       </div>
@@ -1702,8 +1720,6 @@ function CobranzaRealCalendar({
                           </div>
                         ) : event.source === 'ROL_PROJECTED' ? (
                           <span className="text-[11px] text-[var(--gray-500)]">Viaje ROL ejecutado; factura aún no emitida.</span>
-                        ) : event.projected ? (
-                          <span className="text-[11px] text-[var(--gray-500)]">Regla de cliente sin factura JDE emitida.</span>
                         ) : event.source === 'JDE_PAID_UNMATCHED' ? (
                           <span className="text-[11px] text-[var(--gray-500)]">JDE reporta Fecha_Pago; no se requiere banco cargado.</span>
                         ) : (
@@ -1910,6 +1926,9 @@ function CobranzaRealView({
       clients,
       assumptions,
       asOfDate: todayISO(),
+      // El calendario SÍ muestra cobros ROL calendarizados en el pasado:
+      // permite comparar lo que debía caer vs el ingreso real cruzado (Δ).
+      includePastDates: true,
     }),
     [rolRecords, records, payments, clients, assumptions],
   );
@@ -1926,11 +1945,11 @@ function CobranzaRealView({
   const calendarEventByFactura = useMemo(() => {
     const priority: Record<CollectionCalendarEventSource, number> = {
       BANK_MATCHED: 0,
-      BANK_UNMATCHED: 1,
-      JDE_PAID_UNMATCHED: 2,
-      JDE_OPEN_PROJECTED: 3,
-      ROL_PROJECTED: 4,
-      CLIENT_PROJECTED: 5,
+      BANK_FEDERAL: 1,
+      BANK_UNMATCHED: 2,
+      JDE_PAID_UNMATCHED: 3,
+      JDE_OPEN_PROJECTED: 4,
+      ROL_PROJECTED: 5,
     };
     const map = new Map<string, CollectionCalendarEvent>();
     for (const event of collectionCalendar.events) {

@@ -267,15 +267,10 @@ describe('buildCollectionCalendar', () => {
     expect(calendarEventMatchesSourceFilter(event!, 'unruled')).toBe(true);
   });
 
-  it('genera proyecciones futuras aunque exista factura JDE pendiente y evita duplicar ese ciclo emitido', () => {
-    const factura = makeFactura({
-      cia: '00011',
-      noFactura: 'F-JAN',
-      noCliente: '9001',
-      nombreCliente: 'CLIENTE ALFA',
-      importeBrutoPesos: 1000,
-      fechaFactura: '2026-01-01',
-    });
+  it('NO genera proyección genérica de catálogo: sin ROL ni facturas no hay eventos', () => {
+    // El estimado de collectionEngine (CLIENT_PROJECTED) se eliminó: un
+    // cliente con monthlyBilling pero sin viaje ejecutado ni factura no
+    // proyecta nada (el calendario solo proyecta sobre datos reales).
     const client = makeClient({
       creditDays: 0,
       monthlyBilling: new Array(12).fill(1000),
@@ -283,14 +278,11 @@ describe('buildCollectionCalendar', () => {
     const calendar = buildCollectionCalendar({
       clients: [client],
       assumptions: ASSUMPTIONS,
-      cobranzaRecords: [factura],
-      reconciliation: reconcileRealCollections([factura], []),
+      cobranzaRecords: [],
+      reconciliation: reconcileRealCollections([], []),
     });
-    const projections = calendar.events.filter(e => e.source === 'CLIENT_PROJECTED');
 
-    expect(projections.some(e => e.projected?.invoiceDate === '2026-01-01')).toBe(false);
-    expect(projections.some(e => e.projected?.invoiceDate === '2026-02-01')).toBe(true);
-    expect(calendar.events.some(e => e.source === 'JDE_OPEN_PROJECTED' && e.noFactura === 'F-JAN')).toBe(true);
+    expect(calendar.events).toHaveLength(0);
   });
 
   it('filtra eventos por fuente del calendario', () => {
@@ -322,13 +314,43 @@ describe('buildCollectionCalendar', () => {
     });
     const bank = calendar.events.find(e => e.source === 'BANK_UNMATCHED');
     const jde = calendar.events.find(e => e.source === 'JDE_PAID_UNMATCHED');
-    const projected = calendar.events.find(e => e.source === 'CLIENT_PROJECTED');
 
     expect(bank && calendarEventMatchesSourceFilter(bank, 'bank')).toBe(false);
     expect(bank && calendarEventMatchesSourceFilter(bank, 'bank_unmatched')).toBe(true);
     expect(bank && calendarEventMatchesSourceFilter(bank, 'jde')).toBe(false);
     expect(jde && calendarEventMatchesSourceFilter(jde, 'jde')).toBe(true);
-    expect(projected && calendarEventMatchesSourceFilter(projected, 'projected')).toBe(true);
+  });
+
+  it('emite ABONOs de cuentas Federal como BANK_FEDERAL (ingreso real del día)', () => {
+    // 70138237069 = "CONCENTRADORA VENTA FEDERAL" en el catálogo de bancos
+    // (unidadNegocio = FEDERAL). Venta directa a banco, sin factura JDE.
+    const federalAbono = makeAbono({
+      cia: '00011',
+      cuenta: '70138237069',
+      fechaOperacion: '2026-02-12',
+      importe: 5000,
+      concepto: 'VENTA TAQUILLA',
+    });
+    const reconciliation = reconcileRealCollections(
+      [],
+      [makeAccount({ cia: '00011', cuenta: '70138237069', movimientos: [federalAbono] })],
+    );
+    const calendar = buildCollectionCalendar({
+      clients: [makeClient()],
+      assumptions: ASSUMPTIONS,
+      cobranzaRecords: [],
+      reconciliation,
+    });
+
+    const event = calendar.events.find(e => e.source === 'BANK_FEDERAL');
+    expect(event).toBeTruthy();
+    expect(event?.date).toBe('2026-02-12');
+    expect(event?.amount).toBe(5000);
+    expect(event?.clientName).toBe('Venta Federal');
+    expect(event?.bank?.cuenta).toBe('70138237069');
+    expect(calendar.summaryBySource.BANK_FEDERAL.amount).toBe(5000);
+    expect(calendarEventMatchesSourceFilter(event!, 'bank')).toBe(true);
+    expect(calendar.events.some(e => e.source === 'BANK_UNMATCHED')).toBe(false);
   });
 
   it('proyecta viajes ROL ejecutados sin facturar como ROL_PROJECTED con la regla del cliente', () => {
@@ -365,7 +387,7 @@ describe('buildCollectionCalendar', () => {
     expect(calendar.summaryBySource.ROL_PROJECTED.amount).toBeCloseTo(1160);
   });
 
-  it('suprime la proyección genérica CLIENT_PROJECTED del mes de cobro cubierto por ROL', () => {
+  it('ROL es la única proyección sin factura: nada más se emite junto a él', () => {
     const client = makeClient({
       id: '9001',
       creditDays: 0,
@@ -387,14 +409,29 @@ describe('buildCollectionCalendar', () => {
       rolProjection,
     });
 
-    // Junio queda cubierto por ROL → sin estimado genérico ese mes; otros
-    // meses conservan la proyección de catálogo.
-    const genericJune = calendar.events.filter(
-      e => e.source === 'CLIENT_PROJECTED' && e.date.startsWith('2026-06'),
-    );
     expect(calendar.events.some(e => e.source === 'ROL_PROJECTED' && e.date.startsWith('2026-06'))).toBe(true);
-    expect(genericJune).toHaveLength(0);
-    expect(calendar.events.some(e => e.source === 'CLIENT_PROJECTED' && e.date.startsWith('2026-08'))).toBe(true);
+    // Sin estimado genérico de catálogo: TODO evento del calendario es ROL.
+    expect(calendar.events.every(e => e.source === 'ROL_PROJECTED')).toBe(true);
+  });
+
+  it('buildRolProjectedInflows con includePastDates conserva cobros calendarizados en el pasado', () => {
+    const client = makeClient({ id: '9001', creditDays: 30, paymentDay: { kind: 'ANY' } });
+    const args = {
+      rolRecords: [makeRol({ fechaViaje: '2026-01-05', subTotal: 1000 })],
+      cobranzaRecords: [],
+      clients: [client],
+      assumptions: ASSUMPTIONS,
+      asOfDate: '2026-06-10',
+    };
+
+    // Default: el cobro (2026-02-04) quedó antes de asOfDate → se descarta.
+    expect(buildRolProjectedInflows(args).inflows).toHaveLength(0);
+
+    // Calendario de Cobranza: lo conserva para comparar contra el real.
+    const withPast = buildRolProjectedInflows({ ...args, includePastDates: true });
+    expect(withPast.inflows).toHaveLength(1);
+    expect(withPast.inflows[0].date < '2026-06-10').toBe(true);
+    expect(withPast.inflows[0].grossAmount).toBeCloseTo(1160);
   });
 });
 

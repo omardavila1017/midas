@@ -1,7 +1,5 @@
-import type { CashFlowAssumptions, Client, CollectionEvent, Frequency } from './types';
-import { eventKey } from './types';
+import type { CashFlowAssumptions, Client, Frequency } from './types';
 import { parseFrequencyStrict } from './loadClientsCatalog';
-import { projectYear } from './collectionEngine';
 import { resolveRealPaymentDate, toISODate } from './calendar';
 import { parseCc13PaymentDay } from './parsePaymentDay';
 import { isNonOperatingDay } from './bankHolidays';
@@ -22,11 +20,11 @@ import type { RolProjectionResult } from './rolProjectionEngine';
 
 export type CollectionCalendarEventSource =
   | 'BANK_MATCHED'
+  | 'BANK_FEDERAL'
   | 'BANK_UNMATCHED'
   | 'JDE_PAID_UNMATCHED'
   | 'JDE_OPEN_PROJECTED'
-  | 'ROL_PROJECTED'
-  | 'CLIENT_PROJECTED';
+  | 'ROL_PROJECTED';
 
 export type CollectionCalendarSourceFilter =
   | 'all'
@@ -86,7 +84,6 @@ export interface CollectionCalendarEvent {
   facturas: CollectionCalendarFactura[];
   bank?: CollectionCalendarBankInfo;
   rule?: CollectionCalendarRuleInfo;
-  projected?: CollectionEvent;
   /** Fecha esperada por la regla del cliente (factura + creditDays alineado al calendario). */
   expectedPayDate?: string;
   /** Diferencia en días entre fecha real de pago y la esperada. >0 tarde, <0 temprano. */
@@ -106,9 +103,9 @@ export interface BuildCollectionCalendarInput {
   /**
    * Proyección ROL precomputada (`buildRolProjectedInflows`): viajes
    * ejecutados aún no facturados, fechados por la regla del cliente. Emite
-   * eventos `ROL_PROJECTED` y suprime la proyección genérica
-   * `CLIENT_PROJECTED` en los meses de cobro que el ROL ya cubre con monto
-   * real ejecutado (sin doble conteo).
+   * eventos `ROL_PROJECTED` — la ÚNICA capa de proyección sin factura del
+   * calendario (la proyección genérica de catálogo `CLIENT_PROJECTED` se
+   * eliminó 2026-06-10: estimaba montos sin viaje ejecutado detrás).
    */
   rolProjection?: RolProjectionResult;
 }
@@ -122,20 +119,20 @@ const DAY_MS = 86_400_000;
 
 export const COLLECTION_CALENDAR_SOURCE_LABELS: Record<CollectionCalendarEventSource, string> = {
   BANK_MATCHED: 'Banco cruzado',
+  BANK_FEDERAL: 'Ingreso Federal',
   BANK_UNMATCHED: 'Banco sin factura',
   JDE_PAID_UNMATCHED: 'Ingreso',
   JDE_OPEN_PROJECTED: 'Factura JDE por cobrar',
   ROL_PROJECTED: 'Viaje ROL por facturar',
-  CLIENT_PROJECTED: 'Proyectado',
 };
 
 const SOURCE_ORDER: CollectionCalendarEventSource[] = [
   'BANK_MATCHED',
+  'BANK_FEDERAL',
   'BANK_UNMATCHED',
   'JDE_PAID_UNMATCHED',
   'JDE_OPEN_PROJECTED',
   'ROL_PROJECTED',
-  'CLIENT_PROJECTED',
 ];
 
 export function emptyCollectionCalendarSummary(): Record<CollectionCalendarEventSource, CollectionCalendarSourceSummary> {
@@ -153,7 +150,7 @@ export function calendarEventMatchesSourceFilter(
     case 'all':
       return true;
     case 'bank':
-      return event.source === 'BANK_MATCHED';
+      return event.source === 'BANK_MATCHED' || event.source === 'BANK_FEDERAL';
     case 'bank_unmatched':
       return event.source === 'BANK_UNMATCHED';
     case 'jde':
@@ -161,7 +158,7 @@ export function calendarEventMatchesSourceFilter(
     case 'cxc':
       return event.source === 'JDE_OPEN_PROJECTED';
     case 'projected':
-      return event.source === 'CLIENT_PROJECTED' || event.source === 'ROL_PROJECTED';
+      return event.source === 'ROL_PROJECTED';
     case 'unruled':
       return event.source === 'JDE_OPEN_PROJECTED' && !event.rule;
   }
@@ -194,8 +191,6 @@ export function buildCollectionCalendar(input: BuildCollectionCalendarInput): Bu
     }
   }
 
-  const cxcCoverageByClientMonth = new Map<string, Set<string>>();
-
   for (const record of cobranzaRecords) {
     // Movimientos internos (factura de una empresa propia del grupo a otra)
     // NO son cobranza real: no se proyectan ni bloquean el ciclo del cliente.
@@ -203,9 +198,6 @@ export function buildCollectionCalendar(input: BuildCollectionCalendarInput): Bu
 
     const key = facturaKey(record.cia, record.noFactura);
     const clientMatch = clientMatchByFactura.get(key) ?? null;
-    if (clientMatch && record.fechaFactura) {
-      addCoveredMonth(cxcCoverageByClientMonth, clientMatch.client.id, record.fechaFactura.slice(0, 7));
-    }
 
     if (consumedByBank.has(key)) continue;
 
@@ -229,10 +221,9 @@ export function buildCollectionCalendar(input: BuildCollectionCalendarInput): Bu
 
   // ROL CITI: viajes EJECUTADOS aún sin factura — monto real del servicio
   // entregado, fechado por la regla del cliente (días crédito + día de pago
-  // + frecuencia). Es la capa de proyección más fiel del corto plazo: sin
-  // ella el calendario solo muestra facturas ya emitidas + el estimado
-  // genérico del catálogo y la proyección sale corta.
-  const rolCoverageByClientMonth = input.rolProjection?.coverageByClientMonth;
+  // + frecuencia). Es la ÚNICA capa de proyección sin factura: el calendario
+  // proyecta solo sobre viajes realmente ejecutados, nunca sobre el estimado
+  // genérico del catálogo de clientes.
   for (const inflow of input.rolProjection?.inflows ?? []) {
     const client = clientLookup.byId.get(inflow.clientId);
     if (client && isInternalCounterparty(client.rfc, client.name)) continue;
@@ -250,18 +241,6 @@ export function buildCollectionCalendar(input: BuildCollectionCalendarInput): Bu
       confidence: 0.7,
       facturas: [],
     });
-  }
-
-  for (const projected of projectYear(clients, assumptions)) {
-    const coveredMonths = cxcCoverageByClientMonth.get(projected.clientId);
-    if (coveredMonths?.has(projected.invoiceDate.slice(0, 7))) continue;
-    // Mes de cobro cubierto por ROL → el estimado genérico del catálogo se
-    // suprime: el ROL es la versión real de esa venta (sin doble conteo).
-    const rolCovered = rolCoverageByClientMonth?.get(projected.clientId);
-    if (rolCovered?.has(projected.realDate.slice(0, 7))) continue;
-    const client = clientLookup.byId.get(projected.clientId);
-    if (client && isInternalCounterparty(client.rfc, client.name)) continue;
-    events.push(eventFromProjection(projected, client));
   }
 
   events.sort((a, b) => {
@@ -286,9 +265,14 @@ function eventFromAbono(
   clientMatchByFactura: Map<string, CollectionCalendarClientMatch | null>,
   assumptions: CashFlowAssumptions,
 ): CollectionCalendarEvent {
-  const source: CollectionCalendarEventSource = abono.status === 'factura-cobrada'
-    ? 'BANK_MATCHED'
-    : 'BANK_UNMATCHED';
+  // ABONO en cuenta `unidadNegocio=FEDERAL` del catálogo de bancos: venta
+  // directa a banco (TPV/taquillas/OXXO/…), nunca tiene factura JDE detrás.
+  // Es ingreso REAL del día — fuente propia para que la UI lo sume aparte.
+  const source: CollectionCalendarEventSource = abono.status === 'federal'
+    ? 'BANK_FEDERAL'
+    : abono.status === 'factura-cobrada'
+      ? 'BANK_MATCHED'
+      : 'BANK_UNMATCHED';
   const facturas = (abono.facturas ?? []).map(f => {
     const record = cobranzaByFactura.get(facturaKey(f.cia, f.noFactura));
     return facturaFromRecord(record) ?? {
@@ -320,14 +304,21 @@ function eventFromAbono(
     date: abono.fechaOperacion,
     amount: abono.importe,
     cia: abono.cia,
-    clientName: firstFactura?.nombreCliente ?? 'Abono bancario sin factura',
+    clientName: firstFactura?.nombreCliente
+      ?? (source === 'BANK_FEDERAL' ? 'Venta Federal' : 'Abono bancario sin factura'),
     noCliente: firstFactura?.noCliente,
     noFactura: firstFactura?.noFactura,
-    statusLabel: source === 'BANK_MATCHED' ? 'Real banco cruzado' : 'Real banco sin factura',
+    statusLabel: source === 'BANK_MATCHED'
+      ? 'Real banco cruzado'
+      : source === 'BANK_FEDERAL'
+        ? 'Venta Federal directa a banco'
+        : 'Real banco sin factura',
     dateReason: 'Fecha del movimiento bancario.',
     ruleApplied: source === 'BANK_MATCHED'
       ? `Cruce ${abono.matchTier ?? 'exact'}`
-      : 'Sin factura CXC asociada',
+      : source === 'BANK_FEDERAL'
+        ? 'Cuenta Federal del catálogo de bancos'
+        : 'Sin factura CXC asociada',
     confidence: abono.confidence,
     facturas,
     bank: {
@@ -411,32 +402,6 @@ function eventFromJdeOpenProjected(
           matchConfidence: clientMatch.confidence,
           invoiceDate: resolved.invoiceDate,
           theoreticalDate: resolved.theoreticalDate,
-        }
-      : undefined,
-  };
-}
-
-function eventFromProjection(projected: CollectionEvent, client: Client | undefined): CollectionCalendarEvent {
-  return {
-    id: `projected:${eventKey(projected)}`,
-    source: 'CLIENT_PROJECTED',
-    date: projected.realDate,
-    amount: projected.amount,
-    clientId: projected.clientId,
-    clientName: client?.name ?? projected.clientId,
-    statusLabel: 'Proyectado',
-    dateReason: 'Fecha calculada por collectionEngine desde calendario del cliente.',
-    ruleApplied: client ? clientRuleLabel(client) : 'Regla de cliente',
-    facturas: [],
-    projected,
-    rule: client
-      ? {
-          clientId: client.id,
-          clientName: client.name,
-          ruleApplied: clientRuleLabel(client),
-          matchConfidence: 1,
-          invoiceDate: projected.invoiceDate,
-          theoreticalDate: projected.theoreticalDate,
         }
       : undefined,
   };
@@ -582,12 +547,6 @@ export function significantTokens(value: string): string[] {
   return value
     .split(/\s+/)
     .filter(token => token.length >= 3 && !GENERIC_CLIENT_TOKENS.has(token));
-}
-
-function addCoveredMonth(map: Map<string, Set<string>>, clientId: string, yearMonth: string): void {
-  const set = map.get(clientId) ?? new Set<string>();
-  set.add(yearMonth);
-  map.set(clientId, set);
 }
 
 /**
