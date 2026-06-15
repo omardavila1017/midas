@@ -11,6 +11,7 @@ import {
   addTaxPaymentPlanItem,
   buildAutomaticTaxReserveMovements,
   buildApprovedTaxPaymentMovements,
+  buildTaxByCompany,
   buildTaxDashboardView,
   createManualTaxObligation,
   createTaxManualAdjustment,
@@ -1349,6 +1350,79 @@ describe('taxModuleService', () => {
       projectedDate: '2026-09-17',
       lockState: 'RESTRICTED',
     });
+  });
+
+  it('separates taxes by internal company (buildTaxByCompany)', () => {
+    const withCia = (payment: CobranzaPayment, cia: string): CobranzaPayment => ({
+      ...payment,
+      cia,
+      applications: payment.applications.map((app) => ({ ...app, cia })),
+    });
+    const payA = withCia(cobranzaPayment({
+      idPago: 'PA',
+      fechaCobro: '2026-05-08',
+      importeRecibo: 1160,
+      applications: [{ noFactura: 'A1', importeCobrado: 1160, importeOriginalFactura: 1160, importeIvaFacturaOriginal: 160, tasaIva: '16' }],
+    }), '00011');
+    const payB = withCia(cobranzaPayment({
+      idPago: 'PB',
+      fechaCobro: '2026-05-08',
+      importeRecibo: 580,
+      applications: [{ noFactura: 'B1', importeCobrado: 580, importeOriginalFactura: 580, importeIvaFacturaOriginal: 80, tasaIva: '16' }],
+    }), '00022');
+
+    const params = {
+      cobranzaPayments: [payA, payB],
+      companyCode: 'all',
+      startDate: '2026-05-01',
+      endDate: '2026-05-31',
+      store: defaultTaxStore(),
+      today: '2026-05-01',
+      ivaMode: 'REAL' as const,
+    };
+
+    const breakdown = buildTaxByCompany(params, [
+      { cia: '00011', nombre: 'Empresa A' },
+      { cia: '00022', nombre: 'Empresa B' },
+    ]);
+
+    expect(breakdown).toHaveLength(2);
+    // Sorted by total desc — Empresa A (more income) leads.
+    expect(breakdown[0].cia).toBe('00011');
+    const a = breakdown.find((row) => row.cia === '00011')!;
+    const b = breakdown.find((row) => row.cia === '00022')!;
+    expect(a.nombre).toBe('Empresa A');
+    expect(b.nombre).toBe('Empresa B');
+    expect(a.totals.ivaNet).toBeCloseTo(160);
+    expect(b.totals.ivaNet).toBeCloseTo(80);
+
+    // The per-company split reconciles to the consolidated view.
+    const consolidated = buildTaxDashboardView(params);
+    expect(a.totals.ivaNet + b.totals.ivaNet).toBeCloseTo(consolidated.totals.ivaNet);
+  });
+
+  it('omits companies without tax movement and falls back to cia as name', () => {
+    const payA = cobranzaPayment({
+      idPago: 'PA',
+      fechaCobro: '2026-05-08',
+      importeRecibo: 1160,
+      applications: [{ noFactura: 'A1', importeCobrado: 1160, importeOriginalFactura: 1160, importeIvaFacturaOriginal: 160, tasaIva: '16' }],
+    });
+
+    const breakdown = buildTaxByCompany({
+      cobranzaPayments: [payA],
+      companyCode: 'all',
+      startDate: '2026-05-01',
+      endDate: '2026-05-31',
+      store: defaultTaxStore(),
+      today: '2026-05-01',
+      ivaMode: 'REAL' as const,
+    }, []);
+
+    expect(breakdown).toHaveLength(1);
+    // cobranzaPayment defaults cia '00011'; no catalog entry → name falls back to cia.
+    expect(breakdown[0].cia).toBe('00011');
+    expect(breakdown[0].nombre).toBe('00011');
   });
 });
 

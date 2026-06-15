@@ -4873,6 +4873,7 @@ export default function App() {
               <Suspense fallback={<LazyTabFallback label="Impuestos" />}>
                 <TaxDashboard
                   companyCode={selectedCia}
+                  companies={companies}
                   bankStatements={accountableBankStatements}
                   clients={clients}
                   providers={providers}

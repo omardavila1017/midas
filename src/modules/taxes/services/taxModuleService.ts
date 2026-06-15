@@ -773,6 +773,76 @@ export function buildTaxDashboardView(params: {
   return { periods, obligations, overdueBalance: totalOverdue, totals };
 }
 
+/** Parámetros de `buildTaxDashboardView`, reutilizados por el desglose por empresa. */
+export type TaxDashboardViewParams = Parameters<typeof buildTaxDashboardView>[0];
+
+/** Totales fiscales atribuibles a una empresa interna (cia). */
+export interface TaxCompanyBreakdown {
+  cia: string;
+  nombre: string;
+  totals: TaxDashboardView['totals'];
+}
+
+/**
+ * Separa los impuestos por empresa interna (cia). Reusa el mismo motor
+ * `buildTaxDashboardView` corriéndolo una vez por compañía con su filtro
+ * `companyCode`, así que la atribución sale de los MISMOS datos que ya cargan
+ * cia (cobranza aplicada, CXP, libro mayor de IVA, estados de cuenta, OCs,
+ * nómina).
+ *
+ * El `store` (ajustes manuales, obligaciones capturadas y el saldo vencido
+ * arrastrado) NO está etiquetado por empresa, así que el desglose usa un store
+ * neutro (solo conserva `settings`): los renglones por empresa reflejan
+ * únicamente el impuesto derivado de SUS registros, y los montos globales /
+ * manuales se quedan en la vista consolidada. `movements` se omite porque no
+ * trae una cia confiable (su id la codifica para algunos, pero no todos) — el
+ * IVA/ISR pagado por empresa proviene de los estados de cuenta cia-filtrados.
+ */
+export function buildTaxByCompany(
+  params: TaxDashboardViewParams,
+  companies: ReadonlyArray<{ cia: string; nombre: string }> = [],
+): TaxCompanyBreakdown[] {
+  const cias = new Set<string>();
+  const add = (value: string | undefined) => {
+    const cia = (value ?? '').trim();
+    if (cia && cia.toLowerCase() !== 'all') cias.add(cia);
+  };
+  for (const record of params.cxpRecords ?? []) add(record.cia);
+  for (const payment of params.cobranzaPayments ?? []) add(payment.cia);
+  for (const statement of params.bankStatements ?? []) add(statement.cia);
+  for (const record of params.auxiliarIvaRecords ?? []) add(record.cia);
+  for (const receipt of params.purchaseReceipts ?? []) add(receipt.cia);
+  for (const cost of params.payrollCosts ?? []) add(cost.cia);
+
+  const nameByCia = new Map(companies.map((company) => [company.cia, company.nombre]));
+  // Store neutro: conserva settings (coeficiente/tasa ISR) pero descarta los
+  // ajustes/obligaciones manuales y el saldo vencido globales.
+  const neutralStore: TaxStore = { ...defaultTaxStore(), settings: params.store.settings };
+
+  const rows: TaxCompanyBreakdown[] = [];
+  for (const cia of cias) {
+    const view = buildTaxDashboardView({
+      ...params,
+      companyCode: cia,
+      store: neutralStore,
+      movements: [],
+      projection: undefined,
+    });
+    const totals = view.totals;
+    const hasData = totals.ivaNet !== 0
+      || totals.isr !== 0
+      || totals.isn !== 0
+      || totals.imss !== 0
+      || totals.grossIncome !== 0
+      || totals.cashImpact !== 0;
+    if (!hasData) continue;
+    rows.push({ cia, nombre: nameByCia.get(cia) ?? cia, totals });
+  }
+
+  rows.sort((a, b) => b.totals.total - a.totals.total || a.cia.localeCompare(b.cia));
+  return rows;
+}
+
 export function buildApprovedTaxPaymentMovements(params: {
   obligations: TaxObligation[];
   scenarioId: string;

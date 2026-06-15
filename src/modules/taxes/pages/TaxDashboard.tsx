@@ -9,12 +9,12 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { CalendarDays, Check, ChevronDown, ChevronRight, FileText, Pencil, Plus, RotateCcw, Trash2, Wallet, X } from 'lucide-react';
+import { Building2, CalendarDays, Check, ChevronDown, ChevronRight, Download, FileText, Pencil, Plus, RotateCcw, Trash2, Wallet, X } from 'lucide-react';
 import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
 import type { BankAccountStatement } from '../../../services/jde';
-import type { AuxiliarContableRecord, CobranzaPayment, CobranzaRecord } from '../../../services/jdeTypes';
+import type { AuxiliarContableRecord, CobranzaPayment, CobranzaRecord, Company } from '../../../services/jdeTypes';
 import type { AuxiliarReconResult } from '../../../domain/auxiliarReconciliationEngine';
 import type { CxpPaymentCoverage, PaymentMatch } from '../../../domain/paymentReconciliationEngine';
 import { fmtCompact, fmtCurrency, fmtDate, todayISO } from '../../../formatters';
@@ -40,6 +40,7 @@ import type {
 } from '../../shared-finance/types';
 import {
   addTaxPaymentPlanItem,
+  buildTaxByCompany,
   buildTaxDashboardView,
   createManualTaxObligation,
   createTaxManualAdjustment,
@@ -55,6 +56,7 @@ import {
   type TaxSettings,
   type TaxDashboardView,
   type TaxPeriodSummary,
+  type TaxCompanyBreakdown,
   type TaxRateTarget,
   type TaxSourceLine,
   type TaxStore,
@@ -62,6 +64,8 @@ import {
 
 interface Props {
   companyCode: string;
+  /** Catálogo de empresas internas (cia → nombre) para el desglose por empresa. */
+  companies?: Company[];
   bankStatements: BankAccountStatement[];
   clients: Client[];
   providers: Provider[];
@@ -145,8 +149,8 @@ export default function TaxDashboard(props: Props) {
   // the tab stays responsive instead of freezing the whole renderer.
   const source = useFinancialProjectionSource(cacheProbeInput);
 
-  const view = useMemo(
-    () => buildTaxDashboardView({
+  const taxParams = useMemo(
+    () => ({
       clients: props.clients,
       providers: props.providers,
       assumptions: props.assumptions,
@@ -167,9 +171,16 @@ export default function TaxDashboard(props: Props) {
       movements: source?.movements ?? [],
       store: taxStore,
       today,
-      ivaMode: 'REAL',
+      ivaMode: 'REAL' as const,
     }),
     [endDate, fiscalYearStart, props.assumptions, props.auxiliarReconciliation, props.auxiliarIvaRecords, props.bankStatements, props.budget, props.clients, props.companyCode, props.cobranzaPayments, props.cxpPaymentCoverage, props.cxpRecords, props.paymentMatches, props.payrollCosts, props.providers, props.purchaseReceipts, source, taxStore, today],
+  );
+
+  const view = useMemo(() => buildTaxDashboardView(taxParams), [taxParams]);
+  // Desglose por empresa interna (cia). Reusa el mismo motor por compañía.
+  const companyBreakdown = useMemo(
+    () => buildTaxByCompany(taxParams, props.companies ?? []),
+    [taxParams, props.companies],
   );
   const paymentSchedule = useMemo(() => buildTaxPaymentSchedule(view.obligations), [view.obligations]);
 
@@ -326,6 +337,8 @@ export default function TaxDashboard(props: Props) {
 
       <TaxOperationalOverview view={view} today={today} />
 
+      <TaxByCompanyPanel breakdown={companyBreakdown} />
+
       <TaxCashPlanningPanel
         obligations={view.obligations}
         schedule={paymentSchedule}
@@ -377,6 +390,111 @@ export default function TaxDashboard(props: Props) {
         )}
       </div>
     </div>
+  );
+}
+
+function TaxByCompanyPanel({ breakdown }: { breakdown: TaxCompanyBreakdown[] }) {
+  const totals = useMemo(() => breakdown.reduce(
+    (sum, row) => ({
+      grossIncome: sum.grossIncome + row.totals.grossIncome,
+      ivaNet: sum.ivaNet + row.totals.ivaNet,
+      isr: sum.isr + row.totals.isr,
+      isn: sum.isn + row.totals.isn,
+      imss: sum.imss + row.totals.imss,
+      total: sum.total + row.totals.total,
+    }),
+    { grossIncome: 0, ivaNet: 0, isr: 0, isn: 0, imss: 0, total: 0 },
+  ), [breakdown]);
+
+  if (breakdown.length === 0) return null;
+
+  const handleExport = () => {
+    const header = ['Cia', 'Empresa', 'Ingreso gravable', 'IVA neto', 'ISR', 'ISN', 'IMSS', 'Total'];
+    const rows = breakdown.map((row) => [
+      row.cia,
+      row.nombre,
+      row.totals.grossIncome.toFixed(2),
+      row.totals.ivaNet.toFixed(2),
+      row.totals.isr.toFixed(2),
+      row.totals.isn.toFixed(2),
+      row.totals.imss.toFixed(2),
+      row.totals.total.toFixed(2),
+    ]);
+    const escape = (value: string) => /[",\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+    const csv = [header, ...rows].map((cols) => cols.map((c) => escape(String(c))).join(',')).join('\n');
+    const blob = new Blob([`﻿${csv}`], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `impuestos-por-empresa-${todayISO()}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <section className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--gray-200)] px-4 py-3">
+        <div className="flex items-center gap-2">
+          <Building2 className="h-4 w-4 text-[var(--gray-500)]" strokeWidth={1.5} />
+          <h3 className="text-[14px] font-bold text-[var(--gray-950)]">Impuestos por empresa interna</h3>
+          <span className="text-[11px] text-[var(--gray-400)]">{breakdown.length} empresas con movimiento</span>
+        </div>
+        <button
+          type="button"
+          onClick={handleExport}
+          className="inline-flex h-9 items-center gap-2 rounded-[var(--radius)] border border-[var(--gray-200)] bg-white px-3 text-[12px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)]"
+        >
+          <Download className="h-3.5 w-3.5" strokeWidth={1.5} />
+          Exportar CSV
+        </button>
+      </div>
+      <div className="overflow-x-auto px-1 pb-1">
+        <table className="w-full min-w-[680px] border-collapse text-[12px]">
+          <thead>
+            <tr className="text-[10px] font-medium uppercase tracking-[0.06em] text-[var(--gray-400)]">
+              <th className="px-3 py-2 text-left">Empresa</th>
+              <th className="px-3 py-2 text-right">Ingreso gravable</th>
+              <th className="px-3 py-2 text-right">IVA neto</th>
+              <th className="px-3 py-2 text-right">ISR</th>
+              <th className="px-3 py-2 text-right">ISN</th>
+              <th className="px-3 py-2 text-right">IMSS</th>
+              <th className="px-3 py-2 text-right">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {breakdown.map((row) => (
+              <tr key={row.cia} className="border-t border-[var(--gray-100)] hover:bg-[var(--gray-50)]">
+                <td className="px-3 py-2">
+                  <div className="font-medium text-[var(--gray-900)]">{row.nombre}</div>
+                  <div className="text-[10px] text-[var(--gray-400)]">{row.cia}</div>
+                </td>
+                <td className="px-3 py-2 text-right tabular-nums text-[var(--gray-600)]">{fmtCurrency(row.totals.grossIncome)}</td>
+                <td className="px-3 py-2 text-right tabular-nums text-[var(--gray-900)]">{fmtCurrency(row.totals.ivaNet)}</td>
+                <td className="px-3 py-2 text-right tabular-nums text-[var(--gray-900)]">{fmtCurrency(row.totals.isr)}</td>
+                <td className="px-3 py-2 text-right tabular-nums text-[var(--gray-900)]">{fmtCurrency(row.totals.isn)}</td>
+                <td className="px-3 py-2 text-right tabular-nums text-[var(--gray-900)]">{fmtCurrency(row.totals.imss)}</td>
+                <td className="px-3 py-2 text-right font-bold tabular-nums text-[var(--gray-950)]">{fmtCurrency(row.totals.total)}</td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot>
+            <tr className="border-t-2 border-[var(--gray-200)] font-bold text-[var(--gray-950)]">
+              <td className="px-3 py-2 text-left">Consolidado</td>
+              <td className="px-3 py-2 text-right tabular-nums">{fmtCurrency(totals.grossIncome)}</td>
+              <td className="px-3 py-2 text-right tabular-nums">{fmtCurrency(totals.ivaNet)}</td>
+              <td className="px-3 py-2 text-right tabular-nums">{fmtCurrency(totals.isr)}</td>
+              <td className="px-3 py-2 text-right tabular-nums">{fmtCurrency(totals.isn)}</td>
+              <td className="px-3 py-2 text-right tabular-nums">{fmtCurrency(totals.imss)}</td>
+              <td className="px-3 py-2 text-right tabular-nums">{fmtCurrency(totals.total)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+      <p className="px-4 py-2 text-[10px] text-[var(--gray-400)]">
+        Impuesto derivado de los registros de cada cia (IVA causado por cobranza aplicada, acreditable del libro mayor / CXP, ISN e IMSS de nómina).
+        Los ajustes manuales y el saldo vencido globales se mantienen en la vista consolidada.
+      </p>
+    </section>
   );
 }
 

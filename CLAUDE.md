@@ -82,6 +82,13 @@ El IVA **acreditable** REAL del módulo de Impuestos se lee **directo del libro 
 - **Boot:** efecto en `AppCore.tsx` (espejo del de auxiliar, cuelga del dataset `'auxiliar'`, falla suave). Heavy store `auxiliarIvaRecords` (`heavyStoreIDB.ts` + `persistence.ts` MidasStore).
 - **Diagnóstico runtime:** `window.__midas__.ivaLedger` = `{ recordCount, accounts (objeto/nombre/kind/signo), byPeriod }`. Supuestos a confirmar contra datos reales: rango de objeto candidato, patrones de nombre en `classifyIvaAccount`, y el signo de `importe` por lado.
 
+## Impuestos por empresa interna (2026-06-15)
+
+`buildTaxByCompany` (`src/modules/taxes/services/taxModuleService.ts`) separa los totales fiscales por **cia**. NO duplica el motor: reusa `buildTaxDashboardView` corriéndolo una vez por compañía con su `companyCode` (la fuente ya filtra por cia en cada acumulador: cobranza aplicada, CXP, libro mayor de IVA, estados de cuenta, OCs, nómina). Detalles que muerden:
+- **Store neutro por empresa.** Los ajustes/obligaciones manuales y el saldo vencido del `TaxStore` NO están etiquetados por cia, así que el desglose pasa `{ ...defaultTaxStore(), settings }` — solo conserva la config ISR. Los montos globales/manuales se quedan en la vista consolidada (no se reparten ni se duplican por empresa).
+- **`movements: []` por empresa.** `FinancialMovement` no trae una cia confiable (la codifica en el `id` para algunos, no todos); el IVA/ISR pagado por empresa sale de los estados de cuenta cia-filtrados, no del fallback por movimientos.
+- Las cias salen de los registros con cia presente; las sin movimiento fiscal se omiten; el nombre se resuelve contra el catálogo `companies` (fallback al código). UI: `TaxByCompanyPanel` en `TaxDashboard.tsx` (tabla ordenada por total + fila Consolidado + export CSV con BOM). `AppCore.tsx` pasa `companies`. Tests: `taxModuleService.test.ts` ("separates taxes by internal company").
+
 ## Dos motores: MOTOR 1 (Histórico Reconciliado) + MOTOR 2 (Proyección Corto Plazo) (2026-06-03)
 
 El motor canónico está partido en **dos motores nombrados y testeables**, en archivos físicos separados, orquestados por `buildMovements` (que corre el prorrateo Citi una vez sobre la lista compuesta). Ambos son funciones **exportadas** que reciben `{ monthly, inputs }` (tipo `BuildArgs`). Layout (`src/modules/shared-finance/calculation-engine/`):
