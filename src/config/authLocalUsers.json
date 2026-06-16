@@ -18,7 +18,7 @@
     { "email": "paolo.rodriguez@gruposenda.com", "role": "admin" },
     { "email": "smlr@gruposenda.com", "role": "admin" },
     { "email": "marcela.martinez@gruposenda.com", "role": "admin" },
-    { "email": "antonio.palomo@gruposenda.com", "role": "admin" },
+    { "email": "antonio.palomo@gruposenda.com", "role": "user", "permissions": ["financialProjection", "financialPlanning", "concursoMercantil", "fideicomiso", "netflow", "venta", "collections", "cxp", "compras", "pagos", "payroll", "taxes", "clients", "providers", "bancos", "kpisObjectives"] },
     { "email": "selena.cantu@gruposenda.com", "role": "admin" },
     { "email": "jesus.saucedo@gruposenda.com", "role": "user", "permissions": ["payroll"] },
     { "email": "edgar.ibarra@gruposenda.com", "role": "admin" },
@@ -27,6 +27,7 @@
     { "email": "javier.torres@gruposenda.com", "role": "admin" },
     { "email": "carlos.ortiz@gruposenda.com", "role": "admin" },
     { "email": "mario.leal@gruposenda.com", "role": "user", "permissions": ["venta", "clients"] },
-    { "email": "jesus.villarreal@gruposenda.com", "role": "user", "permissions": ["compras", "pagos", "providers"] }
+    { "email": "jesus.villarreal@gruposenda.com", "role": "user", "permissions": ["compras", "pagos", "providers"] },
+    { "email": "david.betancourt@gruposenda.com", "role": "user", "permissions": ["taxes"] }
   ]
 }
