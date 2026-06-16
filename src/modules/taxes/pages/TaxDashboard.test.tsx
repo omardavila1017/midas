@@ -315,6 +315,59 @@ describe('<TaxDashboard />', () => {
     expect(screen.queryByText(/Sin egresos acreditables/i)).toBeNull();
   });
 
+  it('separates taxes by company and filters the breakdown via the multi-empresa picker', () => {
+    const base = cobranzaPayment();
+    const payNorte: CobranzaPayment = {
+      ...base,
+      cia: '00011',
+      idPago: 'PN',
+      noRecibo: 'PN',
+      applications: base.applications.map((app) => ({ ...app, cia: '00011', idPago: 'PN', noFactura: 'RN' })),
+    };
+    const paySur: CobranzaPayment = {
+      ...base,
+      cia: '00022',
+      idPago: 'PS',
+      noRecibo: 'PS',
+      applications: base.applications.map((app) => ({ ...app, cia: '00022', idPago: 'PS', noFactura: 'RS' })),
+    };
+
+    render(
+      <TaxDashboard
+        companyCode="all"
+        companies={[
+          { cia: '00011', nombre: 'Empresa Norte' },
+          { cia: '00022', nombre: 'Empresa Sur' },
+        ]}
+        bankStatements={[bank()]}
+        clients={[]}
+        providers={[]}
+        cxpRecords={[]}
+        cobranzaPayments={[payNorte, paySur]}
+        assumptions={assumptions}
+        budget={null}
+        startingBalance={20_000}
+      />,
+    );
+
+    const panel = screen.getByText('Impuestos por empresa interna').closest('section') as HTMLElement;
+    const table = within(panel).getByRole('table');
+    // Both companies show in the per-company breakdown, consolidated footer.
+    expect(within(table).getByText('Empresa Norte')).toBeTruthy();
+    expect(within(table).getByText('Empresa Sur')).toBeTruthy();
+    expect(within(table).getByText('Consolidado')).toBeTruthy();
+
+    // Open the multi-select filter and pick only Empresa Norte.
+    fireEvent.click(within(panel).getByRole('button', { name: /Filtrar por empresa/i }));
+    fireEvent.click(within(panel).getByRole('option', { name: /Empresa Norte/i }));
+
+    // The table now shows only the selection and a selection subtotal.
+    expect(within(table).getByText('Empresa Norte')).toBeTruthy();
+    expect(within(table).queryByText('Empresa Sur')).toBeNull();
+    expect(within(table).getByText('Selección (1)')).toBeTruthy();
+    expect(within(table).queryByText('Consolidado')).toBeNull();
+  });
+
   // Obsoleto en la branch del motor AuxiliarContable: TaxDashboard ya no
   // recibe `cargoEnrichments` (PagoProveedor↔CARGO). La reclasificación de
   // egresos como IVA acreditable ahora se deriva del cruce AuxiliarContable

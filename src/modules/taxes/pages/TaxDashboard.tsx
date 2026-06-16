@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bar,
   CartesianGrid,
@@ -394,7 +394,29 @@ export default function TaxDashboard(props: Props) {
 }
 
 function TaxByCompanyPanel({ breakdown }: { breakdown: TaxCompanyBreakdown[] }) {
-  const totals = useMemo(() => breakdown.reduce(
+  // Filtro multi-empresa (capa de display). El motor `buildTaxByCompany` ya
+  // devuelve TODAS las empresas con movimiento; aquí sólo elegimos cuáles
+  // mostrar. Set vacío = todas.
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+
+  // Si el desglose cambia (otra carga / rango), descarta cias seleccionadas que
+  // ya no tienen movimiento para no dejar un filtro "fantasma".
+  useEffect(() => {
+    setSelected((current) => {
+      if (current.size === 0) return current;
+      const present = new Set(breakdown.map((row) => row.cia));
+      const next = new Set([...current].filter((cia) => present.has(cia)));
+      return next.size === current.size ? current : next;
+    });
+  }, [breakdown]);
+
+  const filtered = selected.size > 0;
+  const visibleRows = useMemo(
+    () => (filtered ? breakdown.filter((row) => selected.has(row.cia)) : breakdown),
+    [breakdown, filtered, selected],
+  );
+
+  const totals = useMemo(() => visibleRows.reduce(
     (sum, row) => ({
       grossIncome: sum.grossIncome + row.totals.grossIncome,
       ivaNet: sum.ivaNet + row.totals.ivaNet,
@@ -404,13 +426,13 @@ function TaxByCompanyPanel({ breakdown }: { breakdown: TaxCompanyBreakdown[] }) 
       total: sum.total + row.totals.total,
     }),
     { grossIncome: 0, ivaNet: 0, isr: 0, isn: 0, imss: 0, total: 0 },
-  ), [breakdown]);
+  ), [visibleRows]);
 
   if (breakdown.length === 0) return null;
 
   const handleExport = () => {
     const header = ['Cia', 'Empresa', 'Ingreso gravable', 'IVA neto', 'ISR', 'ISN', 'IMSS', 'Total'];
-    const rows = breakdown.map((row) => [
+    const rows = visibleRows.map((row) => [
       row.cia,
       row.nombre,
       row.totals.grossIncome.toFixed(2),
@@ -426,7 +448,7 @@ function TaxByCompanyPanel({ breakdown }: { breakdown: TaxCompanyBreakdown[] }) 
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `impuestos-por-empresa-${todayISO()}.csv`;
+    a.download = `impuestos-por-empresa-${filtered ? 'seleccion-' : ''}${todayISO()}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -437,16 +459,27 @@ function TaxByCompanyPanel({ breakdown }: { breakdown: TaxCompanyBreakdown[] }) 
         <div className="flex items-center gap-2">
           <Building2 className="h-4 w-4 text-[var(--gray-500)]" strokeWidth={1.5} />
           <h3 className="text-[14px] font-bold text-[var(--gray-950)]">Impuestos por empresa interna</h3>
-          <span className="text-[11px] text-[var(--gray-400)]">{breakdown.length} empresas con movimiento</span>
+          <span className="text-[11px] text-[var(--gray-400)]">
+            {filtered
+              ? `Mostrando ${visibleRows.length} de ${breakdown.length} empresas`
+              : `${breakdown.length} empresas con movimiento`}
+          </span>
         </div>
-        <button
-          type="button"
-          onClick={handleExport}
-          className="inline-flex h-9 items-center gap-2 rounded-[var(--radius)] border border-[var(--gray-200)] bg-white px-3 text-[12px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)]"
-        >
-          <Download className="h-3.5 w-3.5" strokeWidth={1.5} />
-          Exportar CSV
-        </button>
+        <div className="flex items-center gap-2">
+          <CompanyMultiSelect
+            options={breakdown.map((row) => ({ cia: row.cia, nombre: row.nombre }))}
+            selected={selected}
+            onChange={setSelected}
+          />
+          <button
+            type="button"
+            onClick={handleExport}
+            className="inline-flex h-9 items-center gap-2 rounded-[var(--radius)] border border-[var(--gray-200)] bg-white px-3 text-[12px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)]"
+          >
+            <Download className="h-3.5 w-3.5" strokeWidth={1.5} />
+            Exportar CSV
+          </button>
+        </div>
       </div>
       <div className="overflow-x-auto px-1 pb-1">
         <table className="w-full min-w-[680px] border-collapse text-[12px]">
@@ -462,7 +495,7 @@ function TaxByCompanyPanel({ breakdown }: { breakdown: TaxCompanyBreakdown[] }) 
             </tr>
           </thead>
           <tbody>
-            {breakdown.map((row) => (
+            {visibleRows.map((row) => (
               <tr key={row.cia} className="border-t border-[var(--gray-100)] hover:bg-[var(--gray-50)]">
                 <td className="px-3 py-2">
                   <div className="font-medium text-[var(--gray-900)]">{row.nombre}</div>
@@ -479,7 +512,7 @@ function TaxByCompanyPanel({ breakdown }: { breakdown: TaxCompanyBreakdown[] }) 
           </tbody>
           <tfoot>
             <tr className="border-t-2 border-[var(--gray-200)] font-bold text-[var(--gray-950)]">
-              <td className="px-3 py-2 text-left">Consolidado</td>
+              <td className="px-3 py-2 text-left">{filtered ? `Selección (${visibleRows.length})` : 'Consolidado'}</td>
               <td className="px-3 py-2 text-right tabular-nums">{fmtCurrency(totals.grossIncome)}</td>
               <td className="px-3 py-2 text-right tabular-nums">{fmtCurrency(totals.ivaNet)}</td>
               <td className="px-3 py-2 text-right tabular-nums">{fmtCurrency(totals.isr)}</td>
@@ -492,9 +525,139 @@ function TaxByCompanyPanel({ breakdown }: { breakdown: TaxCompanyBreakdown[] }) 
       </div>
       <p className="px-4 py-2 text-[10px] text-[var(--gray-400)]">
         Impuesto derivado de los registros de cada cia (IVA causado por cobranza aplicada, acreditable del libro mayor / CXP, ISN e IMSS de nómina).
-        Los ajustes manuales y el saldo vencido globales se mantienen en la vista consolidada.
+        Usa el filtro para ver una o varias empresas; los ajustes manuales y el saldo vencido globales se mantienen en la vista consolidada.
       </p>
     </section>
+  );
+}
+
+/**
+ * Multi-select de empresas (cia) para el desglose fiscal. Patrón de
+ * click-outside / Escape espejo de `SelectPicker`, pero con casillas para
+ * seleccionar más de una. Set vacío en el padre = "Todas las empresas".
+ */
+function CompanyMultiSelect({
+  options,
+  selected,
+  onChange,
+}: {
+  options: Array<{ cia: string; nombre: string }>;
+  selected: Set<string>;
+  onChange: (next: Set<string>) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onClick = (event: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) setOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onClick);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onClick);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  const allSelected = selected.size === 0;
+  const label = allSelected
+    ? 'Todas las empresas'
+    : selected.size === 1
+      ? options.find((opt) => selected.has(opt.cia))?.nombre ?? '1 empresa'
+      : `${selected.size} empresas`;
+
+  const toggle = (cia: string) => {
+    const next = new Set(selected);
+    if (next.has(cia)) next.delete(cia);
+    else next.add(cia);
+    onChange(next);
+  };
+
+  return (
+    <div ref={rootRef} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label="Filtrar por empresa"
+        className="inline-flex h-9 items-center gap-2 rounded-[var(--radius)] border border-[var(--gray-200)] bg-white px-3 text-[12px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)]"
+      >
+        <Building2 className="h-3.5 w-3.5 text-[var(--gray-400)]" strokeWidth={1.5} />
+        <span className="max-w-[180px] truncate">{label}</span>
+        <ChevronDown
+          className="h-3.5 w-3.5 text-[var(--gray-400)] transition-transform"
+          strokeWidth={1.5}
+          style={{ transform: open ? 'rotate(180deg)' : undefined }}
+        />
+      </button>
+
+      {open && (
+        <div
+          role="listbox"
+          aria-multiselectable="true"
+          className="absolute right-0 z-50 mt-2 w-64 rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white"
+          style={{ boxShadow: 'var(--shadow-md)' }}
+        >
+          <button
+            type="button"
+            onClick={() => onChange(new Set())}
+            className="flex w-full items-center justify-between px-3 py-2 text-left text-[12px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)]"
+          >
+            <span>Todas las empresas</span>
+            {allSelected && <Check className="h-3.5 w-3.5 text-[var(--primary)]" strokeWidth={2.5} />}
+          </button>
+          <div className="border-t border-[var(--gray-100)]" />
+          <ul className="max-h-64 overflow-y-auto py-1">
+            {options.map((opt) => {
+              const checked = selected.has(opt.cia);
+              return (
+                <li key={opt.cia}>
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={checked}
+                    onClick={() => toggle(opt.cia)}
+                    className="flex w-full items-center gap-2.5 px-3 py-2 text-left hover:bg-[var(--gray-50)]"
+                  >
+                    <span
+                      className="flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-[4px] border"
+                      style={{
+                        borderColor: checked ? 'var(--primary)' : 'var(--gray-300)',
+                        background: checked ? 'var(--primary)' : 'transparent',
+                      }}
+                    >
+                      {checked && <Check className="h-3 w-3 text-white" strokeWidth={3} />}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[12px] font-medium text-[var(--gray-900)]">{opt.nombre}</span>
+                      <span className="block text-[10px] text-[var(--gray-400)]">{opt.cia}</span>
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+          {!allSelected && (
+            <>
+              <div className="border-t border-[var(--gray-100)]" />
+              <button
+                type="button"
+                onClick={() => onChange(new Set())}
+                className="w-full px-3 py-2 text-left text-[11px] font-medium text-[var(--primary)] hover:bg-[var(--gray-50)]"
+              >
+                Limpiar selección
+              </button>
+            </>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
