@@ -1063,11 +1063,14 @@ const BancosDashboard = ({
 // Soft cap defensivo: cuando una cuenta histórica se expande con muchos
 // movimientos (cuentas de operación pesadas pasan de 10k movs en 2 años) el
 // render de todas las filas en un solo commit OOM-kileaba el tab ("Aw, Snap!
-// Error code: 5"). Hard-cap 1500 filas iniciales con botón "Cargar más" en
-// chunks de 1500 — los totales siguen agregando sobre todas las filas (no
-// se pierde funcionalidad, solo se difiere DOM). El usuario que necesita ver
-// movs viejos puede hacer click; el usuario normal nunca ve el límite.
-const BANCOS_ROW_CHUNK = 1500;
+// Error code: 5"). Por defecto mostramos solo los ÚLTIMOS 30 movimientos (los
+// más recientes) — el usuario decide cuánto historial cargar con el botón
+// "Cargar … anteriores" (chunks) o "Cargar todas". Los totales del pie siguen
+// agregando sobre TODAS las filas del periodo (no las visibles), así que la
+// cifra real no se pierde; solo se difiere el DOM. El usuario que necesita ver
+// movs viejos hace click; el normal solo ve lo reciente.
+const BANCOS_INITIAL_ROWS = 30;
+const BANCOS_ROW_CHUNK = 100;
 
 const BancosMovimientos = ({
   acc,
@@ -1082,9 +1085,9 @@ const BancosMovimientos = ({
 }) => {
   // Reset al cambiar de cuenta (componente se remontaría igual al colapsar
   // pero los filtros tampoco lo remontan — solo cambia `acc`).
-  const [renderLimit, setRenderLimit] = useState(BANCOS_ROW_CHUNK);
+  const [renderLimit, setRenderLimit] = useState(BANCOS_INITIAL_ROWS);
   useEffect(() => {
-    setRenderLimit(BANCOS_ROW_CHUNK);
+    setRenderLimit(BANCOS_INITIAL_ROWS);
   }, [acc.cia, acc.cuenta]);
 
   if (acc.movimientos.length === 0) {
@@ -1104,8 +1107,13 @@ const BancosMovimientos = ({
   }));
   const totalRows = classified.length;
   const cappedRows = totalRows > renderLimit;
-  const visibleClassified = cappedRows ? classified.slice(0, renderLimit) : classified;
-  const hiddenCount = totalRows - visibleClassified.length;
+  // `classified` viene ordenado ascendente por fecha (jde.ts ordena así). Para
+  // mostrar los ÚLTIMOS `renderLimit` movimientos tomamos la COLA del array;
+  // "Cargar … anteriores" revela los más viejos, que aparecen ARRIBA (el orden
+  // cronológico de la tabla queda intacto, con el saldo corriendo top→bottom).
+  const firstVisibleIdx = cappedRows ? totalRows - renderLimit : 0;
+  const visibleClassified = cappedRows ? classified.slice(firstVisibleIdx) : classified;
+  const hiddenCount = firstVisibleIdx;
 
   let abonosBruto = 0, abonosReal = 0, cargosBruto = 0, cargosReal = 0, internalCount = 0;
   for (const { m, internalReason } of classified) {
@@ -1135,6 +1143,33 @@ const BancosMovimientos = ({
             </tr>
           </thead>
           <tbody>
+            {cappedRows && (
+              <tr className="bg-[var(--surface-alt)] border-b border-[var(--gray-100)]">
+                <td colSpan={6} className="py-2 text-center text-[11px] text-[var(--gray-500)]">
+                  Mostrando últimos {visibleClassified.length.toLocaleString()} de {totalRows.toLocaleString()} movs ·
+                  {' '}
+                  <button
+                    type="button"
+                    onClick={() => setRenderLimit(prev => prev + BANCOS_ROW_CHUNK)}
+                    className="text-[var(--accent-blue)] font-bold underline-offset-2 hover:underline"
+                  >
+                    Cargar {Math.min(BANCOS_ROW_CHUNK, hiddenCount).toLocaleString()} anteriores
+                  </button>
+                  {hiddenCount > BANCOS_ROW_CHUNK && (
+                    <>
+                      {' · '}
+                      <button
+                        type="button"
+                        onClick={() => setRenderLimit(totalRows)}
+                        className="text-[var(--gray-500)] underline-offset-2 hover:underline"
+                      >
+                        Cargar todas ({totalRows.toLocaleString()})
+                      </button>
+                    </>
+                  )}
+                </td>
+              </tr>
+            )}
             {visibleClassified.map(({ m, internalReason }, i) => {
               const isCargo = m.tipoMovimiento === 'CARGO';
               const isInternal = internalReason !== null;
@@ -1227,36 +1262,9 @@ const BancosMovimientos = ({
                 </tr>
               );
             })}
-            {cappedRows && (
-              <tr className="bg-[var(--surface-alt)] border-b border-[var(--gray-100)]">
-                <td colSpan={6} className="py-2 text-center text-[11px] text-[var(--gray-500)]">
-                  Mostrando {visibleClassified.length.toLocaleString()} de {totalRows.toLocaleString()} movs ·
-                  {' '}
-                  <button
-                    type="button"
-                    onClick={() => setRenderLimit(prev => prev + BANCOS_ROW_CHUNK)}
-                    className="text-[var(--accent-blue)] font-bold underline-offset-2 hover:underline"
-                  >
-                    Cargar {Math.min(BANCOS_ROW_CHUNK, hiddenCount).toLocaleString()} más
-                  </button>
-                  {hiddenCount > BANCOS_ROW_CHUNK && (
-                    <>
-                      {' · '}
-                      <button
-                        type="button"
-                        onClick={() => setRenderLimit(totalRows)}
-                        className="text-[var(--gray-500)] underline-offset-2 hover:underline"
-                      >
-                        Cargar todas ({totalRows.toLocaleString()})
-                      </button>
-                    </>
-                  )}
-                </td>
-              </tr>
-            )}
             <tr className="border-t-2 border-[var(--gray-200)] bg-[var(--gray-50)] font-bold">
               <td className="py-2" colSpan={3}>
-                Totales visibles
+                Totales del periodo
                 {internalCount > 0 && (
                   <span className="text-[10px] font-normal text-[var(--gray-400)] ml-2">
                     ({internalCount} interno{internalCount === 1 ? '' : 's'} excluido{internalCount === 1 ? '' : 's'})
