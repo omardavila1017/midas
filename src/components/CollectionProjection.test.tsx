@@ -411,6 +411,47 @@ describe('<CollectionProjection />', () => {
     }));
   });
 
+  it('filtra por NOMBRE de empresa y permite seleccionar más de una', () => {
+    const currentYear = new Date().getFullYear();
+    render(
+      <CollectionProjection
+        clients={[makeClient({ id: '9001', name: 'Cliente Demo' })]}
+        assumptions={{ ...ASSUMPTIONS, year: currentYear }}
+        onAssumptionsChange={() => {}}
+        confirmedPayments={[]}
+        onConfirm={() => {}}
+        onUnconfirm={() => {}}
+        companies={[
+          { cia: '00011', nombre: 'Senda Nacional' },
+          { cia: '00033', nombre: 'Multicarga Express' },
+        ]}
+        cobranzaRecords={[
+          makeCobranzaRecord({ cia: '00011', noFactura: 'F-11' }),
+          makeCobranzaRecord({ cia: '00033', noFactura: 'F-33' }),
+        ]}
+        cobranzaLoadedCias={{
+          '00011': new Date().toISOString(),
+          '00033': new Date().toISOString(),
+        }}
+        bankStatements={[]}
+      />,
+    );
+
+    // Default sin filtro global → "Todas las empresas".
+    const filterButton = screen.getByRole('button', { name: /Filtrar por empresa/i });
+    expect(filterButton.textContent).toContain('Todas las empresas');
+
+    // El menú lista el NOMBRE de la empresa, no solo el número de cia.
+    fireEvent.click(filterButton);
+    expect(screen.getByRole('option', { name: /Senda Nacional/i })).toBeTruthy();
+    expect(screen.getByRole('option', { name: /Multicarga Express/i })).toBeTruthy();
+
+    // Se pueden seleccionar varias empresas a la vez.
+    fireEvent.click(screen.getByRole('option', { name: /Senda Nacional/i }));
+    fireEvent.click(screen.getByRole('option', { name: /Multicarga Express/i }));
+    expect(filterButton.textContent).toContain('2 empresas');
+  });
+
   it('exporta CSV de cobranza con columnas del calendario unificado', () => {
     const mockedDownloadFile = vi.mocked(downloadFile);
     renderRealCobranzaView();

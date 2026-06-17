@@ -33,6 +33,7 @@ import { hex } from '../theme';
 import { fmtCurrency, fmtCompact, todayISO } from '../formatters';
 import AnimatedNumber from './ui/AnimatedNumber';
 import PageHeader from './ui/PageHeader';
+import CompanyMultiSelect from './ui/CompanyMultiSelect';
 
 /**
  * Proyección de Cobranza — simplified layout.
@@ -1371,12 +1372,13 @@ function CollectionSourceBadge({ source }: { source: CollectionCalendarEventSour
   );
 }
 
-function collectionEventMatchesCia(event: CollectionCalendarEvent, ciaFilter: string): boolean {
-  if (ciaFilter === 'all') return true;
+function collectionEventMatchesCia(event: CollectionCalendarEvent, ciaFilter: Set<string>): boolean {
+  // Set vacío = "Todas las compañías".
+  if (ciaFilter.size === 0) return true;
   // La proyección ROL no siempre trae cia JDE; se mantiene visible para que
-  // el calendario futuro no desaparezca al filtrar una compañía.
+  // el calendario futuro no desaparezca al filtrar una o varias compañías.
   if (event.source === 'ROL_PROJECTED' && !event.cia) return true;
-  return event.cia === ciaFilter;
+  return event.cia ? ciaFilter.has(event.cia) : false;
 }
 
 
@@ -1394,7 +1396,7 @@ function CobranzaRealCalendar({
   bankCoverageLoading,
 }: {
   calendar: BuildCollectionCalendarResult;
-  ciaFilter: string;
+  ciaFilter: Set<string>;
   bankCoverage?: RealReconciliationBankCoverage;
   onEnsureBankCoverage?: (request: EnsureBankCoverageRequest) => void | Promise<void>;
   bankCoverageLoading?: boolean;
@@ -1865,13 +1867,13 @@ function CobranzaRealView({
 }) {
   // Default del filtro local: si el global selectedCia es una cía válida
   // (no 'all'), arrancamos filtrados por esa cía. Si después el usuario
-  // cambia el global, sincronizamos también.
-  const [ciaFilter, setCiaFilter] = useState<string>(
-    defaultCia && defaultCia !== 'all' ? defaultCia : 'all',
+  // cambia el global, sincronizamos también. Multi-empresa: Set vacío = todas.
+  const [ciaFilter, setCiaFilter] = useState<Set<string>>(() =>
+    defaultCia && defaultCia !== 'all' ? new Set([defaultCia]) : new Set(),
   );
   useEffect(() => {
-    if (defaultCia && defaultCia !== 'all') setCiaFilter(defaultCia);
-    else if (defaultCia === 'all') setCiaFilter('all');
+    if (defaultCia && defaultCia !== 'all') setCiaFilter(new Set([defaultCia]));
+    else if (defaultCia === 'all') setCiaFilter(new Set());
   }, [defaultCia]);
   const [estatusFilter, setEstatusFilter] = useState<string>('all');
   const [query, setQuery] = useState('');
@@ -1974,11 +1976,13 @@ function CobranzaRealView({
     return m;
   }, [companies]);
 
-  const allCias = useMemo(() => {
+  const companyOptions = useMemo(() => {
     const set = new Set<string>();
     for (const r of records) if (r.cia) set.add(r.cia);
-    return Array.from(set).sort();
-  }, [records]);
+    return Array.from(set)
+      .map(cia => ({ cia, nombre: ciaName.get(cia) ?? `Cia ${cia}` }))
+      .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es-MX'));
+  }, [records, ciaName]);
 
   const allEstatus = useMemo(() => {
     const set = new Set<string>();
@@ -1988,7 +1992,7 @@ function CobranzaRealView({
 
   const filtered = useMemo(() => {
     return records.filter(r => {
-      if (ciaFilter !== 'all' && r.cia !== ciaFilter) return false;
+      if (ciaFilter.size > 0 && !(r.cia && ciaFilter.has(r.cia))) return false;
       if (estatusFilter !== 'all' && r.estatus !== estatusFilter) return false;
       if (crossFilter !== 'all') {
         const m = matchByFactura.get(`${r.cia}::${r.noFactura}`);
@@ -2056,18 +2060,11 @@ function CobranzaRealView({
           />
         </div>
 
-        <select
-          value={ciaFilter}
-          onChange={e => setCiaFilter(e.target.value)}
-          className="input text-[12px] h-8"
-        >
-          <option value="all">Todas las compañías</option>
-          {allCias.map(cia => (
-            <option key={cia} value={cia}>
-              {cia} · {ciaName.get(cia) ?? '—'}
-            </option>
-          ))}
-        </select>
+        <CompanyMultiSelect
+          options={companyOptions}
+          selected={ciaFilter}
+          onChange={setCiaFilter}
+        />
 
         <select
           value={estatusFilter}
@@ -2093,9 +2090,9 @@ function CobranzaRealView({
           </select>
         )}
 
-        {(query || ciaFilter !== 'all' || estatusFilter !== 'all' || crossFilter !== 'all') && (
+        {(query || ciaFilter.size > 0 || estatusFilter !== 'all' || crossFilter !== 'all') && (
           <button
-            onClick={() => { setQuery(''); setCiaFilter('all'); setEstatusFilter('all'); setCrossFilter('all'); }}
+            onClick={() => { setQuery(''); setCiaFilter(new Set()); setEstatusFilter('all'); setCrossFilter('all'); }}
             className="text-[12px] text-[var(--primary)] hover:underline px-2"
           >
             Limpiar
