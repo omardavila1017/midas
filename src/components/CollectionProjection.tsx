@@ -1410,7 +1410,12 @@ function CobranzaRealCalendar({
     return calendar.events.filter(event => {
       if (!event.date.startsWith(prefix)) return false;
       if (!collectionEventMatchesCia(event, ciaFilter)) return false;
-      if (event.source === 'BANK_UNMATCHED') return false;
+      // BANK_UNMATCHED (abono real en banco sin factura JDE cruzada) SÍ entra
+      // al calendario, pero como cubeta propia "Sin factura" — NO se suma al
+      // ingreso cruzado ("Ing.") ni al Δ, para no contaminar el significado
+      // del cruce ni de la comparación contra proyección. Es dinero que de
+      // verdad entró: antes se descartaba aquí y por eso el calendario
+      // reportaba menos ingreso que la realidad bancaria.
       return true;
     });
   }, [calendar.events, year, month, ciaFilter]);
@@ -1462,13 +1467,13 @@ function CobranzaRealCalendar({
   // semanal" del calendario legacy. Si el mes no tiene eventos
   // visibles la sección no se renderiza.
   const weeklyTotals = useMemo(() => {
-    const weeks: Record<string, { real: number; projected: number }> = {};
+    const weeks: Record<string, { real: number; projected: number; unmatched: number }> = {};
     for (const [date, evts] of byDay.entries()) {
       const d = new Date(date + 'T12:00:00');
       const weekStart = new Date(d);
       weekStart.setDate(weekStart.getDate() - ((weekStart.getDay() + 6) % 7));
       const key = weekStart.toISOString().slice(0, 10);
-      const slot = weeks[key] ?? { real: 0, projected: 0 };
+      const slot = weeks[key] ?? { real: 0, projected: 0, unmatched: 0 };
       for (const e of evts) {
         // Federal suma al ingreso real de la semana (venta directa a banco).
         if (
@@ -1482,6 +1487,10 @@ function CobranzaRealCalendar({
           || e.source === 'ROL_PROJECTED'
         ) {
           slot.projected += e.amount;
+        } else if (e.source === 'BANK_UNMATCHED') {
+          // Ingreso real en banco sin factura — se reporta aparte, no se
+          // mezcla con el ingreso cruzado.
+          slot.unmatched += e.amount;
         }
       }
       weeks[key] = slot;
@@ -1533,6 +1542,10 @@ function CobranzaRealCalendar({
             <span><strong className="text-[var(--gray-950)]">Federal</strong> · venta directa a banco</span>
           </span>
           <span className="inline-flex items-center gap-1.5">
+            <span className="w-2.5 h-2.5 rounded-sm bg-[#f59e0b]" />
+            <span><strong className="text-[var(--gray-950)]">Sin factura</strong> · banco real por identificar</span>
+          </span>
+          <span className="inline-flex items-center gap-1.5">
             <span className="w-2.5 h-2.5 rounded-sm bg-[#7c3aed]" />
             <span><strong className="text-[var(--gray-950)]">Proyección</strong> · ROL ejecutado por facturar</span>
           </span>
@@ -1569,6 +1582,12 @@ function CobranzaRealCalendar({
               .reduce((s, event) => s + event.amount, 0);
             // Federal suma al ingreso del día (venta directa a banco).
             const dayRealTotal = dayMatchedTotal + dayFederalTotal;
+            // Abonos reales en banco sin factura JDE cruzada — se muestran como
+            // cubeta propia "Sin factura". NO entran a dayRealTotal ni al Δ
+            // (no contaminan el cruce); solo hacen visible el dinero que entró.
+            const dayUnmatchedTotal = dayEvents
+              .filter(event => event.source === 'BANK_UNMATCHED')
+              .reduce((s, event) => s + event.amount, 0);
             const dayProjectedTotal = dayEvents
               .filter(event =>
                 event.source === 'JDE_OPEN_PROJECTED'
@@ -1621,6 +1640,14 @@ function CobranzaRealCalendar({
                         title="Ingreso Federal (venta directa a banco, sin factura JDE) — suma al ingreso del día"
                       >
                         Fed. {fmtCompact(dayFederalTotal)}
+                      </div>
+                    )}
+                    {dayUnmatchedTotal > 0 && (
+                      <div
+                        className="rounded-md bg-[#fef3c7] text-[#b45309] px-1.5 py-0.5 text-[11px] font-semibold tabular-nums w-fit"
+                        title="Ingreso real en banco sin factura JDE cruzada — por identificar. No entra al cruce ('Ing.') ni al Δ."
+                      >
+                        S/F {fmtCompact(dayUnmatchedTotal)}
                       </div>
                     )}
                     {dayProjectedTotal > 0 && (
@@ -1743,13 +1770,15 @@ function CobranzaRealCalendar({
         )}
       </div>
 
-      {/* Cobranza semanal — dos barras por semana: ingreso real
-          (cruzado con banco) arriba y proyección abajo, escaladas al
-          monto semanal más grande para hacer comparable la magnitud. */}
+      {/* Cobranza semanal — barras por semana: ingreso real (cruzado con
+          banco) arriba, proyección en medio y, cuando hay, el ingreso real
+          sin factura ("por identificar") abajo. Escaladas al monto semanal
+          más grande para hacer comparable la magnitud. */}
       {Object.keys(weeklyTotals).length > 0 && (() => {
         const entries = Object.entries(weeklyTotals).sort(([a], [b]) => a.localeCompare(b));
+        const hasUnmatched = entries.some(([, w]) => w.unmatched > 0);
         const maxWeek = Math.max(
-          ...entries.map(([, w]) => Math.max(w.real, w.projected)),
+          ...entries.map(([, w]) => Math.max(w.real, w.projected, w.unmatched)),
           1,
         );
         return (
@@ -1765,12 +1794,19 @@ function CobranzaRealCalendar({
                   <span className="w-2.5 h-2.5 rounded-sm bg-[#a78bfa]" />
                   Proyección
                 </span>
+                {hasUnmatched && (
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 rounded-sm bg-[#f59e0b]" />
+                    Sin factura
+                  </span>
+                )}
               </div>
             </div>
             <div className="space-y-3">
               {entries.map(([week, w], i) => {
                 const realPct = (w.real / maxWeek) * 100;
                 const projPct = (w.projected / maxWeek) * 100;
+                const unmatchedPct = (w.unmatched / maxWeek) * 100;
                 const delay = `${i * 60}ms`;
                 return (
                   <div key={week} className="grid grid-cols-[90px_1fr_180px] items-center gap-3 animate-slide-up" style={{ animationDelay: delay }}>
@@ -1790,6 +1826,14 @@ function CobranzaRealCalendar({
                           style={{ width: `${Math.min(100, projPct)}%`, animationDelay: delay }}
                         />
                       </div>
+                      {hasUnmatched && (
+                        <div className="h-3 bg-[var(--gray-50)] rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-[#f59e0b] rounded-full animate-progress-fill"
+                            style={{ width: `${Math.min(100, unmatchedPct)}%`, animationDelay: delay }}
+                          />
+                        </div>
+                      )}
                     </div>
                     <div className="text-right space-y-0.5">
                       <div className="text-[12px] font-semibold tabular-nums text-[#2563eb]">
@@ -1798,6 +1842,11 @@ function CobranzaRealCalendar({
                       <div className="text-[11px] tabular-nums text-[#7c3aed]">
                         {fmtCurrency(w.projected)}
                       </div>
+                      {hasUnmatched && (
+                        <div className="text-[11px] tabular-nums text-[#b45309]">
+                          {fmtCurrency(w.unmatched)}
+                        </div>
+                      )}
                     </div>
                   </div>
                 );
