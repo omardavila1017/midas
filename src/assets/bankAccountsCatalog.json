@@ -1,6 +1,6 @@
 {
-  "version": "1.5",
-  "generated": "2026-05-26",
+  "version": "1.6",
+  "generated": "2026-06-17",
   "notes": [
     "Catálogo de cuentas bancarias del Grupo Senda (operativas y de tesorería).",
     "Fuente: planilla interna de Tesorería (2026-05-15) filtrada contra el API JDE /bancos.",
@@ -10,7 +10,8 @@
     "Corrección histórica: Banorte 577117543 traía moneda='PAGADORA' (error de captura) → MXN.",
     "v1.3: alta de 2 cuentas BANAMEX FEDERAL que /bancos sí regresa pero salían SIN CATÁLOGO: Oficios y Proyectos en Rec Clas de Per (70140350859, POR CANCELAR / CPAE) y Transportes Tamaulipas FONDO GARANTIA SCT (70138237077). cuentaDigits = forma 11 dígitos exacta del API.",
     "v1.4: alta de cuenta centinela BANBAJIO (FIDEICOMISO DINA, Citi). El API de Bajío manda un Cuenta_Bancos distinto por línea, así que mapBankLine colapsa todo al centinela cuenta='BANBAJIO'; cuentaDigits no numérico se cruza por token textual (bySentinel).",
-    "v1.5: alta de cuenta inactiva BANORTE USD SES 0356130989 (confirmada por contabilidad SES 2026-05-26 como 'no se usa'). El aux contable asienta 9 líneas/año contra ella pero /bancos no la regresa — sin estado de cuenta no hay con qué cruzar. Se incluye con role='por_cancelar' para que el engine de conciliación la pueda etiquetar como 'cuenta-no-en-banco' (gap estructural) en lugar de inflar gl-orphan. Aplica el mismo patrón a cualquier cuenta catalogada cuyo accountKey no aparezca en el bankPool."
+    "v1.5: alta de cuenta inactiva BANORTE USD SES 0356130989 (confirmada por contabilidad SES 2026-05-26 como 'no se usa'). El aux contable asienta 9 líneas/año contra ella pero /bancos no la regresa — sin estado de cuenta no hay con qué cruzar. Se incluye con role='por_cancelar' para que el engine de conciliación la pueda etiquetar como 'cuenta-no-en-banco' (gap estructural) en lugar de inflar gl-orphan. Aplica el mismo patrón a cualquier cuenta catalogada cuyo accountKey no aparezca en el bankPool.",
+    "v1.6: alta de 3 cuentas SANTANDER aportadas por Tesorería (categorización role/subRole/flow): 65504770579 (MULTICARGA, CONCENTRADORA - TPV VENTA MOSTRADORES → concentradora/tpv_mostradores/ingreso), 65502388590 (CITI, PAGADORA NÓMINA OPERADORES → pagadora/nomina_operadores/egreso, generaliza a 'Personal y nómina'), 65500898808 (FEDERAL, CONCENTRADORA - INGRESO FEDERAL CAJEROS PANAMERICANO → concentradora/cajeros_panamericano/ingreso). clabe=null: no se aportó en la fuente y no se fabrica; Santander cruza por cuentaDigits 'tal cual' contra /bancos. Confirmar y completar la CLABE íntegra (18 díg.) cuando esté disponible para que la detección de traspasos internos por CLABE también las cubra."
   ],
   "currencyMap": {"PESOS": "MXN", "DOLARES": "USD"},
   "roleValues": ["concentradora", "pagadora", "reserva", "credito", "ahorro", "por_cancelar", "garantia", "saldo_retenido"],
@@ -59,6 +60,9 @@
     {"banco": "BANORTE", "numeroCliente": null, "razonSocial": "TURIMEX DEL NORTE SA DE CV", "cuenta": "103948576", "cuentaDigits": "0103948576", "clabe": "072580001039485761", "moneda": "USD", "unidadNegocio": "FEDERAL", "concepto": "PAGADORA DOLARES", "role": "pagadora", "subRole": "dolares", "flow": "egreso"},
 
     {"banco": "SANTANDER", "numeroCliente": null, "razonSocial": "SERVICIOS ESPECIALIZADOS SENDA SA DE CV", "cuenta": "65502559449", "cuentaDigits": "65502559449", "clabe": "014580655025594494", "moneda": "MXN", "unidadNegocio": "FEDERAL", "concepto": "CONCENTRADORA - TPV VENTA FEDERAL TAQUILLAS (FIDEICOMISO)", "role": "concentradora", "subRole": "tpv_federal_fideicomiso", "flow": "ingreso"},
+    {"banco": "SANTANDER", "numeroCliente": null, "razonSocial": "MULTICARGA SA DE CV", "cuenta": "65504770579", "cuentaDigits": "65504770579", "clabe": null, "moneda": "MXN", "unidadNegocio": "MULTICARGA", "concepto": "CONCENTRADORA - TPV VENTA MOSTRADORES", "role": "concentradora", "subRole": "tpv_mostradores", "flow": "ingreso"},
+    {"banco": "SANTANDER", "numeroCliente": null, "razonSocial": "SERVICIO INDUSTRIAL REGIOMONTANO SA DE CV", "cuenta": "65502388590", "cuentaDigits": "65502388590", "clabe": null, "moneda": "MXN", "unidadNegocio": "CITI", "concepto": "PAGADORA NÓMINA OPERADORES", "role": "pagadora", "subRole": "nomina_operadores", "flow": "egreso"},
+    {"banco": "SANTANDER", "numeroCliente": null, "razonSocial": "TRANSPORTES TAMAULIPAS SA DE CV", "cuenta": "65500898808", "cuentaDigits": "65500898808", "clabe": null, "moneda": "MXN", "unidadNegocio": "FEDERAL", "concepto": "CONCENTRADORA - INGRESO FEDERAL CAJEROS PANAMERICANO", "role": "concentradora", "subRole": "cajeros_panamericano", "flow": "ingreso"},
 
     {"banco": "BANBAJIO", "numeroCliente": null, "razonSocial": "SERVICIO INDUSTRIAL REGIOMONTANO SA DE CV", "cuenta": "BANBAJIO", "cuentaDigits": "BANBAJIO", "clabe": null, "moneda": "MXN", "unidadNegocio": "CITI", "concepto": "FIDEICOMISO DINA", "role": "concentradora", "subRole": "fideicomiso_dina", "flow": "ingreso"}
   ]
