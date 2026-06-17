@@ -2,9 +2,7 @@ import { lazy, startTransition, Suspense, useCallback, useDeferredValue, useEffe
 import {
   AlertTriangle,
   CalendarClock,
-  Copy,
   GitCompare,
-  Plus,
   Split,
   TrendingDown,
   TrendingUp,
@@ -79,7 +77,7 @@ import {
 } from '../../financial-planning/services/financialPlanningStorage';
 import { loadCellOverrides, saveCellOverrides } from '../../financial-planning/services/cellOverridesStorage';
 import { loadCustomRows, saveCustomRows } from '../../financial-planning/services/customRowsStorage';
-import { createNewDraft, duplicateDraft } from '../../financial-planning/services/scenarioDuplicate';
+import { createNewDraft } from '../../financial-planning/services/scenarioDuplicate';
 import { loadChangeLog, saveChangeLog } from '../../financial-planning/services/changeLogStorage';
 import { debouncedPersist } from '../../financial-planning/services/debouncedPersist';
 import { newChangeLogEntry } from '../../financial-planning/services/changeLogTemplates';
@@ -1141,24 +1139,6 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
     return handleCreateDraft(reason);
   }, [activeScenarioId, approvedScenario, handleCreateDraft, scenarios]);
 
-  const handleDuplicateActive = useCallback(() => {
-    const sourceScenario = scenarios.find((scenario) => scenario.id === activeScenarioId) ?? approvedScenario;
-    const result = duplicateDraft({
-      source: sourceScenario,
-      approvedScenarioId: approvedScenario.id,
-      allOverrides: cellOverrides,
-      allCustomRows: customRows,
-      changeLog,
-      user: 'tesoreria@senda.local',
-    });
-    setStoredScenarios((current) => [...current, result.newScenario]);
-    setCellOverrides(result.cellOverrides);
-    setCustomRows(result.customRows);
-    setChangeLog(result.changeLog);
-    setActiveScenarioId(result.newScenario.id);
-    setStatusMessage(`Escenario duplicado como "${result.newScenario.name}".`);
-  }, [activeScenarioId, approvedScenario, cellOverrides, changeLog, customRows, scenarios]);
-
 const commitQuickAdjustment = useCallback((movement: FinancialMovement, kind: 'SHIFT_DATE' | 'AMOUNT_OVERRIDE' | 'SPLIT_PAYMENT') => {
     if (movement.lockState === 'LOCKED') {
       setStatusMessage('Movimiento bloqueado. Crea el ajuste desde Planeación con autorización.');
@@ -1230,22 +1210,6 @@ const commitQuickAdjustment = useCallback((movement: FinancialMovement, kind: 'S
               onChange={setGranularity}
               pending={granularityPending}
             />
-            <button
-              type="button"
-              onClick={() => handleCreateDraft()}
-              className="inline-flex h-10 items-center gap-2 rounded-xl border border-[var(--gray-200)] bg-white px-3 text-[12px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)]"
-            >
-              <Plus className="h-3.5 w-3.5" strokeWidth={1.75} />
-              Nuevo
-            </button>
-            <button
-              type="button"
-              onClick={handleDuplicateActive}
-              className="inline-flex h-10 items-center gap-2 rounded-xl border border-[var(--gray-200)] bg-white px-3 text-[12px] font-medium text-[var(--gray-700)] hover:bg-[var(--gray-50)]"
-            >
-              <Copy className="h-3.5 w-3.5" strokeWidth={1.75} />
-              Duplicar
-            </button>
           </div>
         }
       />
