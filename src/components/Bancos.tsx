@@ -9,7 +9,6 @@ import {
   Calendar,
   ChevronDown,
   ChevronRight,
-  RotateCcw,
   Search,
   X,
   Download,
@@ -394,11 +393,7 @@ const BancosDashboard = ({
   statements,
   query,
   selectedCia,
-  onReset,
-  onRefresh,
   canRefresh,
-  refreshing,
-  refreshError,
   companies = [],
   abonoEnrichmentIndex,
   cargoEnrichmentIndex,
@@ -406,16 +401,11 @@ const BancosDashboard = ({
   statements: BankAccountStatement[];
   query: BankQueryState;
   selectedCia: string;
-  onReset: () => void;
-  onRefresh: () => void;
   canRefresh: boolean;
-  refreshing: boolean;
-  refreshError: string | null;
   companies?: { cia: string; nombre: string }[];
   abonoEnrichmentIndex?: Map<string, AbonoEnrichment>;
   cargoEnrichmentIndex?: Map<string, import('../domain/paymentReconciliationEngine').CargoPaymentEnrichment>;
 }) => {
-  const refreshBlockedReason = 'Este dataset viene solo de archivo Santander. Para actualizarlo desde JDE, primero corre una consulta.';
   // Build a cia→nombre lookup map
   const ciaNameMap = useMemo(() => {
     const map = new Map<string, string>();
@@ -749,19 +739,6 @@ const BancosDashboard = ({
           >
             <Download className="w-3 h-3" /> Exportar CSV
           </button>
-          <button
-            onClick={onRefresh}
-            disabled={refreshing || !canRefresh}
-            title={canRefresh ? 'Actualizar desde JDE' : refreshBlockedReason}
-            className="text-[12px] text-[var(--gray-400)] hover:text-[var(--primary)] flex items-center gap-1 transition disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            {refreshing
-              ? <Loader2 className="w-3 h-3 animate-spin" />
-              : canRefresh ? <RotateCcw className="w-3 h-3" /> : <Upload className="w-3 h-3" />} {canRefresh ? 'Actualizar' : 'Archivo cargado'}
-          </button>
-          <button onClick={onReset} className="text-[12px] text-[var(--gray-400)] hover:text-[var(--danger)] flex items-center gap-1 transition disabled:opacity-40 disabled:cursor-not-allowed">
-            <X className="w-3 h-3" /> Nueva consulta
-          </button>
         </div>
       </div>
 
@@ -775,12 +752,6 @@ const BancosDashboard = ({
               (cuentas sin empresa asignada se muestran siempre)
             </span>
           )}
-        </div>
-      )}
-
-      {refreshError && (
-        <div className="bg-[var(--danger-muted)] border border-red-100 rounded-[var(--radius)] px-4 py-2.5 flex items-center gap-2 text-[13px] text-[var(--danger)] font-medium">
-          <AlertCircle className="w-3.5 h-3.5" /> {refreshError}
         </div>
       )}
 
@@ -1312,8 +1283,6 @@ const Bancos = ({
   const [view, setView] = useState<BancosView>(
     statements.length > 0 && lastQuery ? 'dashboard' : 'form'
   );
-  const [refreshing, setRefreshing] = useState(false);
-  const [refreshError, setRefreshError] = useState<string | null>(null);
   const handleLoadedJde = useCallback(
     (result: BankAccountStatement[], q: BankQueryState) => {
       onJdeStatementsChange(result);
@@ -1343,41 +1312,6 @@ const Bancos = ({
     }
   }, [statements.length, lastQuery, view]);
 
-  const handleReset = useCallback(() => {
-    onJdeStatementsChange([]);
-    onSupplementalStatementsChange([]);
-    onLastQueryChange(null);
-    setRefreshError(null);
-    setView('form');
-  }, [onJdeStatementsChange, onLastQueryChange, onSupplementalStatementsChange]);
-
-
-  const handleRefresh = useCallback(async () => {
-    if (lastQuery?.formatoElectronico === SANTANDER_FILE_FORMAT) {
-      setRefreshError('Este dataset viene solo de archivo Santander. Corre una consulta JDE para sumar más cuentas.');
-      return;
-    }
-    // Always refresh with today's date to get the latest data
-    const queryToUse = {
-      fechaEstadoCuenta: todayISO(),
-      formatoElectronico: lastQuery?.formatoElectronico ?? 'SWIFT' as BankStatementFormat,
-    };
-    setRefreshing(true); setRefreshError(null);
-    try {
-      const res = await fetchBankStatements(queryToUse);
-      onJdeStatementsChange(res);
-      onLastQueryChange({ ...queryToUse, hasUploadedSantander: supplementalStatements.length > 0 });
-    } catch (e) {
-      if (e instanceof JdeApiError) {
-        setRefreshError(`JDE ${e.status}: ${e.message}`);
-      } else {
-        setRefreshError(e instanceof Error ? e.message : 'Error al actualizar');
-      }
-    } finally {
-      setRefreshing(false);
-    }
-  }, [lastQuery, onJdeStatementsChange, onLastQueryChange, supplementalStatements.length]);
-
   if (view === 'form' || !lastQuery) {
     return (
       <div className="min-h-[60vh] flex items-center justify-center p-6">
@@ -1396,11 +1330,7 @@ const Bancos = ({
       statements={statements}
       query={lastQuery}
       selectedCia={selectedCia}
-      onReset={handleReset}
-      onRefresh={handleRefresh}
       canRefresh={lastQuery.formatoElectronico !== SANTANDER_FILE_FORMAT}
-      refreshing={refreshing}
-      refreshError={refreshError}
       companies={companies}
       abonoEnrichmentIndex={abonoEnrichmentIndex}
       cargoEnrichmentIndex={cargoEnrichmentIndex}
