@@ -7,6 +7,7 @@ import {
   latestStatementDate,
   mergeBankStatements,
   sumBankStatementBalances,
+  summarizeBalancesByRole,
 } from './bankStatements';
 import type { BankAccountStatement } from '../services/jdeTypes';
 
@@ -163,6 +164,40 @@ describe('current bank balance helpers', () => {
     expect(latest).toBe('2026-05-06');
     expect(current.map(statement => statement.cuenta).sort()).toEqual(['A', 'B']);
     expect(sumBankStatementBalances(current)).toBe(70_000_000);
+  });
+});
+
+describe('summarizeBalancesByRole — caja disponible (concentradoras)', () => {
+  it('separa concentradoras (caja disponible) de pagadoras (comprometido) y otras', () => {
+    const statements: BankAccountStatement[] = [
+      makeStatement({ cia: '00011', banco: 'BANAMEX', cuenta: 'CONC-1', moneda: 'MXN', fechaEstadoCuenta: '2026-06-15', saldoFinal: 60_000_000, movimientos: [] }),
+      makeStatement({ cia: '00011', banco: 'BANAMEX', cuenta: 'CONC-2', moneda: 'MXN', fechaEstadoCuenta: '2026-06-15', saldoFinal: 30_000_000, movimientos: [] }),
+      makeStatement({ cia: '00011', banco: 'BANAMEX', cuenta: 'PAGA-1', moneda: 'MXN', fechaEstadoCuenta: '2026-06-15', saldoFinal: 20_000_000, movimientos: [] }),
+      makeStatement({ cia: '00011', banco: 'BANAMEX', cuenta: 'RES-1', moneda: 'MXN', fechaEstadoCuenta: '2026-06-15', saldoFinal: 5_000_000, movimientos: [] }),
+    ];
+    const roleByCuenta: Record<string, string> = {
+      'CONC-1': 'concentradora',
+      'CONC-2': 'concentradora',
+      'PAGA-1': 'pagadora',
+      'RES-1': 'reserva',
+    };
+
+    const summary = summarizeBalancesByRole(statements, (s) => roleByCuenta[s.cuenta]);
+
+    expect(summary.concentradoras).toBe(90_000_000); // caja disponible
+    expect(summary.cuentasConcentradora).toBe(2);
+    expect(summary.pagadoras).toBe(20_000_000); // comprometido, NO disponible
+    expect(summary.otras).toBe(5_000_000); // reserva
+    expect(summary.total).toBe(115_000_000);
+  });
+
+  it('cuentas sin rol de catálogo caen en "otras" (no inflan la caja disponible)', () => {
+    const statements: BankAccountStatement[] = [
+      makeStatement({ cia: '00011', banco: 'X', cuenta: 'UNK', moneda: 'MXN', fechaEstadoCuenta: '2026-06-15', saldoFinal: 1_000, movimientos: [] }),
+    ];
+    const summary = summarizeBalancesByRole(statements, () => undefined);
+    expect(summary.concentradoras).toBe(0);
+    expect(summary.otras).toBe(1_000);
   });
 });
 

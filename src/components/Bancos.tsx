@@ -45,6 +45,7 @@ import {
   latestStatementDate,
   mergeBankStatements,
   sumBankStatementBalances,
+  summarizeBalancesByRole,
   type BankQueryState,
 } from '../domain/bankStatements';
 import { parseSantanderFile, SANTANDER_FILE_FORMAT } from '../domain/santanderCsv';
@@ -605,6 +606,14 @@ const BancosDashboard = ({
   const balanceCuentas = balanceAccountsView.length;
   const staleCuentas = Math.max(0, totalCuentas - balanceCuentas);
 
+  // Caja disponible = saldo de concentradoras (las pagadoras guardan fondos ya
+  // comprometidos: cheques/pagos en tránsito, no es caja propia). Petición de
+  // finanzas: ver la caja realmente disponible, no el bruto que confunde.
+  const cajaResumen = useMemo(
+    () => summarizeBalancesByRole(balanceAccountsView, (a) => accountCatalogEntry(a)?.role),
+    [balanceAccountsView],
+  );
+
   const unitSummaries = useMemo(() => {
     const summaries = new Map<string, { label: string; accounts: number; movimientos: number; saldo: number; abonos: number; cargos: number }>();
     for (const acc of accountsView) {
@@ -761,6 +770,47 @@ const BancosDashboard = ({
           {canRefresh
             ? 'Archivo Santander agregado al dataset actual.'
             : 'Archivo Santander cargado. Para actualizar los movimientos, sube un archivo nuevo o corre una consulta JDE.'}
+        </div>
+      )}
+
+      {/* ── Caja disponible (concentradoras) vs comprometido (pagadoras) ── */}
+      {balanceAccountsView.length > 0 && (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <div className="rounded-[var(--radius-lg)] border p-4" style={{ borderColor: 'color-mix(in oklch, var(--success) 30%, transparent)', backgroundColor: 'var(--success-muted)' }}>
+            <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.08em]" style={{ color: 'var(--success)' }}>
+              <Wallet className="w-3.5 h-3.5" /> Caja disponible
+            </div>
+            <p className="mt-1.5 font-mono text-[24px] font-bold leading-none text-[var(--gray-950)]">
+              {fmtCurrency(cajaResumen.concentradoras)}
+            </p>
+            <p className="mt-1.5 text-[11px] text-[var(--gray-500)]">
+              {cajaResumen.cuentasConcentradora} concentradora{cajaResumen.cuentasConcentradora === 1 ? '' : 's'}
+              {balanceDate ? ` · al ${balanceDate}` : ''}
+            </p>
+          </div>
+          <div className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white p-4">
+            <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">
+              Pagadoras (comprometido)
+            </div>
+            <p className="mt-1.5 font-mono text-[18px] font-bold text-[var(--gray-950)]">
+              {fmtCurrency(cajaResumen.pagadoras)}
+            </p>
+            <p className="mt-1.5 text-[11px] text-[var(--gray-400)] leading-snug">
+              Fondos para cheques/pagos en tránsito — no es caja disponible
+            </p>
+          </div>
+          <div className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white p-4">
+            <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">
+              Saldo total (todas)
+            </div>
+            <p className="mt-1.5 font-mono text-[18px] font-bold text-[var(--gray-950)]">
+              {fmtCurrency(saldoTotal)}
+            </p>
+            <p className="mt-1.5 text-[11px] text-[var(--gray-400)]">
+              {balanceCuentas} cuenta{balanceCuentas === 1 ? '' : 's'} al corte
+              {staleCuentas > 0 ? ` · ${staleCuentas} históricas fuera` : ''}
+            </p>
+          </div>
         </div>
       )}
 

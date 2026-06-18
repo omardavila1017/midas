@@ -22,6 +22,7 @@ export type TabId =
   | 'cxp'
   | 'concursoMercantil'
   | 'compras'
+  | 'pasivoDistribuir'
   | 'pagos'
   | 'bancos'
   | 'netflow'

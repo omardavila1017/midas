@@ -398,6 +398,14 @@ function priorityLabel(priority: PaymentPriority): string {
   }
 }
 
+/** Severidad para ordenar "qué pagar primero": crítico antes que normal. */
+const PRIORITY_RANK: Record<PaymentPriority, number> = {
+  critical: 0,
+  highImpact: 1,
+  negotiable: 2,
+  normal: 3,
+};
+
 function priorityTone(priority: PaymentPriority): string {
   switch (priority) {
     case 'critical': return 'bg-[var(--danger-muted)] text-[var(--danger)]';
@@ -405,6 +413,27 @@ function priorityTone(priority: PaymentPriority): string {
     case 'highImpact': return 'bg-[var(--warning-muted)] text-[var(--warning)]';
     default: return 'bg-[var(--gray-100)] text-[var(--gray-500)]';
   }
+}
+
+function CxpTotalCard({
+  label,
+  value,
+  sub,
+  tone,
+}: {
+  label: string;
+  value: string;
+  sub: string;
+  tone: 'neutral' | 'danger' | 'warning';
+}) {
+  const toneColor = tone === 'danger' ? 'var(--danger)' : tone === 'warning' ? 'var(--warning)' : 'var(--gray-700)';
+  return (
+    <div className="bg-white border border-[var(--gray-200)] rounded-[var(--radius-lg)] p-4 shadow-sm animate-card-in">
+      <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">{label}</p>
+      <p className="mt-1.5 font-mono text-[20px] font-bold tabular-nums leading-none" style={{ color: toneColor }}>{value}</p>
+      <p className="mt-1.5 text-[11px] text-[var(--gray-400)] truncate" title={sub}>{sub}</p>
+    </div>
+  );
 }
 
 function antiguedadLabel(a: Antiguedad): string {
@@ -620,6 +649,8 @@ const CXPDashboard = ({
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const [provPage, setProvPage] = useState(0);
   const [selectedRecord, setSelectedRecord] = useState<EnrichedCXPRecord | null>(null);
+  const [showPagarDetail, setShowPagarDetail] = useState(false);
+  const [pagarDetailRows, setPagarDetailRows] = useState(20);
 
   const clearAllFilters = () => {
     setSearchTerm('');
@@ -704,6 +735,60 @@ const CXPDashboard = ({
   }, [filtered]);
 
   const totalPendiente = useMemo(() => filtered.reduce((s, r) => s + r.importePendientePesos, 0), [filtered]);
+
+  // Totales de cabecera (petición de finanzas: "¿cuánto debo?" + "¿cuánto debo
+  // pagar este mes según la prioridad de mis proveedores?"). "A pagar este mes"
+  // = ya vencido (debías pagar) + lo que vence dentro del mes corriente.
+  const cxpTotals = useMemo(() => {
+    const now = new Date();
+    const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    const endOfMonth = `${lastDay.getFullYear()}-${String(lastDay.getMonth() + 1).padStart(2, '0')}-${String(lastDay.getDate()).padStart(2, '0')}`;
+    let total = 0;
+    let vencido = 0;
+    let porVencer = 0;
+    let aPagarEsteMes = 0;
+    const porPrioridad: Record<PaymentPriority, number> = { critical: 0, highImpact: 0, negotiable: 0, normal: 0 };
+    for (const r of filtered) {
+      const amt = r.importePendientePesos;
+      total += amt;
+      const overdue = r.diasVencida > 0;
+      if (overdue) vencido += amt;
+      else porVencer += amt;
+      const due = dueDateForRecord(r);
+      if (overdue || (due !== null && due <= endOfMonth)) {
+        aPagarEsteMes += amt;
+        porPrioridad[r.paymentPriority] += amt;
+      }
+    }
+    return { total, vencido, porVencer, aPagarEsteMes, porPrioridad };
+  }, [filtered]);
+
+  // "A pagar este mes" desglosado por PROVEEDOR, ordenado por prioridad y luego
+  // por monto: la lista accionable que pidió Romo — qué proveedores pagar este
+  // mes según su categoría/prioridad, con cuánto de eso ya está vencido.
+  const aPagarProviders = useMemo(() => {
+    const now = new Date();
+    const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    const endOfMonth = `${lastDay.getFullYear()}-${String(lastDay.getMonth() + 1).padStart(2, '0')}-${String(lastDay.getDate()).padStart(2, '0')}`;
+    const map = new Map<string, { nombre: string; noProveedor: string; total: number; vencido: number; count: number; priority: PaymentPriority; priorityRank: number }>();
+    for (const r of filtered) {
+      const overdue = r.diasVencida > 0;
+      const due = dueDateForRecord(r);
+      if (!(overdue || (due !== null && due <= endOfMonth))) continue;
+      const key = r.noProveedor || r.nombre || 'SIN';
+      let e = map.get(key);
+      if (!e) {
+        e = { nombre: r.nombre || r.noProveedor || 'Sin nombre', noProveedor: r.noProveedor || '', total: 0, vencido: 0, count: 0, priority: 'normal', priorityRank: 99 };
+        map.set(key, e);
+      }
+      e.total += r.importePendientePesos;
+      if (overdue) e.vencido += r.importePendientePesos;
+      e.count += 1;
+      const rank = PRIORITY_RANK[r.paymentPriority];
+      if (rank < e.priorityRank) { e.priorityRank = rank; e.priority = r.paymentPriority; }
+    }
+    return Array.from(map.values()).sort((a, b) => a.priorityRank - b.priorityRank || b.total - a.total);
+  }, [filtered]);
 
   // Supplier aggregation
   const supplierData = useMemo(() => {
@@ -861,6 +946,85 @@ const CXPDashboard = ({
          ════════════════════════════════════════════════════════════════ */}
       {tab === 'resumen' && (
         <>
+          {/* ── Totales: ¿cuánto debo? + ¿cuánto pagar este mes? ── */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <CxpTotalCard label="Total adeudado" value={fmtFull(cxpTotals.total)} sub={`${filtered.length.toLocaleString()} facturas`} tone="neutral" />
+            <CxpTotalCard label="Vencido" value={fmtFull(cxpTotals.vencido)} sub="Ya debías pagar" tone="danger" />
+            <CxpTotalCard label="Por vencer" value={fmtFull(cxpTotals.porVencer)} sub="Aún en plazo" tone="neutral" />
+            <CxpTotalCard label="A pagar este mes" value={fmtFull(cxpTotals.aPagarEsteMes)} sub="Vencido + vence este mes" tone="warning" />
+          </div>
+
+          {/* ── A pagar este mes, por prioridad de proveedor ── */}
+          {cxpTotals.aPagarEsteMes > 0 && (
+            <div className="bg-white rounded-[var(--radius-lg)] border border-[var(--gray-200)] p-4 shadow-sm animate-card-in">
+              <div className="flex items-center justify-between gap-3 mb-2.5">
+                <h2 className="text-[12px] font-bold uppercase tracking-[0.06em] text-[var(--gray-500)]">
+                  A pagar este mes · por prioridad de proveedor
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => { setShowPagarDetail(v => !v); setPagarDetailRows(20); }}
+                  className="text-[12px] font-medium text-[var(--primary)] hover:underline whitespace-nowrap"
+                >
+                  {showPagarDetail ? 'Ocultar proveedores' : `Ver proveedores (${aPagarProviders.length})`}
+                </button>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {(['critical', 'highImpact', 'negotiable', 'normal'] as PaymentPriority[])
+                  .filter((p) => cxpTotals.porPrioridad[p] > 0)
+                  .map((p) => (
+                    <div key={p} className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-[12px] font-medium ${priorityTone(p)}`}>
+                      <span>{priorityLabel(p)}</span>
+                      <span className="font-mono font-bold">{fmtFull(cxpTotals.porPrioridad[p])}</span>
+                    </div>
+                  ))}
+              </div>
+
+              {showPagarDetail && (
+                <div className="mt-3 overflow-x-auto border-t border-[var(--gray-100)] pt-3">
+                  <table className="w-full text-[12px]">
+                    <thead className="text-[var(--gray-400)] text-left text-[11px] uppercase tracking-wide">
+                      <tr>
+                        <th className="py-1.5 font-medium">Proveedor</th>
+                        <th className="py-1.5 font-medium">Prioridad</th>
+                        <th className="py-1.5 text-right font-medium">Vencido</th>
+                        <th className="py-1.5 text-right font-medium">A pagar este mes</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {aPagarProviders.slice(0, pagarDetailRows).map((prov) => (
+                        <tr key={prov.noProveedor || prov.nombre} className="border-t border-[var(--gray-100)]">
+                          <td className="py-1.5 pr-2">
+                            <span className="font-medium text-[var(--gray-950)] truncate max-w-[280px] inline-block align-middle" title={prov.nombre}>{prov.nombre}</span>
+                            {prov.count > 1 && <span className="ml-1.5 text-[10px] text-[var(--gray-400)]">{prov.count} facturas</span>}
+                          </td>
+                          <td className="py-1.5">
+                            <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium ${priorityTone(prov.priority)}`}>
+                              {priorityLabel(prov.priority)}
+                            </span>
+                          </td>
+                          <td className="py-1.5 text-right font-mono" style={{ color: prov.vencido > 0 ? 'var(--danger)' : 'var(--gray-400)' }}>
+                            {prov.vencido > 0 ? fmtFull(prov.vencido) : '—'}
+                          </td>
+                          <td className="py-1.5 text-right font-mono font-bold text-[var(--gray-950)]">{fmtFull(prov.total)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {aPagarProviders.length > pagarDetailRows && (
+                    <button
+                      type="button"
+                      onClick={() => setPagarDetailRows(n => n + 20)}
+                      className="mt-2 text-[12px] font-medium text-[var(--primary)] hover:underline"
+                    >
+                      Ver más ({(aPagarProviders.length - pagarDetailRows).toLocaleString()} proveedores)
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Aging distribution */}
           <div className="bg-white rounded-[var(--radius-lg)] border border-[var(--gray-200)] p-5 shadow-sm animate-card-in stagger-5">
             <h2 className="text-[15px] font-bold text-[var(--gray-950)] mb-4">Distribución por Antigüedad</h2>

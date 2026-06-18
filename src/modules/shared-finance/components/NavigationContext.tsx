@@ -17,6 +17,7 @@ export type AppTabId =
   | 'cxp'
   | 'concursoMercantil'
   | 'compras'
+  | 'pasivoDistribuir'
   | 'pagos'
   | 'clients'
   | 'providers'

@@ -62,6 +62,11 @@ function renderCompras(records: ComprasRecord[]) {
   );
 }
 
+/** La vista por defecto es el resumen por OC; el detalle por línea es opt-in. */
+function enterDetalle() {
+  fireEvent.click(screen.getByRole('button', { name: /Detalle por línea/ }));
+}
+
 describe('<Compras /> filters and sorting', () => {
   it('searches, filters by ranges, sorts, and clears back to the default order', () => {
     const records = [
@@ -85,6 +90,7 @@ describe('<Compras /> filters and sorting', () => {
       }),
     ];
     const { container } = renderCompras(records);
+    enterDetalle();
 
     expect(rows(container)[0].textContent).toContain('OC-NEW');
 
@@ -177,6 +183,7 @@ describe('<Compras /> moneda extranjera y estado', () => {
       }),
     ];
     const { container } = renderCompras(records);
+    enterDetalle();
 
     const row = rows(container)[0];
     expect(row.textContent).toContain('1,700.00'); // 100 USD × 17
@@ -189,6 +196,42 @@ describe('<Compras /> moneda extranjera y estado', () => {
       compra({ noOrden: 'OC-WF', fechaPedido: isoDaysAgo(3), estadoSiguiente: '999' }),
     ];
     const { container } = renderCompras(records);
+    enterDetalle();
     expect(within(rows(container)[0]).getByText('Cerrada en JDE')).toBeTruthy();
+  });
+});
+
+describe('<Compras /> resumen por OC (vista financiera por defecto)', () => {
+  it('agrega líneas a una fila por OC con el split recibido / pendiente', () => {
+    const records = [
+      compra({ noOrden: 'OC-MIX', lineaOrden: 1, importeTotal: 1000 }), // sin entrada
+      compra({ noOrden: 'OC-MIX', lineaOrden: 2, importeTotal: 2000, fechaRecepcion: isoDaysAgo(5) }), // pendiente factura
+    ];
+    const { container } = renderCompras(records);
+
+    // Una sola fila para la OC (no una por línea).
+    expect(rows(container)).toHaveLength(1);
+    const row = rows(container)[0];
+    expect(row.textContent).toContain('OC-MIX');
+    expect(row.textContent).toContain('2 líneas');
+    expect(row.textContent).toContain('3,000.00'); // importe total = recibido + pendiente recibir
+    // Chip de estado: tiene línea sin entrada → "Pendiente de recibir".
+    expect(within(row).getByText('Pendiente de recibir')).toBeTruthy();
+  });
+
+  it('el filtro backlog deja fuera las OCs ya facturadas', () => {
+    const records = [
+      compra({ noOrden: 'OC-OPEN', importeTotal: 1000 }), // sin entrada → backlog
+      compra({ noOrden: 'OC-FACT', importeTotal: 5000, fechaRecepcion: isoDaysAgo(20), facturada: true, noFactura: 'F-9' }),
+    ];
+    const { container } = renderCompras(records);
+
+    // Default = backlog: solo la OC abierta.
+    expect(rows(container)).toHaveLength(1);
+    expect(rows(container)[0].textContent).toContain('OC-OPEN');
+
+    // Cambiar a "Todas" trae también la facturada.
+    fireEvent.change(screen.getByTitle('Filtrar por estado de la OC'), { target: { value: 'todas' } });
+    expect(rows(container)).toHaveLength(2);
   });
 });

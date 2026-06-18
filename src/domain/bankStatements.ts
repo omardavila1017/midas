@@ -157,6 +157,62 @@ export function sumBankStatementBalances(
   return statements.reduce((sum, statement) => sum + bankStatementBalance(statement), 0);
 }
 
+export interface BalanceByRoleSummary {
+  /** Σ saldos de cuentas concentradoras = "caja disponible". */
+  concentradoras: number;
+  /** Σ saldos de cuentas pagadoras (comprometido: fondos para cheques/pagos en tránsito). */
+  pagadoras: number;
+  /** Σ saldos del resto (reserva/crédito/sin catálogo/…). */
+  otras: number;
+  /** Total de todas las cuentas (= concentradoras + pagadoras + otras). */
+  total: number;
+  cuentasConcentradora: number;
+  cuentasPagadora: number;
+}
+
+/**
+ * Resume los saldos por **rol de cuenta** para la "caja disponible" que pidió
+ * finanzas: solo las **concentradoras** son caja realmente disponible; las
+ * **pagadoras** guardan fondos ya comprometidos (cheques/pagos en tránsito) que
+ * "ya parecen pagados en JDE pero el banco aún los tiene" — no son caja propia.
+ *
+ * `roleOf` resuelve el rol del catálogo para cada cuenta (se inyecta para no
+ * acoplar este módulo de dominio al catálogo de cuentas). Suma a través de
+ * monedas igual que `sumBankStatementBalances` (la corresponsalía en USD es
+ * marginal — ver notas de la junta).
+ */
+export function summarizeBalancesByRole(
+  statements: readonly BankAccountStatement[],
+  roleOf: (statement: BankAccountStatement) => string | null | undefined,
+): BalanceByRoleSummary {
+  let concentradoras = 0;
+  let pagadoras = 0;
+  let otras = 0;
+  let cuentasConcentradora = 0;
+  let cuentasPagadora = 0;
+  for (const s of statements) {
+    const bal = bankStatementBalance(s);
+    const role = roleOf(s);
+    if (role === 'concentradora') {
+      concentradoras += bal;
+      cuentasConcentradora += 1;
+    } else if (role === 'pagadora') {
+      pagadoras += bal;
+      cuentasPagadora += 1;
+    } else {
+      otras += bal;
+    }
+  }
+  return {
+    concentradoras,
+    pagadoras,
+    otras,
+    total: concentradoras + pagadoras + otras,
+    cuentasConcentradora,
+    cuentasPagadora,
+  };
+}
+
 export function mergeBankStatements(...groups: BankAccountStatement[][]): BankAccountStatement[] {
   const merged = new Map<string, BankAccountStatement>();
   const seenMovements = new Map<string, Set<string>>();

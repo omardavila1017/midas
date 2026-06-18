@@ -1701,6 +1701,12 @@ export async function fetchComprasRange(
     concurrency?: number;
     onProgress?: (done: number, total: number) => void;
     config?: JdeClientConfig;
+    /**
+     * Meses `YYYY-MM` a re-pedir aunque estén cacheados. Necesario porque una
+     * OC cambia de estado (creada → recibida → facturada) y su importe se
+     * corrige DESPUÉS de que su mes se cacheó.
+     */
+    revalidateMonths?: ReadonlySet<string>;
   } = {},
 ): Promise<ComprasRecord[]> {
   const config = options.config ?? {};
@@ -1736,6 +1742,7 @@ export async function fetchComprasRange(
     fetchMonth: fetchMonthWithRetry,
     onProgress: options.onProgress,
     concurrency: options.concurrency ?? 4,
+    revalidateMonths: options.revalidateMonths,
   });
 
   const seen = new Set<string>();
@@ -2756,6 +2763,12 @@ export async function fetchPagoProveedorRange(
     concurrency?: number;
     onProgress?: (done: number, total: number) => void;
     config?: JdeClientConfig;
+    /**
+     * YYYY-MM-DD inclusive: días pasados desde aquí se re-piden aunque estén
+     * cacheados. Cubre pagos capturados con atraso en JDE sobre un día que el
+     * navegador ya había consultado (y cacheado) antes.
+     */
+    revalidateSince?: string;
   } = {},
 ): Promise<PagoProveedorRecord[]> {
   const config = options.config ?? {};
@@ -2787,6 +2800,7 @@ export async function fetchPagoProveedorRange(
     fetchDay: fetchDayWithRetry,
     onProgress: options.onProgress,
     concurrency: options.concurrency ?? 10,
+    revalidateSince: options.revalidateSince,
   });
 
   const seen = new Set<string>();

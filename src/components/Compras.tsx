@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   AlertCircle,
   AlertTriangle,
@@ -8,9 +8,13 @@ import {
   Clock,
   Database,
   Download,
+  FileText,
   Filter,
   Info,
+  Layers,
+  List,
   Package,
+  PackageCheck,
   Search,
   X,
 } from 'lucide-react';
@@ -21,11 +25,14 @@ import ProviderBadge from './ProviderBadge';
 import { buildProviderIndex } from '../domain/providerIdentity';
 import type { Provider } from '../domain/types';
 import {
+  COMPRA_ORDER_ESTADO_LABEL,
   STALE_OPEN_ORDER_DAYS,
+  buildComprasByOrder,
   buildComprasDepuracionInsights,
   buildOpenSinEntradaByMonth,
   compraEstado,
   comprasImporteMxn,
+  comprasOrdersToCsv,
   comprasRecordKey,
   comprasToCsv,
   daysSinceIso,
@@ -33,6 +40,8 @@ import {
   isStaleSinEntrada,
   type ComprasInsight,
   type ComprasInsightSeverity,
+  type ComprasOrderEstado,
+  type ComprasOrderSummary,
 } from '../domain/comprasInsights';
 
 interface ComprasProps {
@@ -62,8 +71,14 @@ interface CompraFocus {
 }
 
 const COMPRAS_CACHE_KEY = '__all__';
-const ROW_CAP = 500;
+const PAGE_SIZE = 200;
 const DEFAULT_SORT: CompraSort = { key: 'fechaPedido', direction: 'desc' };
+
+/** Vista de la pestaña: resumen financiero por OC (default) o detalle por línea. */
+type ComprasView = 'resumen' | 'detalle';
+/** Filtro de estado del resumen por OC. `backlog` = pendiente de recibir + factura. */
+type OcEstadoFilter = 'backlog' | ComprasOrderEstado | 'todas';
+type OcSortKey = 'importe' | 'antiguedad';
 
 interface ChipStyle {
   bg: string;
@@ -103,6 +118,15 @@ const STATUS_CERRADA_WF: ChipStyle = {
   dot: 'var(--gray-400)',
 };
 
+/** Estilo + ícono del chip de estado de la OC (vista resumen). */
+const ORDER_ESTADO_CHIP: Record<ComprasOrderEstado, { style: ChipStyle; icon: typeof Clock }> = {
+  pendienteRecibir: { style: STATUS_SIN_ENTRADA, icon: Calendar },
+  pendienteFactura: { style: STATUS_POR_PAGAR, icon: FileText },
+  facturada: { style: STATUS_FACTURADA, icon: CheckCircle2 },
+  cerrada: { style: STATUS_CERRADA_WF, icon: Archive },
+  cancelada: { style: STATUS_CANCELADA, icon: X },
+};
+
 const SEVERITY_ICON: Record<ComprasInsightSeverity, typeof AlertTriangle> = {
   danger: AlertTriangle,
   warning: AlertCircle,
@@ -132,6 +156,12 @@ export default function Compras({
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [sort, setSort] = useState<CompraSort>(DEFAULT_SORT);
   const [focus, setFocus] = useState<CompraFocus | null>(null);
+  // Vista financiera por OC (default) vs detalle por línea (depuración JDE).
+  const [view, setView] = useState<ComprasView>('resumen');
+  const [ocSearch, setOcSearch] = useState('');
+  const [ocEstado, setOcEstado] = useState<OcEstadoFilter>('backlog');
+  const [ocSort, setOcSort] = useState<OcSortKey>('importe');
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
 
   const asOf = useMemo(() => todayISO(), []);
   const providerIndex = useMemo(() => buildProviderIndex(providers), [providers]);
@@ -236,6 +266,64 @@ export default function Compras({
     [baseFiltered, asOf],
   );
 
+  // ── Vista resumen: una fila por OC (agregada). Se construye sobre el scope
+  // de la compañía + el foco (no sobre los filtros por línea del detalle), para
+  // que cada OC salga completa. El filtro de estado por defecto (`backlog`)
+  // deja FUERA las facturadas/cerradas/canceladas: las facturadas ya viven en
+  // CXP/Antigüedad de Saldos, no se reproyectan aquí (petición de finanzas).
+  const orderScoped = useMemo(() => {
+    let base = selectedCia === 'all'
+      ? comprasRecords
+      : comprasRecords.filter((r) => r.cia === selectedCia);
+    if (focus) base = base.filter((r) => focus.keys.has(comprasRecordKey(r)));
+    return buildComprasByOrder(base, asOf);
+  }, [comprasRecords, selectedCia, focus, asOf]);
+
+  const orderRows = useMemo(() => {
+    const q = ocSearch.trim().toUpperCase();
+    const rows = orderScoped.filter((o) => {
+      if (ocEstado === 'backlog') {
+        if (o.estado !== 'pendienteRecibir' && o.estado !== 'pendienteFactura') return false;
+      } else if (ocEstado !== 'todas' && o.estado !== ocEstado) {
+        return false;
+      }
+      if (q) {
+        const hay =
+          o.nombreProveedor.toUpperCase().includes(q) ||
+          o.noOrden.toUpperCase().includes(q) ||
+          o.noProveedor.toUpperCase().includes(q);
+        if (!hay) return false;
+      }
+      return true;
+    });
+    return rows.sort((a, b) =>
+      ocSort === 'antiguedad'
+        ? (b.antiguedadDias ?? -1) - (a.antiguedadDias ?? -1) || b.importeTotalMxn - a.importeTotalMxn
+        : b.importeTotalMxn - a.importeTotalMxn,
+    );
+  }, [orderScoped, ocSearch, ocEstado, ocSort]);
+
+  const ocKpis = useMemo(() => {
+    let backlogTotal = 0;
+    let pendienteRecibir = 0;
+    let pendienteFactura = 0;
+    let facturado = 0;
+    for (const o of orderRows) {
+      backlogTotal += o.importeTotalMxn;
+      pendienteRecibir += o.importePendienteRecibirMxn;
+      pendienteFactura += o.importePendienteFacturaMxn;
+      facturado += o.importeFacturadoMxn;
+    }
+    return { backlogTotal, pendienteRecibir, pendienteFactura, facturado };
+  }, [orderRows]);
+
+  const orderFiltersActive = ocSearch.trim() !== '' || ocEstado !== 'backlog' || ocSort !== 'importe' || focus !== null;
+
+  // Reset de paginación cuando cambia lo que se muestra (vista, filtros, foco).
+  useEffect(() => {
+    setVisibleCount(PAGE_SIZE);
+  }, [view, filteredRecords, orderRows]);
+
   const kpis = useMemo(() => {
     let totalAmount = 0;
     let pendientePago = 0;
@@ -273,6 +361,13 @@ export default function Compras({
     setFocus(null);
   };
 
+  const clearOrderFilters = () => {
+    setOcSearch('');
+    setOcEstado('backlog');
+    setOcSort('importe');
+    setFocus(null);
+  };
+
   // Enfocar = "muéstrame EXACTAMENTE estas OCs": resetea los demás filtros
   // (statusFilter a 'all' — algunos hallazgos incluyen canceladas) para que la
   // tabla muestre el set completo del hallazgo/mes.
@@ -291,19 +386,32 @@ export default function Compras({
     setAmountMin('');
     setAmountMax('');
     setCategoryFilter('all');
+    // El foco viene de hallazgos/meses por LÍNEA; en la vista resumen mostramos
+    // todas las OCs que tocan esas líneas (sin recortar por estado).
+    setOcSearch('');
+    setOcEstado('todas');
     setFocus({ id, label, keys: new Set(keys) });
   };
 
   const handleExportCsv = () => {
-    if (filteredRecords.length === 0) return;
-    const csv = comprasToCsv(filteredRecords);
+    let csv: string;
+    let suffix: string;
+    if (view === 'resumen') {
+      if (orderRows.length === 0) return;
+      csv = comprasOrdersToCsv(orderRows);
+      suffix = '-resumen';
+    } else {
+      if (filteredRecords.length === 0) return;
+      csv = comprasToCsv(filteredRecords);
+      suffix = '';
+    }
     const blob = new Blob([`﻿${csv}`], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     const scope = selectedCia === 'all' ? '' : `-${selectedCia}`;
     const focused = focus ? `-${focus.id}` : '';
-    a.download = `ocs-${asOf}${scope}${focused}.csv`;
+    a.download = `ocs-${asOf}${scope}${focused}${suffix}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -329,41 +437,80 @@ export default function Compras({
         </div>
       )}
 
+      {/* ─── View toggle: resumen financiero por OC vs detalle por línea ── */}
+      <div className="inline-flex rounded-[var(--radius-md)] border border-[var(--gray-200)] bg-white p-0.5 shadow-sm">
+        <ViewToggleButton icon={Layers} label="Resumen por OC" active={view === 'resumen'} onClick={() => setView('resumen')} />
+        <ViewToggleButton icon={List} label="Detalle por línea" active={view === 'detalle'} onClick={() => setView('detalle')} />
+      </div>
+
       {/* ─── KPI cards ─────────────────────────────────────────────────── */}
-      <section className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <KpiCard
-          icon={Package}
-          label="OCs activas"
-          value={fmtCurrency(kpis.totalAmount)}
-          sub={`${filteredRecords.length.toLocaleString()} órdenes (MXN)`}
-          tone="neutral"
-        />
-        <KpiCard
-          icon={Clock}
-          label="Por pagar (proyectado)"
-          value={fmtCurrency(kpis.pendientePago)}
-          sub="Recibidas, sin factura aún"
-          tone="warning"
-        />
-        <KpiCard
-          icon={Calendar}
-          label="Abiertas sin entrada"
-          value={fmtCurrency(kpis.sinEntrada)}
-          sub={
-            kpis.sinEntradaStale > 0
-              ? `${fmtCompact(kpis.sinEntradaStale)} con +${STALE_OPEN_ORDER_DAYS} días`
-              : 'Sin fecha cierta de pago'
-          }
-          tone="info"
-        />
-        <KpiCard
-          icon={CheckCircle2}
-          label="Ya facturadas"
-          value={fmtCurrency(kpis.yaFacturadas)}
-          sub="CXP / Facturas las cubre"
-          tone="success"
-        />
-      </section>
+      {view === 'resumen' ? (
+        <section className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          <KpiCard
+            icon={Package}
+            label={ocEstado === 'backlog' ? 'Backlog de OCs' : 'OCs en vista'}
+            value={fmtCurrency(ocKpis.backlogTotal)}
+            sub={`${orderRows.length.toLocaleString()} órdenes (MXN)`}
+            tone="neutral"
+          />
+          <KpiCard
+            icon={Calendar}
+            label="Pendiente de recibir"
+            value={fmtCurrency(ocKpis.pendienteRecibir)}
+            sub="Creadas sin entrada · gasto futuro"
+            tone="info"
+          />
+          <KpiCard
+            icon={FileText}
+            label="Pendiente factura"
+            value={fmtCurrency(ocKpis.pendienteFactura)}
+            sub="Recibido sin factura · pasivo por distribuir"
+            tone="warning"
+          />
+          <KpiCard
+            icon={CheckCircle2}
+            label="Ya facturado"
+            value={fmtCurrency(ocKpis.facturado)}
+            sub="En CXP / Antigüedad de Saldos"
+            tone="success"
+          />
+        </section>
+      ) : (
+        <section className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          <KpiCard
+            icon={Package}
+            label="OCs activas"
+            value={fmtCurrency(kpis.totalAmount)}
+            sub={`${filteredRecords.length.toLocaleString()} órdenes (MXN)`}
+            tone="neutral"
+          />
+          <KpiCard
+            icon={FileText}
+            label="Pendiente factura"
+            value={fmtCurrency(kpis.pendientePago)}
+            sub="Recibidas, sin factura aún"
+            tone="warning"
+          />
+          <KpiCard
+            icon={Calendar}
+            label="Abiertas sin entrada"
+            value={fmtCurrency(kpis.sinEntrada)}
+            sub={
+              kpis.sinEntradaStale > 0
+                ? `${fmtCompact(kpis.sinEntradaStale)} con +${STALE_OPEN_ORDER_DAYS} días`
+                : 'Sin fecha cierta de pago'
+            }
+            tone="info"
+          />
+          <KpiCard
+            icon={CheckCircle2}
+            label="Ya facturadas"
+            value={fmtCurrency(kpis.yaFacturadas)}
+            sub="CXP / Facturas las cubre"
+            tone="success"
+          />
+        </section>
+      )}
 
       {/* ─── Monthly strip: OCs abiertas que nunca recibieron entrada ──── */}
       {openByMonth.length > 0 && (
@@ -436,7 +583,152 @@ export default function Compras({
         </section>
       )}
 
-      {/* ─── Toolbar: search + filters ─────────────────────────────────── */}
+      {/* ─── Vista RESUMEN: una fila por OC (financiera) ───────────────── */}
+      {view === 'resumen' && (
+      <section className="space-y-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative flex-1 min-w-[240px] max-w-md">
+            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--gray-400)]" />
+            <input
+              type="text"
+              placeholder="Buscar proveedor u OC…"
+              className="input pl-9 w-full"
+              value={ocSearch}
+              onChange={(e) => setOcSearch(e.target.value)}
+            />
+          </div>
+          <select
+            className="input max-w-[200px]"
+            value={ocEstado}
+            onChange={(e) => setOcEstado(e.target.value as OcEstadoFilter)}
+            title="Filtrar por estado de la OC"
+          >
+            <option value="backlog">Backlog (pendiente)</option>
+            <option value="pendienteRecibir">Pendiente de recibir</option>
+            <option value="pendienteFactura">Pendiente factura (pasivo)</option>
+            <option value="facturada">Facturadas</option>
+            <option value="cerrada">Cerradas en JDE</option>
+            <option value="cancelada">Canceladas</option>
+            <option value="todas">Todas</option>
+          </select>
+          <select
+            className="input max-w-[185px]"
+            value={ocSort}
+            onChange={(e) => setOcSort(e.target.value as OcSortKey)}
+            title="Ordenar OCs"
+          >
+            <option value="importe">Importe mayor primero</option>
+            <option value="antiguedad">Más antiguas primero</option>
+          </select>
+          {focus && (
+            <button
+              type="button"
+              onClick={() => setFocus(null)}
+              className="inline-flex items-center gap-1 px-3 h-9 rounded-full text-[12px] font-medium border hover-press"
+              style={{ backgroundColor: 'var(--primary-muted)', borderColor: 'var(--primary)', color: 'var(--primary)' }}
+              title="Quitar el foco"
+            >
+              <Filter className="w-3.5 h-3.5" />
+              {focus.label}
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
+          {orderFiltersActive && (
+            <button
+              type="button"
+              onClick={clearOrderFilters}
+              className="inline-flex items-center gap-1 px-3 h-9 rounded-[var(--radius-md)] text-[12px] font-medium text-[var(--gray-500)] hover:text-[var(--gray-950)] hover:bg-[var(--gray-50)] hover-press"
+            >
+              <X className="w-3.5 h-3.5" /> Limpiar
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={handleExportCsv}
+            disabled={orderRows.length === 0}
+            className="inline-flex items-center gap-1 px-3 h-9 rounded-[var(--radius-md)] text-[12px] font-medium text-[var(--gray-500)] hover:text-[var(--gray-950)] hover:bg-[var(--gray-50)] hover-press disabled:opacity-40"
+            title="Exportar el resumen por OC a CSV"
+          >
+            <Download className="w-3.5 h-3.5" /> CSV
+          </button>
+          <div className="ml-auto text-[12px] text-[var(--gray-400)] tabular-nums">
+            {orderRows.length.toLocaleString()} OCs
+          </div>
+        </div>
+
+        <div className="bg-white border border-[var(--gray-200)] rounded-[var(--radius)] overflow-hidden animate-card-in">
+          <div className="overflow-x-auto">
+            <table className="w-full text-[13px]">
+              <thead className="bg-[var(--surface-alt)] text-[var(--gray-400)] text-left text-[11px] uppercase tracking-wide sticky top-0 z-10">
+                <tr>
+                  <Th className="pl-5">Cía</Th>
+                  <Th>Proveedor</Th>
+                  <Th>OC</Th>
+                  <Th align="right">Importe total</Th>
+                  <Th align="right">Recibido</Th>
+                  <Th align="right">Pend. recibir</Th>
+                  <Th align="right">Pend. factura</Th>
+                  <Th>Antigüedad</Th>
+                  <Th>Estado</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {orderRows.length === 0 ? (
+                  <tr>
+                    <td colSpan={9} className="text-center text-[var(--gray-400)] py-14">
+                      <div className="flex flex-col items-center gap-2">
+                        {comprasRecords.length === 0 ? (
+                          <>
+                            <Package className="w-5 h-5 text-[var(--gray-300)]" />
+                            <div className="text-[13px]">Sin OCs cargadas.</div>
+                          </>
+                        ) : (
+                          <>
+                            <PackageCheck className="w-5 h-5 text-[var(--gray-300)]" />
+                            <div className="text-[13px]">
+                              {ocEstado === 'backlog'
+                                ? 'Sin OCs pendientes de recibir o facturar.'
+                                : 'Sin OCs con los filtros.'}
+                            </div>
+                            {orderFiltersActive && (
+                              <button
+                                onClick={clearOrderFilters}
+                                className="text-[12px] text-[var(--primary)] hover:underline"
+                              >
+                                Limpiar filtros
+                              </button>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ) : (
+                  orderRows.slice(0, visibleCount).map((o, idx) => (
+                    <OrderRow
+                      key={`${o.cia}::${o.noOrden}`}
+                      order={o}
+                      idx={idx}
+                      providerIndex={providerIndex}
+                    />
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+          {orderRows.length > visibleCount && (
+            <LoadMore
+              shown={Math.min(visibleCount, orderRows.length)}
+              total={orderRows.length}
+              onMore={() => setVisibleCount((n) => n + PAGE_SIZE)}
+            />
+          )}
+        </div>
+      </section>
+      )}
+
+      {/* ─── Toolbar: search + filters (DETALLE por línea) ─────────────── */}
+      {view === 'detalle' && (
       <section className="space-y-3">
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative flex-1 min-w-[240px] max-w-md">
@@ -638,7 +930,7 @@ export default function Compras({
                     </td>
                   </tr>
                 ) : (
-                  filteredRecords.slice(0, ROW_CAP).map((r, idx) => (
+                  filteredRecords.slice(0, visibleCount).map((r, idx) => (
                     <CompraRow
                       key={comprasRecordKey(r)}
                       record={r}
@@ -651,18 +943,16 @@ export default function Compras({
               </tbody>
             </table>
           </div>
-          {filteredRecords.length > ROW_CAP && (
-            <div className="px-4 py-2 text-[11px] text-[var(--gray-500)] bg-[var(--surface-alt)] border-t border-[var(--gray-200)]">
-              Mostrando <span className="tabular-nums font-medium text-[var(--gray-950)]">{ROW_CAP}</span>{' '}
-              de{' '}
-              <span className="tabular-nums font-medium text-[var(--gray-950)]">
-                {filteredRecords.length.toLocaleString()}
-              </span>{' '}
-              registros. Refina los filtros para ver más.
-            </div>
+          {filteredRecords.length > visibleCount && (
+            <LoadMore
+              shown={Math.min(visibleCount, filteredRecords.length)}
+              total={filteredRecords.length}
+              onMore={() => setVisibleCount((n) => n + PAGE_SIZE)}
+            />
           )}
         </div>
       </section>
+      )}
     </div>
   );
 }
@@ -670,6 +960,140 @@ export default function Compras({
 /* ──────────────────────────────────────────────────────────────────────── */
 /*  Helpers                                                                  */
 /* ──────────────────────────────────────────────────────────────────────── */
+
+function ViewToggleButton({
+  icon: Icon,
+  label,
+  active,
+  onClick,
+}: {
+  icon: typeof Layers;
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      onClick={onClick}
+      className="inline-flex items-center gap-1.5 px-3 h-8 rounded-[var(--radius-sm)] text-[12px] font-medium transition-colors hover-press"
+      style={{
+        backgroundColor: active ? 'var(--primary)' : 'transparent',
+        color: active ? 'var(--primary-foreground, #fff)' : 'var(--gray-500)',
+      }}
+    >
+      <Icon className="w-3.5 h-3.5" />
+      {label}
+    </button>
+  );
+}
+
+function LoadMore({ shown, total, onMore }: { shown: number; total: number; onMore: () => void }) {
+  return (
+    <div className="px-4 py-2.5 flex items-center justify-between gap-3 text-[11px] text-[var(--gray-500)] bg-[var(--surface-alt)] border-t border-[var(--gray-200)]">
+      <span>
+        Mostrando <b className="tabular-nums text-[var(--gray-950)]">{shown.toLocaleString()}</b> de{' '}
+        <b className="tabular-nums text-[var(--gray-950)]">{total.toLocaleString()}</b>
+      </span>
+      <button
+        type="button"
+        onClick={onMore}
+        className="inline-flex items-center gap-1 px-3 h-7 rounded-[var(--radius-md)] text-[12px] font-medium border border-[var(--gray-200)] bg-white hover:bg-[var(--gray-50)] hover-press text-[var(--gray-700)]"
+      >
+        Cargar más
+      </button>
+    </div>
+  );
+}
+
+function OrderEstadoChip({ estado }: { estado: ComprasOrderEstado }) {
+  const { style, icon: Icon } = ORDER_ESTADO_CHIP[estado];
+  return (
+    <StatusChip style={style} icon={Icon}>
+      {COMPRA_ORDER_ESTADO_LABEL[estado]}
+    </StatusChip>
+  );
+}
+
+function OrderRow({
+  order: o,
+  idx,
+  providerIndex,
+}: {
+  order: ComprasOrderSummary;
+  idx: number;
+  providerIndex: ReturnType<typeof buildProviderIndex>;
+}) {
+  const stale = o.estado === 'pendienteRecibir' && (o.antiguedadDias ?? 0) > STALE_OPEN_ORDER_DAYS;
+  return (
+    <tr
+      className={`group border-t border-[var(--gray-200)]/40 hover-row hover:bg-[var(--primary-muted)]/30 ${
+        idx % 2 === 1 ? 'bg-[var(--gray-50)]/40' : ''
+      }`}
+    >
+      <Td className="pl-5">
+        <span className="font-mono text-[11px] text-[var(--gray-500)]">{o.cia}</span>
+      </Td>
+      <Td>
+        <div className="font-medium text-[var(--gray-950)] truncate max-w-[240px]" title={o.nombreProveedor}>
+          {o.nombreProveedor}
+        </div>
+        <div className="mt-0.5">
+          <ProviderBadge index={providerIndex} jdeCode={o.noProveedor} name={o.nombreProveedor} />
+        </div>
+      </Td>
+      <Td>
+        <span className="font-mono text-[11px] text-[var(--gray-700)]">{o.noOrden}</span>
+        <div className="text-[10px] text-[var(--gray-400)]">
+          {o.lineCount} {o.lineCount === 1 ? 'línea' : 'líneas'}
+        </div>
+      </Td>
+      <Td align="right">
+        <span className="tabular-nums font-semibold text-[var(--gray-950)]">{fmtCurrency(o.importeTotalMxn)}</span>
+      </Td>
+      <Td align="right">
+        <span className="tabular-nums text-[var(--gray-700)]">{fmtCurrency(o.importeRecibidoMxn)}</span>
+        {o.importeFacturadoMxn > 0 && (
+          <div className="text-[10px] text-[var(--gray-400)] tabular-nums" title="Porción ya facturada (en CXP)">
+            {fmtCompact(o.importeFacturadoMxn)} fact.
+          </div>
+        )}
+      </Td>
+      <Td align="right">
+        {o.importePendienteRecibirMxn > 0 ? (
+          <span className="tabular-nums font-medium" style={{ color: 'var(--info)' }}>
+            {fmtCurrency(o.importePendienteRecibirMxn)}
+          </span>
+        ) : (
+          <span className="text-[var(--gray-300)]">—</span>
+        )}
+      </Td>
+      <Td align="right">
+        {o.importePendienteFacturaMxn > 0 ? (
+          <span className="tabular-nums font-medium" style={{ color: 'var(--warning)' }} title="Pasivo por distribuir: recibido sin factura">
+            {fmtCurrency(o.importePendienteFacturaMxn)}
+          </span>
+        ) : (
+          <span className="text-[var(--gray-300)]">—</span>
+        )}
+      </Td>
+      <Td>
+        {o.fechaPedido ? (
+          <span className="text-[12px] tabular-nums" style={{ color: stale ? 'var(--warning)' : 'var(--gray-700)' }} title={`Pedido ${o.fechaPedido}`}>
+            {o.antiguedadDias !== null ? `${o.antiguedadDias} d` : o.fechaPedido}
+            {stale ? ` · +${STALE_OPEN_ORDER_DAYS}` : ''}
+          </span>
+        ) : (
+          <span className="text-[var(--gray-300)]">—</span>
+        )}
+      </Td>
+      <Td>
+        <OrderEstadoChip estado={o.estado} />
+      </Td>
+    </tr>
+  );
+}
 
 function CompraRow({
   record: r,
@@ -813,7 +1237,7 @@ function EstadoChip({ estado, edoSig }: { estado: ReturnType<typeof compraEstado
     case 'cerradaWorkflow':
       return <StatusChip style={STATUS_CERRADA_WF} icon={Archive} title={title}>Cerrada en JDE</StatusChip>;
     case 'porPagar':
-      return <StatusChip style={STATUS_POR_PAGAR} icon={Clock} title={title}>Por pagar</StatusChip>;
+      return <StatusChip style={STATUS_POR_PAGAR} icon={FileText} title={title}>Pendiente factura</StatusChip>;
     default:
       return <StatusChip style={STATUS_SIN_ENTRADA} icon={Calendar} title={title}>Sin entrada</StatusChip>;
   }

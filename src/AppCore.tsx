@@ -6,6 +6,7 @@ import { MidasStore, loadLightStore, saveLightStore, CXPRecord, type AuxiliarIva
 import { loadHeavyRecords, saveHeavyRecords, type HeavyKey } from './services/heavyStoreIDB';
 import { recomputeClientCreditDaysFromCobranza } from './domain/collectionCalendarEngine';
 import { comprasToPurchaseReceipts } from './domain/comprasToPurchaseReceipts';
+import { compraEstado } from './domain/comprasInsights';
 import { selectComprasForProjection } from './modules/financial-projection/services/comprasProjectionFilter';
 import { subscribeProjectionFirstPaint } from './modules/financial-projection/services/projectionBootSignal';
 import { buildProviderSpendIndex } from './domain/providerRecentSpend';
@@ -40,7 +41,6 @@ import {
   fetchAuxiliarContableRange,
   fetchAuxiliarContableIvaRange,
   AUX_IVA_LEDGER_VERSION,
-  BANKS_EMPTY_DAY_REVALIDATE_DAYS,
   type Company,
   type AuxiliarContableRecord,
   type BankAccountStatement,
@@ -75,6 +75,7 @@ const Clients = lazy(() => import('./components/Clients'));
 const CashFlowDetail = lazy(() => import('./components/CashFlowDetail'));
 const CXP = lazy(() => import('./components/CXP'));
 const Compras = lazy(() => import('./components/Compras'));
+const PasivoDistribuir = lazy(() => import('./components/PasivoDistribuir'));
 const Pagos = lazy(() => import('./components/Pagos'));
 const Bancos = lazy(() => import('./components/Bancos'));
 const CollectionProjection = lazy(() => import('./components/CollectionProjection'));
@@ -106,7 +107,7 @@ import {
   Users, UserSquare, UserCog,
   ChevronDown, Landmark, Check, GitBranch, Lock,
   HandCoins, ChevronRight, BookUser, TrendingUp,
-  Receipt, Wallet, FolderOpen,
+  Receipt, Wallet, FolderOpen, PackageOpen,
   LogOut, ClipboardList, BarChart3, ShieldCheck, CreditCard, Scale,
   Target, KeyRound,
   ShoppingCart, SlidersHorizontal,
@@ -282,6 +283,24 @@ const COMPRAS_AUTO_REFRESH_TTL_MS = 6 * 60 * 60 * 1000;
 const COMPRAS_LOOKBACK_DAYS = 365;
 const COMPRAS_FUTURE_LOOKAHEAD_MONTHS = 3;
 const COMPRAS_CACHE_KEY = '__all__';
+// Frescura de datos (Etapa 1). El cache mensual sirve meses pasados sin red,
+// así que una OC que cambia de estado DESPUÉS de cachearse (creada → recibida
+// → facturada, o el importe corregido por el SP) quedaba stale para siempre.
+// En cada sync re-validamos: (a) los últimos N meses calendario, y (b) el mes
+// de CUALQUIER OC aún en estado no-terminal (sinEntrada/porPagar) — esas son
+// las que todavía pueden moverse. El piso evita extender el fetch a años atrás
+// por una OC vieja olvidada en estado abierto.
+const COMPRAS_REVALIDATE_MONTHS = 3;
+const COMPRAS_MAX_REVALIDATE_LOOKBACK_DAYS = 540;
+// Días recientes que PagoProveedor re-pide en cada sync aunque ya estén
+// cacheados — cubre pagos capturados con atraso sobre un día ya consultado.
+const PAGOS_REVALIDATE_DAYS = 21;
+// Ventana de revalidación de días bancarios vacíos en el backfill de boot.
+// Tesorería sube Bajío/Santander MANUALMENTE con semanas de atraso (cargas
+// observadas: 5/15-may, 10-jun), así que los 14d de la ruta single-day no
+// alcanzan para sanear "28-abril". 45d cubre el atraso típico de carga manual
+// a costa de ~pocas requests extra de días genuinamente vacíos por boot.
+const BANKS_BACKFILL_REVALIDATE_DAYS = 45;
 // Whitelist explícito de cías que SÍ generan órdenes de compra relevantes.
 // El resto del catálogo JDE (subsidiarias dormidas, holdings, etc.) devuelve
 // OCs vacías o irrelevantes — pedirlas era ~17 cías × 13 meses ≈ 220 requests
@@ -317,6 +336,7 @@ const TAB_DATASETS: Partial<Record<TabId, DatasetKey[]>> = {
   collections: ['cobranza', 'banks', 'rol'],
   fideicomiso: ['cobranza', 'banks'],
   compras: ['compras'],
+  pasivoDistribuir: ['compras'],
   pagos: ['pagos'],
   payroll: ['nomina'],
   financialProjection: ['cxp', 'cobranza', 'compras', 'pagos', 'nomina', 'rol', 'auxiliar'],
@@ -369,6 +389,7 @@ const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: LucideIcon }
   porPagar: [
     { id: 'cxp',     label: 'Antigüedad de Saldo', icon: Receipt },
     { id: 'compras', label: 'Órdenes de Compras',  icon: FolderOpen },
+    { id: 'pasivoDistribuir', label: 'Pasivo por Distribuir', icon: PackageOpen },
     { id: 'pagos',   label: 'Pagos',               icon: CreditCard },
     { id: 'payroll', label: 'Nómina',              icon: Users },
     { id: 'taxes',   label: 'Impuestos', icon: Landmark },
@@ -389,7 +410,7 @@ const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: LucideIcon }
 
 const SECTION_FOR_TAB: Partial<Record<TabId, SectionId>> = {
   clients: 'catalogos', providers: 'catalogos', bancos: 'catalogos',
-  cxp: 'porPagar', compras: 'porPagar', pagos: 'porPagar', payroll: 'porPagar', taxes: 'porPagar',
+  cxp: 'porPagar', compras: 'porPagar', pasivoDistribuir: 'porPagar', pagos: 'porPagar', payroll: 'porPagar', taxes: 'porPagar',
   netflow: 'cobranza', venta: 'cobranza', collections: 'cobranza',
   financialProjection: 'proyeccion', financialPlanning: 'proyeccion',
   concursoMercantil: 'proyeccion', fideicomiso: 'proyeccion',
@@ -2657,6 +2678,33 @@ export default function App() {
         const fetchedByCia = new Map<string, ComprasRecord[]>();
         const errors: string[] = [];
 
+        // ── Frescura de datos (Etapa 1) ──
+        // El cache mensual sirve meses pasados sin red, así que una OC que
+        // cambia de estado/importe DESPUÉS de cachearse quedaba stale. Por cía
+        // re-validamos: (a) los últimos COMPRAS_REVALIDATE_MONTHS meses, y (b)
+        // el mes de CADA OC aún en estado no-terminal (sinEntrada/porPagar) —
+        // las únicas que todavía pueden moverse. Conjunto explícito (no umbral)
+        // para no re-pedir todo el histórico por una OC abierta vieja.
+        const revalidateFloorDay = isoDaysBefore(fechaFinal, COMPRAS_MAX_REVALIDATE_LOOKBACK_DAYS);
+        const revalidateFloorMonth = revalidateFloorDay.slice(0, 7);
+        const lookbackMonth = lookbackStart.slice(0, 7);
+        const recentMonths: string[] = [];
+        // Mes actual + (COMPRAS_REVALIDATE_MONTHS − 1) previos = N meses.
+        for (let m = 0; m < COMPRAS_REVALIDATE_MONTHS; m++) {
+          const d = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - m, 1));
+          recentMonths.push(d.toISOString().slice(0, 7));
+        }
+        const openMonthsByCia = new Map<string, Set<string>>();
+        for (const r of comprasRecords) {
+          const estado = compraEstado(r);
+          if (estado !== 'sinEntrada' && estado !== 'porPagar') continue;
+          const month = (r.fechaPedido || r.fechaRecepcion || '').slice(0, 7);
+          if (month.length !== 7 || month < revalidateFloorMonth) continue;
+          let set = openMonthsByCia.get(r.cia);
+          if (!set) { set = new Set<string>(); openMonthsByCia.set(r.cia, set); }
+          set.add(month);
+        }
+
         let cursor = 0;
         const concurrency = Math.min(10, ciasToFetch.length);
         const worker = async () => {
@@ -2664,8 +2712,20 @@ export default function App() {
             const idx = cursor++;
             if (idx >= ciasToFetch.length) return;
             const cia = ciasToFetch[idx];
+            // Meses a revalidar de esta cía = ventana reciente + meses con OCs
+            // abiertas. Extendemos `from` para que los meses más viejos que el
+            // lookback estándar entren al rango (los intermedios salen del
+            // cache, baratos).
+            const revalidateMonths = new Set<string>(recentMonths);
+            const openSet = openMonthsByCia.get(cia);
+            if (openSet) for (const m of openSet) revalidateMonths.add(m);
+            let minRevalidateMonth = lookbackMonth;
+            for (const m of revalidateMonths) if (m < minRevalidateMonth) minRevalidateMonth = m;
+            const ciaFrom = minRevalidateMonth < lookbackMonth
+              ? (`${minRevalidateMonth}-01` < revalidateFloorDay ? revalidateFloorDay : `${minRevalidateMonth}-01`)
+              : lookbackStart;
             try {
-              const fetched = await fetchComprasRange(cia, lookbackStart, fechaFinal, { concurrency: 4 });
+              const fetched = await fetchComprasRange(cia, ciaFrom, fechaFinal, { concurrency: 4, revalidateMonths });
               fetchedByCia.set(cia, fetched);
               fetchedTimestamps[cia] = new Date().toISOString();
             } catch (err) {
@@ -2678,8 +2738,9 @@ export default function App() {
 
         const fetchedAll: ComprasRecord[] = [];
         for (const recs of fetchedByCia.values()) fetchedAll.push(...recs);
+        const openOcMonths = Array.from(openMonthsByCia.values()).reduce((acc, s) => acc + s.size, 0);
         // eslint-disable-next-line no-console
-        console.info(`[compras] boot sync · ${ciasToFetch.length} cías · ${fetchedAll.length} OCs nuevas · ${errors.length} errores`);
+        console.info(`[compras] boot sync · ${ciasToFetch.length} cías · ${fetchedAll.length} OCs · ${errors.length} errores · revalidando ${recentMonths.length} meses recientes + ${openOcMonths} mes(es) con OCs abiertas en ${openMonthsByCia.size} cías`);
         if (fetchedAll.length > 0) {
           // Siempre merge — nunca reemplazar. El delta sólo pide días nuevos;
           // los históricos hidratados desde el store deben preservarse. La
@@ -3146,11 +3207,20 @@ export default function App() {
         const maxCached = getMaxCachedDay('pagoproveedor');
         const hasHydratedRecords = pagoProveedorRecords.length > 0;
         const candidateFrom = maxCached ? nextIsoDay(maxCached) : lookbackStart;
-        const fechaInicial = (hasHydratedRecords && maxCached && candidateFrom >= lookbackStart)
+        // Frescura (Etapa 1): re-validar los últimos PAGOS_REVALIDATE_DAYS días
+        // aunque el watermark ya los cubra — un pago capturado con atraso entra
+        // a JDE sobre un día que el navegador ya cacheó, y el delta lo saltaría
+        // para siempre. La ventana baja el `from` y `revalidateSince` fuerza el
+        // re-fetch de esos días cacheados.
+        const revalidateSince = isoDaysBefore(fechaFinal, PAGOS_REVALIDATE_DAYS);
+        let fechaInicial = (hasHydratedRecords && maxCached && candidateFrom >= lookbackStart)
           ? candidateFrom
           : lookbackStart;
+        if (fechaInicial > revalidateSince && revalidateSince >= lookbackStart) {
+          fechaInicial = revalidateSince;
+        }
         // eslint-disable-next-line no-console
-        console.info(`[pagoproveedor] boot sync · maxCachedIDB=${maxCached ?? 'none'} · hydratedState=${pagoProveedorRecords.length} · fetch ${fechaInicial}→${fechaFinal} (${fechaInicial === lookbackStart ? 'FULL' : 'DELTA'})`);
+        console.info(`[pagoproveedor] boot sync · maxCachedIDB=${maxCached ?? 'none'} · hydratedState=${pagoProveedorRecords.length} · fetch ${fechaInicial}→${fechaFinal} (${fechaInicial === lookbackStart ? 'FULL' : 'DELTA'}) · revalidateSince=${revalidateSince}`);
 
         if (fechaInicial > fechaFinal) {
           // eslint-disable-next-line no-console
@@ -3161,7 +3231,7 @@ export default function App() {
           return;
         }
 
-        const fetched = await fetchPagoProveedorRange(fechaInicial, fechaFinal, { concurrency: 10 });
+        const fetched = await fetchPagoProveedorRange(fechaInicial, fechaFinal, { concurrency: 10, revalidateSince });
         if (fetched.length > 0) {
           // Siempre merge para preservar historia hidratada desde el store.
           setPagoProveedorRecords(prev => {
@@ -4164,19 +4234,22 @@ export default function App() {
       // (el día "ya está cacheado"), así que el rango SIEMPRE incluye la
       // ventana reciente: fetchBankStatementsRange re-pide solo los días
       // vacíos de esa ventana; los días con datos siguen saliendo del cache.
-      // One-time heal: la primera vez tras este fix (marker ausente) la
-      // ventana se amplía a 60 días para sanear caches envenenados viejos.
-      const BANKS_EMPTY_HEAL_KEY = 'midas.banks.emptyDayHeal.v1';
+      // Steady-state: ventana amplia (BANKS_BACKFILL_REVALIDATE_DAYS) para
+      // tolerar el atraso de carga manual de Bajío/Santander. One-time heal: la
+      // primera vez tras este fix (marker v2 ausente) la ventana se amplía a
+      // 120 días para sanear caches envenenados viejos (días cacheados vacíos
+      // antes de que tesorería subiera el estado de cuenta — p. ej. abril/mayo).
+      const BANKS_EMPTY_HEAL_KEY = 'midas.banks.emptyDayHeal.v2';
       let emptyHealDone = true;
       try { emptyHealDone = localStorage.getItem(BANKS_EMPTY_HEAL_KEY) !== null; } catch { /* ignore */ }
       const revalidateEmptySince = isoDaysBefore(
         today,
-        emptyHealDone ? BANKS_EMPTY_DAY_REVALIDATE_DAYS : 60,
+        emptyHealDone ? BANKS_BACKFILL_REVALIDATE_DAYS : 120,
       );
       if (rangeStart > revalidateEmptySince) rangeStart = revalidateEmptySince;
       // eslint-disable-next-line no-console
       console.info(
-        `[banks v3-fix] backfill sync · maxCachedIDB=${maxCachedBanks ?? 'none'} (${cachedDayCount}d) · hydratedState=${bankJdeStatements.length} stmts / ${distinctStateDates.size} dates · stateSpansHistory=${stateSpansHistory} · cacheSpansHistory=${cacheSpansHistory} · trustedStateMax=${trustedStateMax ?? 'null'} · trustedCacheMax=${trustedCacheMax ?? 'null'} · force=${force} · idbPersist=${isDailyCachePersistent()} · revalidateEmptySince=${revalidateEmptySince}${emptyHealDone ? '' : ' (HEAL 60d)'} · range ${rangeStart}→${today} (${force ? 'FULL' : 'DELTA'} via daily cache)`,
+        `[banks v3-fix] backfill sync · maxCachedIDB=${maxCachedBanks ?? 'none'} (${cachedDayCount}d) · hydratedState=${bankJdeStatements.length} stmts / ${distinctStateDates.size} dates · stateSpansHistory=${stateSpansHistory} · cacheSpansHistory=${cacheSpansHistory} · trustedStateMax=${trustedStateMax ?? 'null'} · trustedCacheMax=${trustedCacheMax ?? 'null'} · force=${force} · idbPersist=${isDailyCachePersistent()} · revalidateEmptySince=${revalidateEmptySince}${emptyHealDone ? '' : ' (HEAL 120d)'} · range ${rangeStart}→${today} (${force ? 'FULL' : 'DELTA'} via daily cache)`,
       );
 
       if (rangeStart > today) {
@@ -5098,6 +5171,16 @@ export default function App() {
             {activeTab === 'compras' && (
               <Suspense fallback={<LazyTabFallback label="Órdenes de Compras" />}>
                 <Compras
+                  comprasRecords={comprasRecords}
+                  comprasLoadedCias={comprasLoadedCias}
+                  selectedCia={selectedCia}
+                  providers={providers}
+                />
+              </Suspense>
+            )}
+            {activeTab === 'pasivoDistribuir' && (
+              <Suspense fallback={<LazyTabFallback label="Pasivo por Distribuir" />}>
+                <PasivoDistribuir
                   comprasRecords={comprasRecords}
                   comprasLoadedCias={comprasLoadedCias}
                   selectedCia={selectedCia}

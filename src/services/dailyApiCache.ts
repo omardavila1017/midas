@@ -475,13 +475,20 @@ interface FetchRangeOptions<T> {
   onDay?: (records: T[]) => void;
   concurrency?: number;
   today?: string;
+  /**
+   * YYYY-MM-DD inclusive: días pasados con `day >= revalidateSince` se RE-PIDEN
+   * aunque estén cacheados (el cache se sobreescribe). Cubre registros que se
+   * insertaron en JDE DESPUÉS de que el día se cacheó (p. ej. un pago
+   * capturado con atraso). `undefined` = comportamiento previo.
+   */
+  revalidateSince?: string;
 }
 
 export async function fetchRangeWithDailyCache<T>(
   api: string,
   options: FetchRangeOptions<T>,
 ): Promise<T[]> {
-  const { from, to, cia, fetchDay, onProgress, concurrency = 3, today = todayIso() } = options;
+  const { from, to, cia, fetchDay, onProgress, concurrency = 3, today = todayIso(), revalidateSince } = options;
 
   // Asegura que keyIndex esté listo antes de planear cache hits.
   await ensureMemoryReady();
@@ -496,7 +503,10 @@ export async function fetchRangeWithDailyCache<T>(
   const cachedIdx: number[] = [];
   for (let i = 0; i < days.length; i++) {
     const day = days[i];
-    if (isPastDay(day, today) && hasDailyCached(api, day, cia)) {
+    // Revalidación: un día pasado dentro de la ventana se re-pide aunque esté
+    // cacheado — pudo entrar un registro nuevo a JDE después de cachearse.
+    const forceRevalidate = revalidateSince != null && day >= revalidateSince;
+    if (!forceRevalidate && isPastDay(day, today) && hasDailyCached(api, day, cia)) {
       cachedIdx.push(i);
     } else {
       toFetch.push(i);
@@ -978,6 +988,16 @@ interface FetchRangeMonthlyOptions<T> {
   onProgress?: (done: number, total: number) => void;
   concurrency?: number;
   today?: string;
+  /**
+   * Conjunto de meses `YYYY-MM` que se RE-PIDEN aunque estén cacheados (el
+   * cache se sobreescribe). El estado de una OC (creada → recibida →
+   * facturada) y su importe cambian DESPUÉS de que su mes se cacheó, así que
+   * un mes pasado servido del cache queda stale. Es un Set explícito (no un
+   * umbral) para revalidar SOLO los meses relevantes — la ventana reciente +
+   * los meses con OCs aún abiertas — sin re-pedir todo el histórico cuando hay
+   * una OC abierta vieja. `undefined`/vacío = comportamiento previo.
+   */
+  revalidateMonths?: ReadonlySet<string>;
 }
 
 /**
@@ -1004,6 +1024,7 @@ export async function fetchRangeWithMonthlyCache<T>(
     onProgress,
     concurrency = 4,
     today = todayIso(),
+    revalidateMonths,
   } = options;
 
   await ensureMemoryReady();
@@ -1016,7 +1037,10 @@ export async function fetchRangeWithMonthlyCache<T>(
   const cachedIdx: number[] = [];
   for (let i = 0; i < months.length; i++) {
     const m = months[i];
-    if (isPastMonth(m, today) && hasMonthCached(api, m, cia)) {
+    // Revalidación: un mes en el set se re-pide aunque esté cacheado — su
+    // contenido pudo cambiar de estado/importe después de cachearse.
+    const forceRevalidate = revalidateMonths?.has(m) ?? false;
+    if (!forceRevalidate && isPastMonth(m, today) && hasMonthCached(api, m, cia)) {
       cachedIdx.push(i);
     } else {
       toFetch.push(i);

@@ -24,6 +24,7 @@ export const APP_TAB_LABELS: Record<AppTabId, string> = {
   cxp: 'Antigüedad de Saldo',
   concursoMercantil: 'Concurso Mercantil',
   compras: 'Órdenes de Compras',
+  pasivoDistribuir: 'Pasivo por Distribuir',
   pagos: 'Pagos',
   clients: 'Clientes',
   providers: 'Proveedores',
@@ -56,7 +57,7 @@ export function isAdminOnlyTab(tab: AppTabId): boolean {
 export const PERMISSION_GROUPS: { section: string; tabs: AppTabId[] }[] = [
   { section: 'Dashboard', tabs: ['financialProjection', 'financialPlanning', 'concursoMercantil', 'fideicomiso'] },
   { section: 'Ingresos', tabs: ['netflow', 'venta', 'collections'] },
-  { section: 'Egresos', tabs: ['cxp', 'compras', 'pagos', 'payroll', 'taxes'] },
+  { section: 'Egresos', tabs: ['cxp', 'compras', 'pasivoDistribuir', 'pagos', 'payroll', 'taxes'] },
   { section: 'Catálogos', tabs: ['clients', 'providers', 'bancos'] },
   { section: 'Objetivos', tabs: ['kpisObjectives'] },
 ];

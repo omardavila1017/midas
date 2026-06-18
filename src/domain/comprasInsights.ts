@@ -143,9 +143,212 @@ export const COMPRA_ESTADO_LABEL: Record<CompraEstado, string> = {
   cancelada: 'Cancelada',
   facturada: 'Facturada',
   cerradaWorkflow: 'Cerrada en JDE',
-  porPagar: 'Por pagar',
+  // "Por pagar" confundía: la mercancía ya entró pero NO hay factura — es el
+  // "pasivo por distribuir" de JDE, no una cuenta por pagar (ver Compras.tsx).
+  porPagar: 'Pendiente factura',
   sinEntrada: 'Sin entrada',
 };
+
+// ───────────────────────────────────────────────────────────────
+// Resumen financiero por OC (agregación de líneas → una fila por orden)
+// ───────────────────────────────────────────────────────────────
+
+/**
+ * Estado de la OC completa (rollup de sus líneas), pensado para el foco
+ * FINANCIERO (no de abastecimiento):
+ *   • pendienteRecibir — tiene líneas creadas sin entrada → gasto futuro que va
+ *     a caer; es el backlog principal de la pestaña.
+ *   • pendienteFactura — recibida sin factura = "pasivo por distribuir" (cuenta
+ *     puente de JDE); el material entró, falta el documento de cobro.
+ *   • facturada — todas sus líneas ya tienen factura → vive en CXP / Antigüedad
+ *     de Saldos, NO debe reproyectarse aquí.
+ *   • cerrada — cerrada en el workflow de JDE (Edo_Sig 998/999).
+ *   • cancelada — todas sus líneas canceladas.
+ * Precedencia: pendienteRecibir > pendienteFactura > facturada > cerrada >
+ * cancelada (si todavía falta recibir algo, eso manda).
+ */
+export type ComprasOrderEstado =
+  | 'pendienteRecibir'
+  | 'pendienteFactura'
+  | 'facturada'
+  | 'cerrada'
+  | 'cancelada';
+
+export const COMPRA_ORDER_ESTADO_LABEL: Record<ComprasOrderEstado, string> = {
+  pendienteRecibir: 'Pendiente de recibir',
+  pendienteFactura: 'Pendiente factura',
+  facturada: 'Facturada',
+  cerrada: 'Cerrada en JDE',
+  cancelada: 'Cancelada',
+};
+
+export interface ComprasOrderSummary {
+  cia: string;
+  noOrden: string;
+  noProveedor: string;
+  nombreProveedor: string;
+  lineCount: number;
+  /** Σ recibido + Σ pendiente por recibir (NO incluye canceladas ni cerradas). */
+  importeTotalMxn: number;
+  /** Σ líneas recibidas (con o sin factura). */
+  importeRecibidoMxn: number;
+  /** Σ líneas ya facturadas (subconjunto de recibido — vive en CXP). */
+  importeFacturadoMxn: number;
+  /** Σ líneas creadas sin entrada — lo que falta por recibir. */
+  importePendienteRecibirMxn: number;
+  /** Σ líneas recibidas sin factura — "pasivo por distribuir". */
+  importePendienteFacturaMxn: number;
+  /** Fecha de pedido más antigua entre sus líneas. */
+  fechaPedido: string;
+  /** Fecha de pago proyectada más reciente entre sus líneas (si hay). */
+  fechaPagoProyectada: string;
+  /** Días desde la fecha de pedido más antigua. */
+  antiguedadDias: number | null;
+  estado: ComprasOrderEstado;
+  /** Categoría representativa (primera línea con categoría). */
+  categoria: string;
+  /** Claves de línea — para enfocar/exportar/cruzar. */
+  keys: string[];
+}
+
+/**
+ * Agrega las líneas de OC a UNA fila por orden (cia::noOrden). El split
+ * recibido / pendiente por recibir / pendiente factura se deriva del estado de
+ * cada línea (`compraEstado`); las líneas canceladas y cerradas-en-workflow se
+ * excluyen de los importes (no son ni un gasto futuro ni un pasivo vivo). Es la
+ * vista que pidió finanzas: total de la OC + cuánto ya entró + cuánto falta,
+ * sin detalle de producto.
+ */
+export function buildComprasByOrder(
+  records: ComprasRecord[],
+  asOfDate: string,
+): ComprasOrderSummary[] {
+  const map = new Map<string, ComprasOrderSummary & {
+    _hasPendienteRecibir: boolean;
+    _hasPendienteFactura: boolean;
+    _hasFacturada: boolean;
+    _hasCerrada: boolean;
+  }>();
+
+  for (const r of records) {
+    const orderKey = `${r.cia}::${r.noOrden}`;
+    let o = map.get(orderKey);
+    if (!o) {
+      o = {
+        cia: r.cia,
+        noOrden: r.noOrden,
+        noProveedor: r.noProveedor,
+        nombreProveedor: r.nombreProveedor,
+        lineCount: 0,
+        importeTotalMxn: 0,
+        importeRecibidoMxn: 0,
+        importeFacturadoMxn: 0,
+        importePendienteRecibirMxn: 0,
+        importePendienteFacturaMxn: 0,
+        fechaPedido: '',
+        fechaPagoProyectada: '',
+        antiguedadDias: null,
+        estado: 'cancelada',
+        categoria: '',
+        keys: [],
+        _hasPendienteRecibir: false,
+        _hasPendienteFactura: false,
+        _hasFacturada: false,
+        _hasCerrada: false,
+      };
+      map.set(orderKey, o);
+    }
+    o.lineCount += 1;
+    o.keys.push(comprasRecordKey(r));
+    if (!o.categoria) o.categoria = r.descCategoria || r.descFamilia || r.categoria || r.familia || '';
+    if (r.fechaPedido && (!o.fechaPedido || r.fechaPedido < o.fechaPedido)) o.fechaPedido = r.fechaPedido;
+    if (r.fechaPagoProyectada && r.fechaPagoProyectada > o.fechaPagoProyectada) o.fechaPagoProyectada = r.fechaPagoProyectada;
+
+    const mxn = comprasImporteMxn(r);
+    switch (compraEstado(r)) {
+      case 'sinEntrada':
+        o.importePendienteRecibirMxn += mxn;
+        o._hasPendienteRecibir = true;
+        break;
+      case 'porPagar':
+        o.importeRecibidoMxn += mxn;
+        o.importePendienteFacturaMxn += mxn;
+        o._hasPendienteFactura = true;
+        break;
+      case 'facturada':
+        o.importeRecibidoMxn += mxn;
+        o.importeFacturadoMxn += mxn;
+        o._hasFacturada = true;
+        break;
+      case 'cerradaWorkflow':
+        o._hasCerrada = true;
+        break;
+      // 'cancelada' no aporta importe
+    }
+  }
+
+  const out: ComprasOrderSummary[] = [];
+  for (const o of map.values()) {
+    o.importeTotalMxn = o.importeRecibidoMxn + o.importePendienteRecibirMxn;
+    o.estado = o._hasPendienteRecibir
+      ? 'pendienteRecibir'
+      : o._hasPendienteFactura
+        ? 'pendienteFactura'
+        : o._hasFacturada
+          ? 'facturada'
+          : o._hasCerrada
+            ? 'cerrada'
+            : 'cancelada';
+    o.antiguedadDias = o.fechaPedido ? daysSinceIso(o.fechaPedido, asOfDate) : null;
+    const {
+      _hasPendienteRecibir, _hasPendienteFactura, _hasFacturada, _hasCerrada, ...summary
+    } = o;
+    void _hasPendienteRecibir; void _hasPendienteFactura; void _hasFacturada; void _hasCerrada;
+    out.push(summary);
+  }
+  // Backlog primero (pendiente de recibir / factura), luego por importe total.
+  const estadoRank: Record<ComprasOrderEstado, number> = {
+    pendienteRecibir: 0, pendienteFactura: 1, facturada: 2, cerrada: 3, cancelada: 4,
+  };
+  return out.sort(
+    (a, b) =>
+      estadoRank[a.estado] - estadoRank[b.estado] ||
+      b.importeTotalMxn - a.importeTotalMxn ||
+      a.noOrden.localeCompare(b.noOrden),
+  );
+}
+
+/** Serializa el resumen por OC a CSV (BOM-friendly, mismo patrón que el detalle). */
+export function comprasOrdersToCsv(orders: ComprasOrderSummary[]): string {
+  const header = [
+    'Compañía', 'No. proveedor', 'Proveedor', 'OC', 'Líneas', 'Estado',
+    'Importe total MXN', 'Recibido MXN', 'Facturado MXN',
+    'Pendiente por recibir MXN', 'Pendiente factura MXN',
+    'Fecha pedido', 'Antigüedad (días)', 'Pago proyectado', 'Categoría',
+  ];
+  const rows = orders.map((o) =>
+    [
+      o.cia,
+      o.noProveedor,
+      o.nombreProveedor,
+      o.noOrden,
+      o.lineCount,
+      COMPRA_ORDER_ESTADO_LABEL[o.estado],
+      o.importeTotalMxn.toFixed(2),
+      o.importeRecibidoMxn.toFixed(2),
+      o.importeFacturadoMxn.toFixed(2),
+      o.importePendienteRecibirMxn.toFixed(2),
+      o.importePendienteFacturaMxn.toFixed(2),
+      o.fechaPedido,
+      o.antiguedadDias ?? '',
+      o.fechaPagoProyectada,
+      o.categoria,
+    ]
+      .map(csvCell)
+      .join(','),
+  );
+  return [header.map(csvCell).join(','), ...rows].join('\n');
+}
 
 // ───────────────────────────────────────────────────────────────
 // Depuración JDE: hallazgos detectados con lógica sobre el API

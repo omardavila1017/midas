@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import type { ComprasRecord } from '../services/jdeTypes';
 import {
+  COMPRA_ESTADO_LABEL,
   STALE_OPEN_ORDER_DAYS,
+  buildComprasByOrder,
   buildComprasDepuracionInsights,
   buildOpenSinEntradaByMonth,
   compraEstado,
   comprasImporteMxn,
+  comprasOrdersToCsv,
   comprasRecordKey,
   comprasToCsv,
   daysSinceIso,
@@ -128,6 +131,61 @@ describe('compraEstado', () => {
     expect(compraEstado(compra({ estadoSiguiente: '998' }))).toBe('cerradaWorkflow');
     expect(compraEstado(compra({ fechaRecepcion: '2026-06-01' }))).toBe('porPagar');
     expect(compraEstado(compra({}))).toBe('sinEntrada');
+  });
+
+  it('renombra "Por pagar" → "Pendiente factura" (es pasivo por distribuir, no CXP)', () => {
+    expect(COMPRA_ESTADO_LABEL.porPagar).toBe('Pendiente factura');
+  });
+});
+
+describe('buildComprasByOrder', () => {
+  it('agrega líneas a una fila por OC con el split recibido/pendiente y rollup de estado', () => {
+    const records: ComprasRecord[] = [
+      // OC-MIX: una línea de cada tipo relevante.
+      compra({ noOrden: 'OC-MIX', lineaOrden: 1, importeTotal: 1000 }), // sinEntrada
+      compra({ noOrden: 'OC-MIX', lineaOrden: 2, importeTotal: 2000, fechaRecepcion: '2026-06-05' }), // porPagar
+      compra({ noOrden: 'OC-MIX', lineaOrden: 3, importeTotal: 3000, fechaRecepcion: '2026-06-05', facturada: true, noFactura: 'F-1' }), // facturada
+      compra({ noOrden: 'OC-MIX', lineaOrden: 4, importeTotal: 9999, cancelada: true }), // cancelada → excluida
+      // OC-PASIVO: solo recibida sin factura.
+      compra({ noOrden: 'OC-PASIVO', lineaOrden: 1, importeTotal: 500, fechaRecepcion: '2026-06-01' }),
+      // OC-FACT: todo facturado.
+      compra({ noOrden: 'OC-FACT', lineaOrden: 1, importeTotal: 800, fechaRecepcion: '2026-05-01', facturada: true, noFactura: 'F-2' }),
+    ];
+    const orders = buildComprasByOrder(records, AS_OF);
+
+    const mix = orders.find((o) => o.noOrden === 'OC-MIX')!;
+    expect(mix.lineCount).toBe(4);
+    expect(mix.importeRecibidoMxn).toBe(5000); // 2000 + 3000
+    expect(mix.importeFacturadoMxn).toBe(3000);
+    expect(mix.importePendienteRecibirMxn).toBe(1000);
+    expect(mix.importePendienteFacturaMxn).toBe(2000);
+    expect(mix.importeTotalMxn).toBe(6000); // recibido + pendiente por recibir (sin cancelada)
+    expect(mix.estado).toBe('pendienteRecibir'); // falta recibir algo → manda
+
+    const pasivo = orders.find((o) => o.noOrden === 'OC-PASIVO')!;
+    expect(pasivo.estado).toBe('pendienteFactura');
+    expect(pasivo.importePendienteFacturaMxn).toBe(500);
+
+    const fact = orders.find((o) => o.noOrden === 'OC-FACT')!;
+    expect(fact.estado).toBe('facturada');
+    expect(fact.importeFacturadoMxn).toBe(800);
+    expect(fact.importePendienteRecibirMxn).toBe(0);
+
+    // Orden: backlog (pendienteRecibir/Factura) antes que facturada.
+    expect(orders.map((o) => o.noOrden)).toEqual(['OC-MIX', 'OC-PASIVO', 'OC-FACT']);
+  });
+
+  it('comprasOrdersToCsv emite encabezado y una fila por OC', () => {
+    const orders = buildComprasByOrder(
+      [compra({ noOrden: 'OC-CSV', importeTotal: 1234, fechaRecepcion: '2026-06-01' })],
+      AS_OF,
+    );
+    const csv = comprasOrdersToCsv(orders);
+    const [header, row] = csv.split('\n');
+    expect(header).toContain('Pendiente por recibir MXN');
+    expect(header).toContain('Pendiente factura MXN');
+    expect(row).toContain('OC-CSV');
+    expect(row).toContain('Pendiente factura'); // estado pendienteFactura
   });
 });
 
