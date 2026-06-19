@@ -99,4 +99,23 @@ describe('createApiProxy (openai)', () => {
       targetUrl: 'https://api.openai.com/v1/chat/completions',
     }));
   });
+
+  it('does NOT leak the query string into audit logs', async () => {
+    const fetchMock = vi.fn(async () => new Response('{}', { status: 404 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const { res } = makeRes();
+
+    await handler()(
+      { method: 'GET', url: '/api/openai/models?secret=shh&token=abc', query: { path: ['models'] } },
+      res,
+    );
+
+    // El upstream SÍ recibe el query string…
+    const [url] = fetchMock.mock.calls[0] as unknown as [string];
+    expect(url).toBe('https://api.openai.com/v1/models?secret=shh&token=abc');
+    // …pero el log de auditoría NO debe contenerlo.
+    expect(console.error).toHaveBeenCalledWith('[api-proxy:openai] upstream 404', expect.objectContaining({
+      targetUrl: 'https://api.openai.com/v1/models',
+    }));
+  });
 });

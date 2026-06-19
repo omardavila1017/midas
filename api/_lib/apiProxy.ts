@@ -75,6 +75,9 @@ export function createApiProxy(options: ApiProxyOptions) {
     const queryIndex = fullUrl.indexOf('?');
     const query = queryIndex >= 0 ? fullUrl.slice(queryIndex) : '';
     const targetUrl = `${upstreamBase}/${subPath}${query}`;
+    // Para auditoría logueamos sólo base+path, NUNCA el query string: éste puede
+    // arrastrar filtros/identificadores y no debe quedar en los logs del servidor.
+    const loggableTarget = `${upstreamBase}/${subPath}`;
 
     const outgoingHeaders: Record<string, string> = {
       Authorization: ['Bearer', token].join(' '),
@@ -109,7 +112,7 @@ export function createApiProxy(options: ApiProxyOptions) {
         // al target exacto sin exponer el token.
         console.error(`[api-proxy:${options.label}] upstream ${upstreamRes.status}`, {
           method,
-          targetUrl,
+          targetUrl: loggableTarget,
         });
       }
       res.setHeader('Content-Type', upstreamRes.headers.get('content-type') ?? 'application/json');
@@ -121,7 +124,7 @@ export function createApiProxy(options: ApiProxyOptions) {
       const timeout = error instanceof Error && error.name === 'AbortError';
       console.error(`[api-proxy:${options.label}] upstream unreachable`, {
         method,
-        targetUrl,
+        targetUrl: loggableTarget,
         timeout,
         error: error instanceof Error ? error.message : String(error),
       });

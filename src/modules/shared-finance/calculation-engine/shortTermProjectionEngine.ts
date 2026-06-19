@@ -258,7 +258,9 @@ function buildInflowContext(inputs: CanonicalProjectionInputs): InflowContext {
     else rolInflowsByYm.set(ym, [inflow]);
   }
   // TODO(rol-diag): instrumentación temporal — quitar tras confirmar mapeo ROL.
-  if (typeof console !== 'undefined') {
+  // Gateada a DEV: corre en el hot path del worker de proyección (cada run),
+  // así que en producción no debe emitir ruido por-cómputo.
+  if (import.meta.env.DEV && typeof console !== 'undefined') {
     const dates = rol.inflows.map((i) => i.date).sort();
     const gross = rol.inflows.reduce((s, i) => s + i.grossAmount, 0);
     // eslint-disable-next-line no-console
