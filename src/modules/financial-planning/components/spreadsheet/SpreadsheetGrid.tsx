@@ -19,6 +19,7 @@ import {
 } from './gridGeometry';
 import { bucketVisual } from './bucketVisuals';
 import {
+  INTERNAL_PAGADORA_BUCKET,
   OUTFLOW_BUCKET_ORDER,
   UNIDENTIFIED_BANK_OUTFLOW_BUCKET,
 } from '../../services/planningRowTaxonomy';
@@ -912,6 +913,10 @@ function displayBucketLabelForRow(row: PlanningRow, type: FinancialMovementType)
   const fallback = type === 'INFLOW' ? 'Otros ingresos' : UNIDENTIFIED_BANK_OUTFLOW_BUCKET;
   const bucketLabel = row.bucketLabel || fallback;
   if (type !== 'OUTFLOW' || row.category !== 'AP_PAYMENT') return bucketLabel;
+  // Los CARGOs de cuentas pagadoras propias sin proveedor cruzado caen en este
+  // bucket interno; su `subcategory` es el subRole de la cuenta ("proveedores"),
+  // no una categoría de proveedor — no le cuelga sufijo para que agrupen juntos.
+  if (bucketLabel === INTERNAL_PAGADORA_BUCKET) return bucketLabel;
   const category = supplierCategoryGroupLabel(row.providerCategoryLabel ?? row.subgroupLabel);
   return category ? `${bucketLabel} · ${category}` : bucketLabel;
 }

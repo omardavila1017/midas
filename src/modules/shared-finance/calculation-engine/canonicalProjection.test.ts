@@ -182,6 +182,54 @@ describe('canonicalProjection IVA metadata', () => {
     expect(movement?.providerCategory).toBe('CHASIS');
   });
 
+  it('excludes intercompany CXP (filial classification or group company name)', () => {
+    const canonical = buildCanonicalProjection({
+      companyCode: 'all',
+      bankStatements: [],
+      clients: [],
+      providers: [],
+      cxpRecords: [
+        // Empresa interna detectada por clasificación JDE "Filiales".
+        cxpRecord({
+          noProveedor: 'INT-1',
+          nombre: 'SERVICIOS DEL GRUPO',
+          noFactura: 'F-FILIAL',
+          clasificacionProveedor: 'Filiales',
+          importePendientePesos: 500_000,
+          fechaVence: '2026-05-17',
+        }),
+        // Empresa interna detectada por nombre (razón social del grupo).
+        cxpRecord({
+          noProveedor: 'INT-2',
+          nombre: 'MULTICARGA SA DE CV',
+          noFactura: 'F-MULTI',
+          importePendientePesos: 158_300,
+          fechaVence: '2026-05-17',
+        }),
+        // Proveedor externo de control: SÍ se proyecta.
+        cxpRecord({
+          noProveedor: 'EXT-1',
+          nombre: 'PROVEEDOR EXTERNO SA',
+          noFactura: 'F-EXT',
+          clasificacionProveedor: 'REFACCIONARIO',
+          importePendientePesos: 90_000,
+          fechaVence: '2026-05-17',
+        }),
+      ],
+      assumptions,
+      budget: budget({ expenseMay: 0, expenseConcept: null }),
+      startingBalance: 10_000,
+      asOfDate: '2026-04-22',
+    });
+
+    const cxpIds = canonical.movements
+      .filter((item) => item.id.startsWith('cxp:'))
+      .map((item) => item.sourceObjectId);
+    expect(cxpIds).toContain('F-EXT');
+    expect(cxpIds).not.toContain('F-FILIAL');
+    expect(cxpIds).not.toContain('F-MULTI');
+  });
+
   // Branch no-long-term-projection: recurring-provider:/recurring-operating: removed.
   it.skip('adds future AP_PAYMENT rows from recurring bank/provider patterns when there is no future CXP', () => {
     const canonical = buildCanonicalProjection({

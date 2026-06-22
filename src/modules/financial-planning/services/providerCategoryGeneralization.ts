@@ -15,6 +15,7 @@
 import type { Provider } from '../../../domain/types';
 import { normalizeJdeKey, normalizeProviderName } from '../../../domain/providerIdentity';
 import { isPersonName } from '../../../domain/personNameHeuristic';
+import { isInternalCounterparty, isInternalProviderClassification } from '../../../domain/netCashFlowEngine';
 
 interface CategoryIndex {
   byJde: Map<string, string>;   // normalized JDE key → categoria cruda
@@ -133,6 +134,17 @@ const MACRO_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
 
 export const UNCATEGORIZED_PROVIDER_BUCKET = 'Proveedores sin categoría';
 
+/**
+ * Bucket para pagos cuya contraparte es una EMPRESA INTERNA del grupo (filial /
+ * intercompañía): pagos a una razón social del propio grupo o clasificados
+ * "Filiales" en JDE. Económicamente son traspasos intercompañía, no gasto con un
+ * tercero. En la proyección (CXP/CXC) se excluyen aguas arriba; aquí sólo se
+ * RE-ETIQUETAN los históricos bancarios ya cruzados (no se pueden netear sin
+ * romper el cuadre Planeación↔banco) para sacarlos de "Proveedores sin
+ * categoría" hacia un bucket interno explícito.
+ */
+export const INTERNAL_GROUP_BUCKET = 'Empresas del grupo';
+
 /** Quita acentos/diacríticos para que los patrones matcheen categorías crudas
  *  escritas con tilde ("NEUMÁTICOS", "PERIÓDICO") — antes `/neumat/` fallaba
  *  contra "NEUMÁT" y el proveedor caía sin bucket. */
@@ -175,6 +187,17 @@ export function macroBucketForSupplier(opts: {
   // diga otra cosa (caso bidireccional cliente+proveedor del mismo grupo).
   if (opts.counterpartyName && /\bbusbud\b/i.test(opts.counterpartyName)) {
     return 'Federal';
+  }
+  // Empresa interna del grupo (filial / intercompañía): un pago contra una
+  // razón social del grupo (MULTICARGA, TRANSPORTES TAMAULIPAS, …) o clasificado
+  // "Filiales" en JDE es un traspaso intercompañía, no gasto con un tercero. Se
+  // re-etiqueta a un bucket interno explícito en vez de "Proveedores sin
+  // categoría". Sólo presentación — no toca monto/categoría (cuadre intacto).
+  if (
+    isInternalProviderClassification(opts.providerCategory)
+    || isInternalCounterparty(undefined, opts.counterpartyName)
+  ) {
+    return INTERNAL_GROUP_BUCKET;
   }
   // Dos fuentes de categoría cruda, en orden: la del movimiento (viene del
   // API — clasificacionProveedor de CXP/pagoProveedor) y el catálogo derivado.

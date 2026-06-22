@@ -20,7 +20,7 @@ import {
   resolveCobranzaRuleDate,
   type CollectionCalendarClientMatch,
 } from '../../../domain/collectionCalendarEngine';
-import { isInternalCounterparty } from '../../../domain/netCashFlowEngine';
+import { isInternalCounterparty, isInternalProviderClassification } from '../../../domain/netCashFlowEngine';
 import { getConcursoProviderIds, isConcursoMercantil, normalizeProviderId } from '../../../domain/concursoMercantil';
 import type { Client, Provider } from '../../../domain/types';
 import type { CobranzaRecord, ViajeEspecialRecord } from '../../../services/jdeTypes';
@@ -575,8 +575,14 @@ function collectOutflowLines(
     // Factura intercompañía (empresa propia del grupo): traspaso, no egreso
     // real. Espejo del filtro CXC (collectCxcInflowLines) para que un payable
     // entre empresas del grupo no infle los egresos de Planeación. CXPRecord
-    // no trae RFC — se matchea por nombre/código de empresa propia.
-    if (isInternalCounterparty(undefined, record.nombre)) return;
+    // no trae RFC — se matchea por nombre/código de empresa propia y, como
+    // señal independiente, por la clasificación JDE "Filiales"/intercompañía
+    // (el nombre puede llegar truncado o sin razón social).
+    if (
+      isInternalCounterparty(undefined, record.nombre)
+      || isInternalProviderClassification(record.clasificacionProveedor)
+      || isInternalProviderClassification(record.clasifica)
+    ) return;
     // Concurso Mercantil: facturas con `fechaFactura` ≤ 2022-12-31 son deuda
     // congelada que vive en su propio módulo. No se proyecta como egreso —
     // el flujo no se ve afectado por estos saldos.

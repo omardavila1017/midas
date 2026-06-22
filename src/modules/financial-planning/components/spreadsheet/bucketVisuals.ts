@@ -60,6 +60,7 @@ const OUTFLOW_VISUALS: Record<string, BucketVisual> = {
   'Personal y nómina': { Icon: Users, color: '#7C3AED' },
   Servicios: { Icon: Wrench, color: '#0891B2' },
   'Int. CM': { Icon: Scale, color: '#E11D48' },
+  'Empresas del grupo': { Icon: Building2, color: 'var(--gray-400)' },
   'Proveedores sin categoría': { Icon: Package, color: 'var(--gray-400)' },
   Impuestos: { Icon: Receipt, color: 'var(--danger)' },
   Nómina: { Icon: Users, color: '#7C3AED' },
@@ -67,6 +68,7 @@ const OUTFLOW_VISUALS: Record<string, BucketVisual> = {
   CAPEX: { Icon: HardHat, color: '#2563EB' },
   OPEX: { Icon: Receipt, color: '#475569' },
   'Egresos bancarios sin identificar': { Icon: HelpCircle, color: 'var(--gray-400)' },
+  'Traspasos internos (cuentas pagadoras)': { Icon: ArrowLeftRight, color: 'var(--gray-400)' },
   'Traspasos internos (neto)': { Icon: ArrowLeftRight, color: 'var(--gray-400)' },
   Manual: { Icon: Pencil, color: 'var(--primary)' },
 };

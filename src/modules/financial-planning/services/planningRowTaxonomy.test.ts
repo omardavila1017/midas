@@ -261,6 +261,42 @@ describe('planning row taxonomy', () => {
     expect(inflowRow?.group).toBe('Ingresos · Federal');
     expect(inflowRow?.bucketLabel).toBe('Federal');
   });
+
+  it('separa cuentas/empresas internas de "Proveedores sin categoría"', () => {
+    const rows = buildPlanningRows({
+      movements: [
+        // CARGO de una pagadora propia promovido a AP por el rol de la cuenta,
+        // sin proveedor cruzado (counterpartyType BANK) → traspaso interno.
+        movement({
+          id: 'bank:pagadora-unidentified',
+          sourceSystem: 'BANK',
+          counterpartyName: 'Sin identificar · BANAMEX 70141027881',
+          counterpartyType: 'BANK',
+          subcategory: 'proveedores',
+          projectedAmount: 35_300_000,
+        }),
+        // Pago cruzado a una empresa interna (MULTICARGA, clasificación Filiales).
+        movement({
+          id: 'bank:multicarga',
+          sourceSystem: 'BANK',
+          counterpartyName: 'MULTICARGA SA DE CV',
+          counterpartyType: 'SUPPLIER',
+          providerCategory: 'Filiales',
+          subcategory: 'Filiales',
+          projectedAmount: 158_300,
+        }),
+      ],
+      customRows: [],
+      overrides: [],
+    });
+
+    expect(rows.find((r) => r.label === 'Sin identificar · BANAMEX 70141027881')?.bucketLabel)
+      .toBe('Traspasos internos (cuentas pagadoras)');
+    expect(rows.find((r) => r.label === 'MULTICARGA SA DE CV')?.bucketLabel)
+      .toBe('Empresas del grupo');
+    // Ninguno cae en "Proveedores sin categoría".
+    expect(rows.map((r) => r.bucketLabel)).not.toContain('Proveedores sin categoría');
+  });
 });
 
 function movement(patch: Partial<FinancialMovement>): FinancialMovement {

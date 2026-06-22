@@ -55,7 +55,7 @@ import { buildProviderIndex } from '../domain/providerIdentity';
 import type { Provider } from '../domain/types';
 import type { PaymentMatch, CxpMatchTier, CargoMatchTier } from '../domain/paymentReconciliationEngine';
 import type { CXPRecord } from '../domain/persistence';
-import { isInternalCounterparty } from '../domain/netCashFlowEngine';
+import { isInternalCounterparty, isInternalProviderClassification } from '../domain/netCashFlowEngine';
 import {
   PAGO_STATUS_LABEL,
   buildPagadoPorMes,
@@ -188,6 +188,12 @@ function isInternalPaymentRecord(
 ): boolean {
   if (engineInternalKeys && engineInternalKeys.has(pagoRecordKey(r))) return true;
   if (isInternalCounterparty(r.rfcProveedor, r.nombreProveedor)) return true;
+  // Clasificación JDE "Filiales"/intercompañía: empresa interna del grupo aunque
+  // el nombre/RFC no la delaten (misma señal que usa la proyección de CXP).
+  if (
+    isInternalProviderClassification(r.clasificacionProveedor)
+    || isInternalProviderClassification(r.clasificacionProveedorFinanciera)
+  ) return true;
   if (r.comentarioPago && INTERNAL_COMMENT_PATTERN.test(r.comentarioPago)) return true;
   return false;
 }

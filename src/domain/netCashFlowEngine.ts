@@ -130,7 +130,12 @@ const INTERNAL_BENEFICIARIES: readonly string[] = [
   'SERVICIO INDUSTRIAL POTOSIN',   // SERVICIO INDUSTRIAL POTOSINO
   'TRANSPORTES INDUSTRIALES CHIH', // TRANSPORTES INDUSTRIALES CHIHUAHUENSES
   'TURIMEX DEL NORTE',
-  'MULTICARGA SA',                 // MULTICARGA SA DE CV
+  'MULTICARGA',                    // MULTICARGA SA DE CV — fragmento distintivo;
+                                   // el beneficiario bancario truncado a veces
+                                   // omite el "SA" ("BENEF MULTICARGA"), y el
+                                   // nombre del proveedor en JDE llega como
+                                   // "MULTICARGA" a secas. "MULTISERVICIOS" no
+                                   // colisiona (no contiene "MULTICARGA").
   'SERVICIOS T DE N',              // SERVICIOS T DE N SA DE CV
   'AUTOTRANSPORTES ADVENTUR',
   'OPERADORA DE VENTAS GRUPO',     // Operadora de Ventas Grupo Senda
@@ -436,6 +441,30 @@ export function isInternalCounterparty(
   if (INTERNAL_BENEFICIARY_PATTERN && INTERNAL_BENEFICIARY_PATTERN.test(n)) return true;
   if (INTERNAL_COMPANY_CODE_PATTERN && INTERNAL_COMPANY_CODE_PATTERN.test(n)) return true;
   return false;
+}
+
+/**
+ * Clasificaciones JDE (`clasificacionProveedor` / `clasificacionProveedorFinanciera`
+ * de CXP/PagoProveedor) que marcan que la contraparte es una EMPRESA INTERNA del
+ * grupo (filial / intercompañía). JDE clasifica a las propias razones sociales
+ * del grupo como "Filiales" en el maestro de proveedores, así que un pago contra
+ * una de ellas es un traspaso intercompañía — no un egreso real con un tercero.
+ *
+ * Señal independiente del nombre/RFC (`isInternalCounterparty`), que puede venir
+ * truncado o ausente: el cruce a PagoProveedor expone la clasificación aunque la
+ * leyenda bancaria sea opaca. Se usa JUNTO con `isInternalCounterparty`, nunca
+ * en su lugar. Mantener acotado a clasificaciones inequívocamente intra-grupo —
+ * NO agregar categorías ambiguas que también usen proveedores externos.
+ */
+const INTERNAL_CLASSIFICATION_PATTERN =
+  /\bfilial(?:es)?\b|inter\s*comp|inter\s*c[ií]as?\b|intracompa|intra\s*grupo/i;
+
+export function isInternalProviderClassification(
+  classification: string | null | undefined,
+): boolean {
+  const c = (classification ?? '').trim();
+  if (!c) return false;
+  return INTERNAL_CLASSIFICATION_PATTERN.test(c);
 }
 
 // ─────────────────────────────────────────────────────────────────────────

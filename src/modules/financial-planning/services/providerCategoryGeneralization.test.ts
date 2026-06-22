@@ -4,6 +4,7 @@ import {
   macroBucketForSupplier,
   setProviderCatalogForCategoryLookup,
   _resetProviderCatalogForCategoryLookup,
+  INTERNAL_GROUP_BUCKET,
   UNCATEGORIZED_PROVIDER_BUCKET,
   PERSONAL_NOMINA_BUCKET,
 } from './providerCategoryGeneralization';
@@ -104,5 +105,20 @@ describe('macroBucketForSupplier — fallback al catálogo', () => {
       providerCategory: 'REFACCIONARIO',
     });
     expect(bucket).toBe('Flota');
+  });
+
+  it('re-buckets internal group companies (Filiales / razón social del grupo) out of "sin categoría"', () => {
+    // Clasificación JDE "Filiales" (intercompañía).
+    expect(
+      macroBucketForSupplier({ counterpartyName: 'MULTICARGA', providerCategory: 'Filiales' }),
+    ).toBe(INTERNAL_GROUP_BUCKET);
+    // Razón social del grupo aunque la categoría no diga nada.
+    expect(
+      macroBucketForSupplier({ counterpartyName: 'TRANSPORTES TAMAULIPAS SA DE CV' }),
+    ).toBe(INTERNAL_GROUP_BUCKET);
+    // Un proveedor externo real NO se re-etiqueta.
+    expect(
+      macroBucketForSupplier({ counterpartyName: 'PROVEEDOR EXTERNO SA', providerCategory: 'REFACCIONARIO' }),
+    ).toBe('Flota');
   });
 });

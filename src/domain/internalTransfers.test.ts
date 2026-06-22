@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   isInternalTransfer,
+  isInternalCounterparty,
+  isInternalProviderClassification,
   classifyMovement,
   buildOwnAccountDetector,
   buildOwnAccountsIndex,
@@ -471,6 +473,32 @@ describe('INTERNAL_BENEFICIARIES — razones sociales del grupo (catálogo de cu
   it('NO atrapa proveedores externos con nombres parecidos', () => {
     expect(classifyMovement(mov({ concepto: 'PAGO SERVICIOS INDUSTRIALES DEL BAJIO SA', referencia: '' })).kind).toBe('real');
     expect(classifyMovement(mov({ concepto: 'MULTISERVICIOS SA DE CV', referencia: '' })).kind).toBe('real');
+  });
+
+  it('detecta MULTICARGA aunque el banco omita el "SA" al truncar', () => {
+    expect(classifyMovement(mov({ concepto: 'BCO 002 BENEF MULTICARGA', referencia: '' })).kind).toBe('internal');
+    // El nombre del proveedor JDE llega como "MULTICARGA" a secas.
+    expect(isInternalCounterparty(undefined, 'MULTICARGA')).toBe(true);
+    // "MULTISERVICIOS" sigue sin colisionar con el fragmento "MULTICARGA".
+    expect(isInternalCounterparty(undefined, 'MULTISERVICIOS DEL NORTE')).toBe(false);
+  });
+});
+
+describe('isInternalProviderClassification — clasificación JDE intra-grupo', () => {
+  it('marca "Filiales"/intercompañía como interno', () => {
+    expect(isInternalProviderClassification('Filiales')).toBe(true);
+    expect(isInternalProviderClassification('FILIAL')).toBe(true);
+    expect(isInternalProviderClassification('Intercompañía')).toBe(true);
+    expect(isInternalProviderClassification('Inter Cia')).toBe(true);
+    expect(isInternalProviderClassification('INTERCIAS')).toBe(true);
+  });
+
+  it('NO marca clasificaciones de proveedores externos', () => {
+    expect(isInternalProviderClassification('REFACCIONARIO')).toBe(false);
+    expect(isInternalProviderClassification('COMBUSTIBLE')).toBe(false);
+    expect(isInternalProviderClassification('Servicios')).toBe(false);
+    expect(isInternalProviderClassification(undefined)).toBe(false);
+    expect(isInternalProviderClassification('')).toBe(false);
   });
 });
 

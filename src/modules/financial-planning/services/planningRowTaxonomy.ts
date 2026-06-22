@@ -9,7 +9,11 @@ import type {
   PlanningRow,
 } from '../../shared-finance/types';
 import { slug } from './customRowsStorage';
-import { macroBucketForSupplier, UNCATEGORIZED_PROVIDER_BUCKET } from './providerCategoryGeneralization';
+import {
+  INTERNAL_GROUP_BUCKET,
+  macroBucketForSupplier,
+  UNCATEGORIZED_PROVIDER_BUCKET,
+} from './providerCategoryGeneralization';
 
 function providerLookupKey(value: string | undefined | null): string {
   if (!value) return '';
@@ -38,6 +42,17 @@ function resolveProviderScore(
 
 export const UNIDENTIFIED_BANK_OUTFLOW_BUCKET = 'Egresos bancarios sin identificar';
 export const INTERNAL_RECON_BUCKET = 'Traspasos internos (neto)';
+/**
+ * CARGOs desde las cuentas pagadoras PROPIAS del grupo que el rol de la cuenta
+ * promovió a AP_PAYMENT pero que no cruzaron a ningún proveedor: su única
+ * identidad es nuestra propia cuenta de banco origen (`counterpartyType` BANK).
+ * Tesorería los considera movimientos internos, así que se sacan de
+ * "Proveedores sin categoría" hacia este bucket. Siguen contando en el egreso
+ * (el banco muestra la salida real de efectivo) para no romper el cuadre
+ * Planeación↔banco; si se identifica la cuenta destino del grupo, el detector de
+ * traspasos los netea aguas arriba y ya no llegan aquí.
+ */
+export const INTERNAL_PAGADORA_BUCKET = 'Traspasos internos (cuentas pagadoras)';
 
 export const OUTFLOW_BUCKET_ORDER = [
   'Flota',
@@ -46,6 +61,7 @@ export const OUTFLOW_BUCKET_ORDER = [
   'Personal y nómina',
   'Servicios',
   'Int. CM',
+  INTERNAL_GROUP_BUCKET,
   UNCATEGORIZED_PROVIDER_BUCKET,
   'Impuestos',
   'Nómina',
@@ -53,6 +69,7 @@ export const OUTFLOW_BUCKET_ORDER = [
   'CAPEX',
   'OPEX',
   UNIDENTIFIED_BANK_OUTFLOW_BUCKET,
+  INTERNAL_PAGADORA_BUCKET,
   INTERNAL_RECON_BUCKET,
   'Manual',
 ];
@@ -211,6 +228,11 @@ const CATEGORY_BUCKET_LABEL: Record<FinancialMovementCategory, string> = {
 export function bucketForMovement(movement: FinancialMovement): string {
   if (movement.type === 'INFLOW') return inflowBucketFor(movement);
   if (movement.category === 'AP_PAYMENT') {
+    // CARGO de una cuenta pagadora propia promovido a AP por el rol de la cuenta
+    // pero SIN proveedor cruzado: su única identidad es nuestra cuenta de banco
+    // origen (counterpartyType BANK). No es una fila de proveedor — tesorería lo
+    // trata como movimiento interno, así que sale de "Proveedores sin categoría".
+    if (movement.counterpartyType === 'BANK') return INTERNAL_PAGADORA_BUCKET;
     return macroBucketForSupplier({
       counterpartyId: movement.counterpartyId,
       counterpartyName: movement.counterpartyName,
