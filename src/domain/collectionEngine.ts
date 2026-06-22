@@ -43,6 +43,24 @@ function isoYear(isoDate: string): number {
   return Number(isoDate.slice(0, 4));
 }
 
+/** Parse an ISO `YYYY-MM-DD` string to a UTC Date, or null if invalid. */
+function parseInvoiceDate(value: string | undefined | null): Date | null {
+  if (!value) return null;
+  const d = new Date(`${value}T00:00:00Z`);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+export interface ProjectClientMonthOptions {
+  /**
+   * Explicit invoice dates (ISO `YYYY-MM-DD`), one per event in cycle order.
+   * When supplied, event `i` is invoiced on `invoiceDates[i]` instead of the
+   * default (1st of the month + one billing cycle per subsequent event).
+   * Missing/empty/unparseable entries fall back to the computed cadence date,
+   * so a partial list only overrides the events it covers.
+   */
+  invoiceDates?: (string | undefined | null)[];
+}
+
 function lookbackMonths(clients: Client[]): number {
   const maxCreditDays = clients.reduce((max, client) => Math.max(max, client.creditDays), 0);
   return Math.max(1, Math.ceil((maxCreditDays + MAX_SCAN_DAYS) / AVG_DAYS_PER_MONTH));
@@ -61,6 +79,7 @@ export function projectClientMonth(
   invoiceYear: number,
   invoiceMonth: number,
   assumptions: CashFlowAssumptions,
+  options?: ProjectClientMonthOptions,
 ): CollectionEvent[] {
   const events: CollectionEvent[] = [];
   const splits = eventsPerMonth(client.frequency);
@@ -74,8 +93,11 @@ export function projectClientMonth(
   const compliance = client.complianceRate ?? assumptions.globalCompliance;
   const amount = perEvent * compliance;
 
-  // Invoice date: 1st of the month. (TODO: accept per-event invoice dates.)
-  let invoiceDate = new Date(Date.UTC(invoiceYear, invoiceMonth, 1));
+  // Invoice date: 1st of the month, then one billing cycle per subsequent
+  // event — unless the caller supplies explicit per-event invoice dates
+  // (`options.invoiceDates`), in which case those override the cadence default.
+  let cadenceInvoiceDate = new Date(Date.UTC(invoiceYear, invoiceMonth, 1));
+  const explicitInvoiceDates = options?.invoiceDates;
 
   // `paymentDayName` (Nombre_Dia_Pago_CC13, sincronizado del API/ROL) es la
   // autoridad de la regla de día de pago; cae a `paymentDay` estructurado
@@ -83,6 +105,10 @@ export function projectClientMonth(
   const paymentPattern = parseCc13PaymentDay(client.paymentDayName) ?? client.paymentDay;
 
   for (let i = 0; i < splits; i++) {
+    // Per-event override wins; otherwise use the running cadence date.
+    const invoiceDate =
+      parseInvoiceDate(explicitInvoiceDates?.[i]) ?? cadenceInvoiceDate;
+
     // Theoretical cash date = invoice + credit days.
     const theoretical = new Date(invoiceDate.getTime() + client.creditDays * DAY_MS);
 
@@ -104,8 +130,9 @@ export function projectClientMonth(
       isoWeek: isoWeek(real),
     });
 
-    // Next event in the same month → advance one cycle on both dates.
-    invoiceDate = advanceOneCycle(invoiceDate, client.frequency);
+    // Advance the cadence date for the next event regardless of any override,
+    // so a partial override list keeps the remaining events on the normal cycle.
+    cadenceInvoiceDate = advanceOneCycle(cadenceInvoiceDate, client.frequency);
   }
 
   return events;
