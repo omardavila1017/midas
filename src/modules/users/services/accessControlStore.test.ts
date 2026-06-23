@@ -49,7 +49,7 @@ describe('accessControlStore seeding', () => {
     expect(blanca?.role).toBe('user');
     // Permisos hardcodeados en authLocalUsers.json (orden no garantizado).
     expect([...(blanca?.permissions ?? [])].sort()).toEqual(
-      ['clients', 'collections', 'fideicomiso', 'venta'].sort(),
+      ['clients', 'collections', 'fideicomiso', 'netflow', 'venta'].sort(),
     );
   });
 });

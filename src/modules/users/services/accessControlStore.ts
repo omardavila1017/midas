@@ -31,7 +31,8 @@ import { listConfiguredUsers } from '../../../config/userRoles';
 // v5 (2026-06-10): alta de maximiliano.rodriguez@gruposenda.com (admin).
 // v6 (2026-06-16): alta de david.betancourt@gruposenda.com (user, solo taxes) +
 // antonio.palomo@gruposenda.com pasa de admin a user con todos los módulos funcionales.
-export const ACCESS_REGISTRY_KEY = 'midas.users.registry.v6';
+// v7 (2026-06-23): blanca.reyes@gruposenda.com gana acceso a TODO Ingresos (se agrega netflow).
+export const ACCESS_REGISTRY_KEY = 'midas.users.registry.v7';
 const ACCESS_CHANGED_EVENT = 'midas:access-changed';
 
 /** Rol del registro: nunca `none` (un usuario registrado es admin o user). */
