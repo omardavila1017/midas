@@ -467,3 +467,54 @@ export async function clearHeavyStore(): Promise<void> {
     }
   });
 }
+
+/**
+ * Borra SÓLO las keys indicadas (meta + chunks), dejando el resto del heavy
+ * store intacto. Para el "clear on entry": limpia las colecciones JDE/TRESS +
+ * los estados de cuenta JDE sin tocar `bankSupplementalStatements` (subidas
+ * manuales del usuario — no se pueden re-bajar de JDE). Best-effort: cada op
+ * resuelve ante error/abort y nunca tira.
+ */
+export async function clearHeavyKeys(keys: readonly string[]): Promise<void> {
+  const db = await openDb();
+  if (!db) return;
+  for (const key of keys) {
+    // Leer la meta para saber si está chunked (y cuántos chunks borrar).
+    const meta = await new Promise<IdbEntry | ChunkedEntry | undefined>((resolve) => {
+      try {
+        const tx = db.transaction(STORE_NAME, 'readonly');
+        const req = tx.objectStore(STORE_NAME).get(key);
+        req.onsuccess = () => resolve(req.result as IdbEntry | ChunkedEntry | undefined);
+        req.onerror = () => resolve(undefined);
+        tx.onabort = () => resolve(undefined);
+      } catch {
+        resolve(undefined);
+      }
+    });
+    await new Promise<void>((resolve) => {
+      try {
+        const tx = db.transaction(STORE_NAME, 'readwrite');
+        tx.objectStore(STORE_NAME).delete(key);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => resolve();
+        tx.onabort = () => resolve();
+      } catch {
+        resolve();
+      }
+    });
+    if (isChunkedEntry(meta)) {
+      await new Promise<void>((resolve) => {
+        try {
+          const tx = db.transaction(CHUNK_STORE_NAME, 'readwrite');
+          const store = tx.objectStore(CHUNK_STORE_NAME);
+          for (let i = 0; i < meta.chunkCount; i++) store.delete(chunkKey(key, i));
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => resolve();
+          tx.onabort = () => resolve();
+        } catch {
+          resolve();
+        }
+      });
+    }
+  }
+}

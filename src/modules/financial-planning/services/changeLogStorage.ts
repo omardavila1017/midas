@@ -1,6 +1,7 @@
 import type { ScenarioChangeKind, ScenarioChangeLogEntry } from '../../shared-finance/types';
+import { pushPlanningDoc } from './planningRemoteSync';
+import { PLANNING_CHANGE_LOG_KEY as STORAGE_KEY } from './planningStorageKeys';
 
-const STORAGE_KEY = 'midas.financialPlanning.changeLog.v1';
 const MAX_ENTRIES_PER_SCENARIO = 500;
 
 const VALID_KINDS: ScenarioChangeKind[] = [
@@ -30,16 +31,18 @@ export function loadChangeLog(fallback: ScenarioChangeLogEntry[] = []): Scenario
 }
 
 export function saveChangeLog(entries: ScenarioChangeLogEntry[]): void {
+  const trimmed = capPerScenario(entries, MAX_ENTRIES_PER_SCENARIO);
   try {
-    if (entries.length === 0) {
+    if (trimmed.length === 0) {
       localStorage.removeItem(STORAGE_KEY);
-      return;
+    } else {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(trimmed));
     }
-    const trimmed = capPerScenario(entries, MAX_ENTRIES_PER_SCENARIO);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(trimmed));
   } catch {
     /* ignore quota errors */
   }
+  // Push the trimmed list so the shared store matches the local mirror.
+  pushPlanningDoc('changeLog', trimmed);
 }
 
 export function appendChangeLogEntry(

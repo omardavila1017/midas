@@ -119,6 +119,11 @@ export default defineConfig(({ mode }) => {
   // cuando se publique el endpoint productivo.
   const viajesEspUp = parseUpstream(env.VITE_VIAJES_ESPECIALES_UPSTREAM || env.VIAJES_ESPECIALES_UPSTREAM || 'http://srv-desarrollo:95/ViajesEspeciales')
   const viajesEspToken = env.VIAJES_ESPECIALES_TOKEN || jdeToken || env.VITE_VIAJES_ESPECIALES_TOKEN
+  // Shared server-side store (Omar Dávila's deployment). Sin STORE_UPSTREAM no
+  // se registra el proxy `/api/store` (target vacío rompería la config de Vite);
+  // en ese caso remoteStore queda OFF y la app corre solo con localStorage/IDB.
+  const storeUp = parseUpstream(env.VITE_STORE_UPSTREAM || env.STORE_UPSTREAM || '')
+  const storeToken = env.STORE_TOKEN || jdeToken || env.VITE_STORE_TOKEN
 
   // Bundle analyzer only when ANALYZE=1. Writes dist/stats.html with a
   // treemap of chunk content + duplicate-module detection.
@@ -187,6 +192,17 @@ export default defineConfig(({ mode }) => {
           rewrite: (p) => p.replace(/^\/api\/viajes-especiales/, viajesEspUp.path),
           configure: (proxy) => configureProxy(proxy, { token: viajesEspToken }),
         },
+        ...(storeUp.origin
+          ? {
+              '/api/store': {
+                target: storeUp.origin,
+                changeOrigin: true,
+                secure: false,
+                rewrite: (p: string) => p.replace(/^\/api\/store/, storeUp.path),
+                configure: (proxy: any) => configureProxy(proxy, { token: storeToken }),
+              },
+            }
+          : {}),
       },
     },
     build: {

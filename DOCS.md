@@ -28,6 +28,7 @@ Updated 2026-06-05 for delivery handoff.
 | `AUDITORIA-INTEGRACION-MODULOS.md` | Module ↔ module / API integration map, persistence inventory, risk map, roadmap (snapshot 2026-05-19). | Devs / architects |
 | `AUDITORIA-CUADRE-PLANEACION.md` | Why the Base cash flow didn't square across modules: internal-transfer classification fix (2026-06-10), by-design divergences, the definitive missing-information list, how to verify the cuadre with real data. | Devs / treasury |
 | `REPORTES-TRESS-COMPRAS-MAPEO.md` | Field-mapping spec for the TRESS (nómina) and Compras APIs, including fields still requested from the API. | Devs / integration |
+| `docs/MIGRACION-ESTADO-SERVIDOR.md` | Migración de estado a servidor (junta 2026-06-23): clear-on-entry de caches JDE/TRESS + modelo de datos y contrato de APIs (insert/consult/update) para escenarios/planeación que construye el equipo de backend. | Backend / integración |
 | `PURPOSE.md` | Product purpose statement and rationale. | Product / leadership |
 | `loop.md` | Checklist de cierre de sesión (4 fases: verificar/enviar → recordar → revisar/aplicar → reportar), adaptado del skill wrap-up con los baselines y convenciones de Midas. | Devs / agents |
 | `PRODUCT.md` / `.impeccable.md` | Design-system context (Senda DS) read by the visual-tooling skills. | Design tooling |

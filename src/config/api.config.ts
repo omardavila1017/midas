@@ -23,6 +23,12 @@ const DEFAULT_VIAJES_ESPECIALES_BASE_URL = '/api/viajes-especiales';
 // el backend de auth NO necesariamente vive bajo `/api` (puede ser un SSO u
 // otro host). Default `/api/auth` para dev con proxy/backend local.
 const DEFAULT_AUTH_BASE_URL = '/api/auth';
+// Shared server-side store (Omar Dávila's deployment). The browser calls
+// `/api/store/*`; the same-origin proxy (api/store/[...path].ts) injects the
+// token and forwards to STORE_UPSTREAM. `enabled` is an explicit kill switch:
+// OFF by default → Midas behaves exactly as today (pure localStorage + IDB).
+// Omar's deployment sets VITE_STORE_ENABLED=true to turn the shared store on.
+const DEFAULT_STORE_BASE_URL = '/api/store';
 
 export const apiConfig = {
   jde: {
@@ -64,6 +70,10 @@ export const apiConfig = {
   openai: {
     model: import.meta.env.VITE_OPENAI_MODEL ?? 'gpt-4o-mini',
     baseUrl: import.meta.env.VITE_OPENAI_BASE_URL || DEFAULT_OPENAI_BASE_URL,
+  },
+  store: {
+    baseUrl: import.meta.env.VITE_STORE_BASE_URL || DEFAULT_STORE_BASE_URL,
+    enabled: import.meta.env.VITE_STORE_ENABLED === 'true',
   },
 } as const;
 

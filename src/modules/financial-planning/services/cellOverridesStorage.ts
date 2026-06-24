@@ -1,6 +1,6 @@
 import type { CellOverride, CellOverrideMode, FinancialMovementType, ProjectionGranularity } from '../../shared-finance/types';
-
-const STORAGE_KEY = 'midas.financialPlanning.cellOverrides.v1';
+import { pushPlanningDoc } from './planningRemoteSync';
+import { PLANNING_CELL_OVERRIDES_KEY as STORAGE_KEY } from './planningStorageKeys';
 
 export function loadCellOverrides(fallback: CellOverride[] = []): CellOverride[] {
   try {
@@ -21,12 +21,13 @@ export function saveCellOverrides(overrides: CellOverride[]): void {
   try {
     if (overrides.length === 0) {
       localStorage.removeItem(STORAGE_KEY);
-      return;
+    } else {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(overrides));
     }
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(overrides));
   } catch {
     /* ignore quota errors */
   }
+  pushPlanningDoc('cellOverrides', overrides);
 }
 
 export function normalizeCellOverride(value: unknown, index: number): CellOverride | null {

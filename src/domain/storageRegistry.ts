@@ -15,6 +15,9 @@
 // Si agregas una key nueva: regístrala aquí en el mismo PR.
 // ─────────────────────────────────────────────────────────────────────────
 
+import { BANK_JDE_IDB_KEY, HEAVY_KEYS, clearHeavyKeys } from '../services/heavyStoreIDB';
+import { clearAllDailyCache } from '../services/dailyApiCache';
+
 export type StorageScope = 'localStorage' | 'indexedDB';
 
 export interface StorageEntry {
@@ -106,6 +109,7 @@ export const MIDAS_STORAGE_REGISTRY: StorageEntry[] = [
   { key: 'midas.runtime.lastTrail.v1', scope: 'localStorage', owner: 'services/runtimeGuardian.ts', description: 'Trail post-mortem: últimas navegaciones + muestras de heap + flag cleanExit. Sobrevive al OOM-kill para diagnosticar "Aw Snap".' },
 
   // ── Boot / storage health ───────────────────────────────────────────────
+  { key: 'midas.cache.loadedAt', scope: 'localStorage', owner: 'AppCore.tsx', description: 'Timestamp ISO de la última limpieza+recarga de caches JDE/TRESS (clear-on-entry). Lo lee el boot para decidir si re-limpiar según la ventana VITE_CACHE_MAX_AGE_MIN (default 0 = cada ingreso).' },
   { key: 'midas.boot.inflight', scope: 'localStorage', owner: 'services/storageHealthGuard.ts', description: 'Flag de boot en curso: se setea al arrancar y se limpia al terminar; si sobrevive a un boot previo señala crash durante el arranque.' },
   { key: 'midas.boot.purgedReason', scope: 'localStorage', owner: 'services/storageHealthGuard.ts', description: 'Motivo de la última purga selectiva del guard de salud de storage (diagnóstico).' },
   { key: 'midas.boot.purgedAt', scope: 'localStorage', owner: 'services/storageHealthGuard.ts', description: 'Timestamp de la última purga del guard de salud de storage.' },
@@ -178,5 +182,42 @@ export function clearAllMidasStorage(): void {
         /* ignore */
       }
     }
+  }
+}
+
+/** localStorage key con el timestamp de la última limpieza+recarga de caches. */
+export const CACHE_LOADED_AT_KEY = 'midas.cache.loadedAt';
+
+/**
+ * Borrado SELECTIVO de los caches de datos JDE/TRESS para el "clear on entry"
+ * (decisión 2026-06-23): en cada ingreso a la app se limpian los caches y se
+ * recarga TODO fresco del servidor, matando la deriva por-navegador (días
+ * envenenados, OCs/movimientos cuyo estado cambió tras cachearse).
+ *
+ * Borra: las colecciones pesadas JDE/TRESS (`HEAVY_KEYS`), los estados de
+ * cuenta JDE (`bankJdeStatements`), el cache diario/mensual y el cache de
+ * proyección (computado, re-derivable).
+ *
+ * PRESERVA (a propósito): los estados de cuenta subidos manualmente
+ * (`bankSupplementalStatements`) y todo el trabajo capturado por el usuario
+ * (planeación, impuestos, KPIs, presupuesto, usuarios, confirmaciones, auth) —
+ * que vive en otras keys de localStorage / el light store, NO aquí. El trabajo
+ * del usuario migra a BD server-side en una fase posterior; hasta entonces NO
+ * se debe borrar (se perdería). Las dos clears pesadas corren en paralelo para
+ * acotar el peor caso al timeout de apertura de IDB. Best-effort: nunca tira.
+ */
+export async function clearCacheStorageOnEntry(): Promise<void> {
+  await Promise.all([
+    clearHeavyKeys([...HEAVY_KEYS, BANK_JDE_IDB_KEY]).catch(() => undefined),
+    clearAllDailyCache().catch(() => undefined),
+  ]);
+  // Cache computado de proyección: re-derivable, no crítico para la frescura
+  // del dato JDE → borrado fire-and-forget (no bloquea el boot).
+  try {
+    if (typeof indexedDB !== 'undefined') {
+      indexedDB.deleteDatabase('midas-financial-projection-cache');
+    }
+  } catch {
+    /* ignore */
   }
 }

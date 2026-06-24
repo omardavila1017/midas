@@ -1,6 +1,6 @@
 import type { FinancialMovementCategory, FinancialMovementType, PlanningCustomRow } from '../../shared-finance/types';
-
-const STORAGE_KEY = 'midas.financialPlanning.customRows.v1';
+import { pushPlanningDoc } from './planningRemoteSync';
+import { PLANNING_CUSTOM_ROWS_KEY as STORAGE_KEY } from './planningStorageKeys';
 
 const VALID_CATEGORIES: FinancialMovementCategory[] = [
   'AR_COLLECTION',
@@ -33,12 +33,13 @@ export function saveCustomRows(rows: PlanningCustomRow[]): void {
   try {
     if (rows.length === 0) {
       localStorage.removeItem(STORAGE_KEY);
-      return;
+    } else {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(rows));
     }
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(rows));
   } catch {
     /* ignore quota errors */
   }
+  pushPlanningDoc('customRows', rows);
 }
 
 export function normalizeCustomRow(value: unknown, index: number): PlanningCustomRow | null {

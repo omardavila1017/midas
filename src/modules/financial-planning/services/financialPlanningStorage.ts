@@ -1,7 +1,6 @@
 import type { FinancialAdjustment, FinancialScenario } from '../../shared-finance/types';
-
-const SCENARIOS_KEY = 'midas.financialPlanning.scenarios.v1';
-const ADJUSTMENTS_KEY = 'midas.financialPlanning.adjustments.v1';
+import { pushPlanningDoc } from './planningRemoteSync';
+import { PLANNING_ADJUSTMENTS_KEY as ADJUSTMENTS_KEY, PLANNING_SCENARIOS_KEY as SCENARIOS_KEY } from './planningStorageKeys';
 
 // Legacy: el log de auditoría write-only (`midas.financialPlanning.audit.v1`)
 // se retiró al unificar el historial en el ChangeLogDrawer. Lo purgamos al
@@ -52,6 +51,7 @@ export function listHeaderScenarios(): FinancialScenario[] {
 
 export function savePlanningScenarios(scenarios: FinancialScenario[]): void {
   saveArray(SCENARIOS_KEY, scenarios);
+  pushPlanningDoc('scenarios', scenarios);
 }
 
 export function loadPlanningAdjustments(fallback: FinancialAdjustment[]): FinancialAdjustment[] {
@@ -60,6 +60,7 @@ export function loadPlanningAdjustments(fallback: FinancialAdjustment[]): Financ
 
 export function savePlanningAdjustments(adjustments: FinancialAdjustment[]): void {
   saveArray(ADJUSTMENTS_KEY, adjustments);
+  pushPlanningDoc('adjustments', adjustments);
 }
 
 function loadArray<T>(key: string, fallback: T[], guard: (value: unknown) => value is T): T[] {

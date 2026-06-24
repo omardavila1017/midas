@@ -7,8 +7,8 @@ import type {
   ManualPlanningRecurrence,
 } from '../../shared-finance/types';
 import { calculateConfidenceBand } from '../../shared-finance/calculation-engine/financialProjectionEngine';
-
-const STORAGE_KEY = 'midas.financialPlanning.manualEntries.v1';
+import { pushPlanningDoc } from './planningRemoteSync';
+import { PLANNING_MANUAL_ENTRIES_KEY as STORAGE_KEY } from './planningStorageKeys';
 
 export interface ManualPlanningEntryInput {
   scenarioIds: string[];
@@ -109,12 +109,13 @@ export function saveManualPlanningEntries(entries: ManualPlanningEntry[]): void 
   try {
     if (entries.length === 0) {
       localStorage.removeItem(STORAGE_KEY);
-      return;
+    } else {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
     }
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
   } catch {
     /* localStorage quota errors do not affect the projection engine. */
   }
+  pushPlanningDoc('manualEntries', entries);
 }
 
 export function expandManualPlanningEntriesToMovements(

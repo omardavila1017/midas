@@ -87,6 +87,7 @@ import { loadCellOverrides, saveCellOverrides } from '../services/cellOverridesS
 import { reconcilePlanningAgainstBank } from '../services/cashFlowBankReconciliation';
 import { buildCustomConceptKey, loadCustomRows, saveCustomRows } from '../services/customRowsStorage';
 import { loadChangeLog, saveChangeLog } from '../services/changeLogStorage';
+import { hydratePlanningFromServer } from '../services/planningRemoteSync';
 import { debouncedPersist } from '../services/debouncedPersist';
 import {
   describeAddRow,
@@ -554,6 +555,31 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
     return () => {
       window.removeEventListener(TAX_STORE_CHANGED_EVENT, reloadTaxStore);
       window.removeEventListener('storage', handleStorage);
+    };
+  }, []);
+
+  // Shared store: hydrate planning data from the server-side store once on
+  // mount so every browser converges on the same scenarios/propuestas/overrides.
+  // The first paint already rendered from the local mirror (useState above); if
+  // the server holds different data we pull it into localStorage and reload it
+  // into state here. No-op when the store is OFF or unreachable (best-effort).
+  useEffect(() => {
+    let cancelled = false;
+    hydratePlanningFromServer()
+      .then((changed) => {
+        if (cancelled || !changed) return;
+        setStoredScenarios(loadPlanningScenarios([]));
+        setStoredAdjustments(loadPlanningAdjustments([]));
+        setManualEntries(loadManualPlanningEntries([]));
+        setCustomRows(loadCustomRows([]));
+        setCellOverrides(loadCellOverrides([]));
+        setChangeLog(loadChangeLog([]));
+      })
+      .catch(() => {
+        /* best-effort: keep the local mirror */
+      });
+    return () => {
+      cancelled = true;
     };
   }, []);
 

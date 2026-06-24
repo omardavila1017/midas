@@ -3,6 +3,7 @@ import { TabId, CashFlowOverrides } from './types';
 import { todayISO } from './formatters';
 import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './domain/types';
 import { MidasStore, loadLightStore, saveLightStore, CXPRecord, type AuxiliarIvaLoadedCiaMeta } from './domain/persistence';
+import { CACHE_LOADED_AT_KEY, clearCacheStorageOnEntry } from './domain/storageRegistry';
 import { loadHeavyRecords, saveHeavyRecords, type HeavyKey } from './services/heavyStoreIDB';
 import { recomputeClientCreditDaysFromCobranza } from './domain/collectionCalendarEngine';
 import { comprasToPurchaseReceipts } from './domain/comprasToPurchaseReceipts';
@@ -266,6 +267,10 @@ function isPersonName(rawName: string | undefined): boolean {
 
 const STORE_SAVE_DEBOUNCE_MS = 900;
 const BANK_STORAGE_SAVE_DEBOUNCE_MS = 1200;
+// Clear-on-entry guard: garantiza que el borrado+recarga de caches corra a lo
+// más UNA vez por carga de página (no por remount del componente raíz). Un
+// reload del navegador es un nuevo contexto JS → vuelve a false → re-limpia.
+let cacheEntryHandled = false;
 const COBRANZA_AUTO_REFRESH_TTL_MS = 6 * 60 * 60 * 1000;
 const CXP_AUTO_REFRESH_TTL_MS = 6 * 60 * 60 * 1000;
 const COMPRAS_AUTO_REFRESH_TTL_MS = 6 * 60 * 60 * 1000;
@@ -893,6 +898,9 @@ export default function App() {
   // vacío y luego sobreescribirlo. catalogLoaded se setea cuando los CSVs
   // de clients/providers terminan, no cuando loadStore terminó.
   const [storeHydrated, setStoreHydrated] = useState(false);
+  // Clear-on-entry gate: la hidratación del store + el load de caches de banco
+  // esperan a que esto sea true, para no leer un store que está por borrarse.
+  const [cacheCleared, setCacheCleared] = useState(false);
 
   // ── Boot splash state ──
   // All boot APIs (catalog, companies, banks, CXP, cobranza) run in parallel.
@@ -1025,6 +1033,7 @@ export default function App() {
   }, [isBooted]);
 
   useEffect(() => {
+    if (!cacheCleared) return;
     return scheduleIdleTask(() => {
       void loadBankCaches().then((caches) => {
         // PERF: wrap los set-state en startTransition. Los arrays bancarios
@@ -1042,7 +1051,7 @@ export default function App() {
         });
       });
     });
-  }, []);
+  }, [cacheCleared]);
   // Drop globally-excluded accounts (empresa 33 / multicarga) here, not only at
   // the JDE fetch layer: stale IDB/localStorage bank caches hydrated at boot
   // (loadBankCaches), the daily-cache path and manual uploads all feed this
@@ -1618,11 +1627,58 @@ export default function App() {
     },
   ], []);
 
+  // Clear-on-entry (decisión 2026-06-23): en cada ingreso a la app se borran los
+  // caches JDE/TRESS (heavy store + cache diario + cache de proyección + estados
+  // de cuenta JDE) y se recarga TODO fresco del servidor — matando la deriva
+  // por-navegador (días envenenados, OCs/movimientos staleados). El trabajo
+  // capturado por el usuario + las cargas manuales se PRESERVAN. Corre a lo más
+  // una vez por carga de página (`cacheEntryHandled`). La hidratación del store
+  // y el load de caches de banco esperan a `cacheCleared`, así que nada lee un
+  // store que está por borrarse. Cadencia configurable con VITE_CACHE_MAX_AGE_MIN
+  // (default 0 = cada ingreso; >0 = sólo si pasó esa ventana desde la última).
+  useEffect(() => {
+    if (cacheEntryHandled) { setCacheCleared(true); return; }
+    cacheEntryHandled = true;
+    let cancelled = false;
+    const run = async () => {
+      try {
+        const raw = (import.meta.env.VITE_CACHE_MAX_AGE_MIN as string | undefined) ?? '0';
+        const maxAgeMin = Number.parseInt(raw, 10);
+        let fresh = false;
+        if (Number.isFinite(maxAgeMin) && maxAgeMin > 0) {
+          try {
+            const last = localStorage.getItem(CACHE_LOADED_AT_KEY);
+            if (last) fresh = Date.now() - new Date(last).getTime() < maxAgeMin * 60_000;
+          } catch { /* ignore */ }
+        }
+        if (!fresh) {
+          await clearCacheStorageOnEntry();
+          try { localStorage.setItem(CACHE_LOADED_AT_KEY, new Date().toISOString()); } catch { /* ignore */ }
+          // eslint-disable-next-line no-console
+          console.info('[clear-on-entry] caches JDE/TRESS borrados — recargando fresco del servidor');
+        }
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('[clear-on-entry] falló — se continúa con el cache local:', err);
+      }
+    };
+    // Tope duro: aunque las clears tienen sus propios timeouts de apertura de
+    // IDB (resuelven solas), un fallback evita congelar el boot ante lo
+    // imprevisto. Generoso (>timeout interno de IDB ~5s) para no pisar la clear.
+    const fallback = window.setTimeout(() => { if (!cancelled) setCacheCleared(true); }, 10000);
+    void run().finally(() => {
+      window.clearTimeout(fallback);
+      if (!cancelled) setCacheCleared(true);
+    });
+    return () => { cancelled = true; window.clearTimeout(fallback); };
+  }, []);
+
   // Load from persistence on mount. Async desde v12: heavies
   // (cobranza/cxp/compras/pagoproveedor/nómina/payments) viven en IDB porque
   // localStorage tenía cuota ~5MB que se rompía y dejaba el store sin
   // persistir, causando refetch JDE en cada boot. Ver persistence.ts:saveStore.
   useEffect(() => {
+    if (!cacheCleared) return;
     let cancelled = false;
     // CRÍTICO: storeHydrated debe dispararse SIEMPRE, aún si loadStore truena
     // o algún setter falla. Si no, los boot effects (compras/pago/banks/cxp/
@@ -1693,7 +1749,7 @@ export default function App() {
       cancelled = true;
       window.clearTimeout(fallbackTimer);
     };
-  }, []);
+  }, [cacheCleared]);
 
   useEffect(() => {
     requestDatasets(TAB_DATASETS[activeTab] ?? []);
