@@ -123,6 +123,25 @@ export function debouncedPersist<T>(
 }
 
 /**
+ * Cancela timers pendientes y limpia TODO el estado de debounce SIN escribir
+ * los valores pendientes (a diferencia de `flushDebouncedPersist`, que sí los
+ * persiste). Pensado para aislamiento de tests: cada `debouncedPersist` fuera
+ * de ventana programa un `setTimeout` trailing; si un test corre con
+ * `vi.useFakeTimers({ toFake: ['Date'] })` (Date congelado pero `setTimeout`
+ * real), ese timer puede dispararse DURANTE el siguiente test y sobrescribir su
+ * localStorage con un valor obsoleto. Llamar esto en `afterEach` descarta esos
+ * timers y vacía el mapa para que ningún estado cruce la frontera del test.
+ */
+export function resetDebouncedPersist(): void {
+  if (typeof window !== 'undefined') {
+    for (const entry of entries.values()) {
+      if (entry.scheduledId !== null) window.clearTimeout(entry.scheduledId);
+    }
+  }
+  entries.clear();
+}
+
+/**
  * Fuerza la escritura pendiente de un key (si la hay). Útil para tests o
  * para flushes manuales antes de cambios destructivos (logout, resets).
  */

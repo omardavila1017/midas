@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import FinancialPlanningDashboard from './FinancialPlanningDashboard';
+import { resetDebouncedPersist } from '../services/debouncedPersist';
 import type { Budget } from '../../../domain/budget';
 import type { Client, CashFlowAssumptions } from '../../../domain/types';
 import type { BankAccountStatement } from '../../../services/jde';
@@ -8,6 +9,11 @@ import type { BankAccountStatement } from '../../../services/jde';
 const TODAY = '2026-05-01';
 
 beforeEach(() => {
+  // Cancel any trailing-write timer/state left by a prior test. `debouncedPersist`
+  // keeps a module-level map of pending writes; with Date faked but setTimeout
+  // real (below), a stale timer could otherwise fire mid-test and clobber the
+  // seeded localStorage. See resetDebouncedPersist.
+  resetDebouncedPersist();
   localStorage.clear();
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(new Date(`${TODAY}T12:00:00`));
@@ -31,6 +37,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Discard pending debounced writes BEFORE restoring real timers so no leaked
+  // setTimeout fires during the next test.
+  resetDebouncedPersist();
   vi.useRealTimers();
 });
 

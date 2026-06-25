@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { debouncedPersist, flushDebouncedPersist } from './debouncedPersist';
+import { debouncedPersist, flushDebouncedPersist, resetDebouncedPersist } from './debouncedPersist';
 
 describe('debouncedPersist', () => {
   beforeEach(() => {
-    flushDebouncedPersist(); // estado limpio entre tests
+    resetDebouncedPersist(); // estado limpio entre tests (sin escribir pendientes)
     vi.useFakeTimers();
   });
   afterEach(() => {
-    flushDebouncedPersist();
+    resetDebouncedPersist();
     vi.useRealTimers();
   });
 
@@ -50,6 +50,20 @@ describe('debouncedPersist', () => {
     flushDebouncedPersist('test.key4');
     expect(save).toHaveBeenCalledTimes(2);
     expect(save).toHaveBeenLastCalledWith('b');
+  });
+
+  it('resetDebouncedPersist descarta el trailing pendiente SIN escribirlo', () => {
+    const save = vi.fn();
+    debouncedPersist('test.key5', 'a', save); // leading fire
+    debouncedPersist('test.key5', 'b', save); // queda trailing programado
+    expect(save).toHaveBeenCalledTimes(1);
+    resetDebouncedPersist();
+    vi.advanceTimersByTime(300); // el timer cancelado NO debe disparar
+    expect(save).toHaveBeenCalledTimes(1); // 'b' se descartó, no se persistió
+    // Tras el reset, el mismo key vuelve a tratarse como leading-edge.
+    debouncedPersist('test.key5', 'c', save);
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(save).toHaveBeenLastCalledWith('c');
   });
 
   it('keys distintos no se interfieren', () => {
