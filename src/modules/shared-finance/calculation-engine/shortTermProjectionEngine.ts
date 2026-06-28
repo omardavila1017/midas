@@ -290,7 +290,9 @@ function buildInflowContext(inputs: CanonicalProjectionInputs): InflowContext {
     if (arr) arr.push(v);
     else viajesEspUnmatchedByYm.set(ym, [v]);
   }
-  if (typeof console !== 'undefined' && viajesRecords.length > 0) {
+  // Gateada a DEV igual que [rol-diag]: corre en el hot path del worker de
+  // proyección (cada run), así que en producción no debe emitir ruido por-cómputo.
+  if (import.meta.env.DEV && typeof console !== 'undefined' && viajesRecords.length > 0) {
     // eslint-disable-next-line no-console
     console.info(
       `[viajes-esp-diag] viajes=${viajesRecords.length} matched=${viajesCross.matched.length} `
