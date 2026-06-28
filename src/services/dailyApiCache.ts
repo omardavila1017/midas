@@ -487,6 +487,13 @@ interface FetchRangeOptions<T> {
    * capturado con atraso). `undefined` = comportamiento previo.
    */
   revalidateSince?: string;
+  /**
+   * Llamado cuando el fetch de un día falla tras los reintentos del caller.
+   * El día NO se cachea; si estaba cacheado (revalidación) se conserva el
+   * valor previo. Permite reportar el hueco a services/dataHealth.ts en vez
+   * de tragarse el error en silencio.
+   */
+  onDayFailed?: (day: string) => void;
 }
 
 export async function fetchRangeWithDailyCache<T>(
@@ -567,7 +574,18 @@ export async function fetchRangeWithDailyCache<T>(
           try { options.onDay?.(records); } catch { /* swallow — caller bug */ }
         }
       } catch {
-        cached[idx] = [];
+        // Nunca degradar: si el día estaba cacheado (revalidación) y el
+        // refetch falla, conserva el valor previo en vez de mostrarlo VACÍO
+        // esta sesión. El catch previo hacía `cached[idx] = []`, lo que
+        // hundía a 0 un día revalidado ante un timeout transitorio. La
+        // entrada vieja sigue en IDB (no la sobreescribimos en el fallo).
+        let fallback: T[] | null = null;
+        try { fallback = await getDailyCachedAsync<T>(api, day, cia); } catch { /* ignore */ }
+        cached[idx] = fallback ?? [];
+        if (fallback && fallback.length > 0) {
+          try { options.onDay?.(fallback); } catch { /* swallow — caller bug */ }
+        }
+        try { options.onDayFailed?.(day); } catch { /* swallow — caller bug */ }
       } finally {
         done++;
         onProgress?.(done, days.length);
@@ -610,15 +628,36 @@ interface FetchRangeChunkedOptions<T> {
   onDay?: (records: T[]) => void;
   concurrency?: number;
   today?: string;
+  /**
+   * YYYY-MM-DD inclusive: un chunk que contenga días `>= revalidateSince` se
+   * RE-PIDE aunque todos sus días estén cacheados (registros posteados con
+   * atraso a JDE — el día parcial quedaba congelado). `undefined` = previo.
+   */
+  revalidateSince?: string;
+  /** Chunk completo que falló tras los reintentos del caller (sirve cache). */
+  onChunkFailed?: (chunkFrom: string, chunkTo: string) => void;
+  /** Día que falló en el fallback per-día del caller (NO se cachea como []). */
+  onDayFailed?: (day: string) => void;
 }
+
+/**
+ * Resultado de `fetchChunk`: forma simple (solo records) o extendida con
+ * `failedDays` — días que el caller no pudo leer en su fallback per-día.
+ * Esos días NO se cachean (cachearlos como `[]` los envenenaría) y se sirve
+ * su valor previo si existe.
+ */
+export type ChunkFetchResult<T> = T[] | { records: T[]; failedDays?: string[] };
 
 export async function fetchRangeWithChunkedDailyCache<T>(
   api: string,
-  options: FetchRangeChunkedOptions<T>,
+  options: Omit<FetchRangeChunkedOptions<T>, 'fetchChunk'> & {
+    fetchChunk: (chunkFrom: string, chunkTo: string) => Promise<ChunkFetchResult<T>>;
+  },
 ): Promise<T[]> {
   const {
     from, to, cia, chunkSize, fetchChunk, dateOf,
     onProgress, onDay, concurrency = 3, today = todayIso(),
+    revalidateSince,
   } = options;
 
   await ensureMemoryReady();
@@ -645,6 +684,13 @@ export async function fetchRangeWithChunkedDailyCache<T>(
     let all = true;
     for (const day of win) {
       if (!isPastDay(day, today) || !hasDailyCached(api, day, cia)) {
+        all = false;
+        break;
+      }
+      // Revalidación: un día reciente dentro de la ventana fuerza re-fetch del
+      // chunk entero (el round-trip reescribe todos sus días; el costo
+      // marginal de los vecinos ya está pagado).
+      if (revalidateSince != null && day >= revalidateSince) {
         all = false;
         break;
       }
@@ -697,9 +743,16 @@ export async function fetchRangeWithChunkedDailyCache<T>(
       const winFrom = win[0];
       const winTo = win[win.length - 1];
 
-      let records: T[] | null;
+      let records: T[] | null = null;
+      let failedDays: Set<string> | null = null;
       try {
-        records = await fetchChunk(winFrom, winTo);
+        const res = await fetchChunk(winFrom, winTo);
+        if (Array.isArray(res)) {
+          records = res;
+        } else {
+          records = res.records;
+          if (res.failedDays && res.failedDays.length > 0) failedDays = new Set(res.failedDays);
+        }
       } catch {
         // Chunk truena (timeout, red caída, 5xx después de retries). NO
         // cachear `[]` — eso envenenaría el cache y boots futuros saltarían
@@ -709,8 +762,18 @@ export async function fetchRangeWithChunkedDailyCache<T>(
       }
 
       if (records === null) {
-        done += win.length;
-        onProgress?.(done, days.length);
+        // Nunca degradar: servir lo que el cache ya tenga de estos días (un
+        // chunk en revalidación que falla no debe dejar la sesión peor).
+        try { options.onChunkFailed?.(winFrom, winTo); } catch { /* swallow */ }
+        for (const day of win) {
+          const hit = isPastDay(day, today) && hasDailyCached(api, day, cia)
+            ? await getDailyCachedAsync<T>(api, day, cia)
+            : null;
+          out[dayIndex.get(day)!] = hit ?? [];
+          if (hit && hit.length > 0) { try { onDay?.(hit); } catch { /* swallow */ } }
+          done++;
+          onProgress?.(done, days.length);
+        }
         continue;
       }
 
@@ -726,6 +789,19 @@ export async function fetchRangeWithChunkedDailyCache<T>(
 
       // Write cache per-day + emit per-day.
       for (const day of win) {
+        if (failedDays?.has(day)) {
+          // El fallback per-día del caller no pudo leer este día: NO se
+          // cachea (no está confirmado vacío) y se sirve el cache previo.
+          const hit = isPastDay(day, today) && hasDailyCached(api, day, cia)
+            ? await getDailyCachedAsync<T>(api, day, cia)
+            : null;
+          out[dayIndex.get(day)!] = hit ?? [];
+          if (hit && hit.length > 0) { try { onDay?.(hit); } catch { /* swallow */ } }
+          try { options.onDayFailed?.(day); } catch { /* swallow */ }
+          done++;
+          onProgress?.(done, days.length);
+          continue;
+        }
         const dayRecs = buckets.get(day) ?? [];
         out[dayIndex.get(day)!] = dayRecs;
         setDailyCached(api, day, dayRecs, cia, today);
@@ -871,6 +947,17 @@ export function getMaxCachedDay(api: string, cia?: string): string | null {
 }
 
 /**
+ * Snapshot de TODAS las keys del cache (diarias `api.cia.YYYY-MM-DD` y
+ * mensuales `M:api.cia.YYYY-MM`). Solo keys — barato (el keyIndex vive en
+ * RAM). Lo consume el diagnóstico de convergencia (services/dataHealth.ts)
+ * para que dos usuarios comparen qué días tiene cacheados cada quien.
+ */
+export async function listDailyCacheKeys(): Promise<string[]> {
+  await ensureMemoryReady();
+  return keyIndex ? Array.from(keyIndex) : [];
+}
+
+/**
  * Devuelve el día siguiente a `day` en formato YYYY-MM-DD.
  * Útil para construir el `from` de un fetch incremental tras un cache hit.
  */
@@ -1003,6 +1090,8 @@ interface FetchRangeMonthlyOptions<T> {
    * una OC abierta vieja. `undefined`/vacío = comportamiento previo.
    */
   revalidateMonths?: ReadonlySet<string>;
+  /** Mes cuyo fetch falló tras los reintentos (NO se cachea; sirve previo). */
+  onMonthFailed?: (month: string) => void;
 }
 
 /**
@@ -1099,7 +1188,12 @@ export async function fetchRangeWithMonthlyCache<T>(
         // setMonthCached internamente filtra mes actual — no cachea vivo.
         setMonthCached(api, m, records, cia, today);
       } catch {
-        cached[idx] = [];
+        // Nunca degradar: si el mes estaba cacheado (revalidación) y el
+        // refetch falla, conserva el valor previo en vez de mostrarlo VACÍO.
+        let fallback: T[] | null = null;
+        try { fallback = await getMonthCachedAsync<T>(api, m, cia); } catch { /* ignore */ }
+        cached[idx] = fallback ?? [];
+        try { options.onMonthFailed?.(m); } catch { /* swallow — caller bug */ }
       } finally {
         done++;
         onProgress?.(done, months.length);

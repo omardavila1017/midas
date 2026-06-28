@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { clearDailyCache, isoDaysBefore, primeDailyCache, setDailyCached } from './dailyApiCache';
+import { jdeFetchPauseGate } from './pauseGate';
 import { todayISO } from '../formatters';
 import {
   __internal,
@@ -579,6 +580,105 @@ describe('bancos — revalidación de días pasados cacheados vacíos', () => {
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(healed.flatMap(s => s.movimientos.map(m => m.importe))).toEqual([333]);
+  });
+});
+
+describe('bancos — revalidación de días cacheados PARCIALES (revalidateSince)', () => {
+  // Contexto: la revalidación de vacíos no cubría el caso real reportado —
+  // dos máquinas con CONTEOS distintos del mismo día ("300 vs 330 movs").
+  // JDE puede tener solo parte de los movimientos cuando un navegador
+  // consulta; ese día no-vacío quedaba congelado para siempre. Con
+  // `revalidateSince` (gateado una vez al día por dataHealth) el día se
+  // re-pide aunque tenga datos; si el refetch falla, el valor previo se
+  // conserva (la revalidación nunca degrada).
+  const today = todayISO();
+  const daysAgo = (n: number) => isoDaysBefore(today, n);
+
+  beforeAll(() => {
+    // El PRIMER error de API de la sesión auto-pausa el gate global de JDE
+    // (banner "reanudar" en la UI). Aquí simulamos errores a propósito:
+    // consumimos el auto-pause y reanudamos para que los reintentos del
+    // worker no queden bloqueados esperando un click que no existe en jsdom.
+    jdeFetchPauseGate.tryAutoPause({ path: '/test', status: 0, message: 'disarm' });
+    jdeFetchPauseGate.resume();
+  });
+
+  afterEach(() => {
+    jdeFetchPauseGate.resume();
+  });
+
+  function bankRow(fecha: string, importe: number, recibo: string) {
+    return {
+      cia: '11',
+      Cuenta_Contable: '11.1020.0011302',
+      Cuenta_Bancos: '000123',
+      Nombre_cuenta_Contable: 'BANAMEX CTA',
+      Fecha_Estado_Cuenta: fecha,
+      Importe: String(importe),
+      Tipo_Movimiento: 'CREDITO',
+      Referencia_Cliente: 'SPEI',
+      No_Recibo: recibo,
+    };
+  }
+
+  function jsonResponse(rows: unknown[]): Response {
+    return new Response(JSON.stringify(rows), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  it('re-pide un día reciente cacheado CON datos y el cache queda con el conteo nuevo', async () => {
+    const day = daysAgo(3);
+    await primeDailyCache();
+
+    // El navegador cacheó el día cuando JDE solo tenía 1 movimiento.
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse([bankRow(day, 111, 'RI-1')])));
+    await fetchBankStatements({ fechaEstadoCuenta: day, formatoElectronico: 'SWIFT' });
+
+    // Hoy JDE ya tiene 2 movimientos. La pasada de revalidación los trae.
+    const fullMock = vi.fn(async () => jsonResponse([
+      bankRow(day, 111, 'RI-1'),
+      bankRow(day, 222, 'RI-2'),
+    ]));
+    vi.stubGlobal('fetch', fullMock);
+
+    const revalidated = await fetchBankStatementsRange(day, day, 'SWIFT', {
+      revalidateSince: daysAgo(14),
+    });
+    expect(fullMock).toHaveBeenCalledTimes(1);
+    expect(revalidated.flatMap(s => s.movimientos.map(m => m.importe)).sort()).toEqual([111, 222]);
+
+    // El cache quedó reescrito: una pasada SIN revalidación ya sirve los 2.
+    fullMock.mockClear();
+    const cachedPass = await fetchBankStatementsRange(day, day, 'SWIFT');
+    expect(fullMock).not.toHaveBeenCalled();
+    expect(cachedPass.flatMap(s => s.movimientos.map(m => m.importe)).sort()).toEqual([111, 222]);
+  });
+
+  it('si el refetch de revalidación falla, conserva el valor previo y reporta onDayFailed', async () => {
+    const day = daysAgo(2);
+    await primeDailyCache();
+
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse([bankRow(day, 111, 'RI-1')])));
+    await fetchBankStatements({ fechaEstadoCuenta: day, formatoElectronico: 'SWIFT' });
+
+    // JDE caído durante la revalidación.
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('network down'); }));
+    const failedDays: string[] = [];
+    const result = await fetchBankStatementsRange(day, day, 'SWIFT', {
+      revalidateSince: daysAgo(14),
+      onDayFailed: (d) => failedDays.push(d),
+    });
+
+    expect(failedDays).toEqual([day]);
+    expect(result.flatMap(s => s.movimientos.map(m => m.importe))).toEqual([111]);
+
+    // El valor previo sigue cacheado — la sesión y los boots siguientes no
+    // quedan peor que antes de intentar revalidar.
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse([])));
+    const cachedPass = await fetchBankStatementsRange(day, day, 'SWIFT');
+    expect(cachedPass.flatMap(s => s.movimientos.map(m => m.importe))).toEqual([111]);
   });
 });
 

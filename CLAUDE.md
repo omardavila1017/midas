@@ -10,7 +10,7 @@ Operational context for any agent or new dev touching `midas` (formerly `flowsen
 
 This is the handoff snapshot for delivering Midas in its current state. **`CLAUDE.md` is the single source of truth** for code/architecture; `AGENTS.md` intentionally points here (no second copy to drift). `DOCS.md` is the index of every doc in the repo (what is current vs. an archived historical snapshot under `docs/archive/`).
 
-- **Verified baseline (run after `npm install`, re-verified 2026-06-15):** `npm run typecheck` clean · `npm test` → 1083 passed / 12 skipped / 0 failed (116 files) · `npm run build` passes with the expected ~771 kB main-chunk warning. See "Before you ship".
+- **Verified baseline (run after `npm install`, re-verified 2026-06-15):** `npm run typecheck` clean · `npm test` → 1150 passed / 12 skipped / 0 failed (124 files) · `npm run build` passes with the expected ~789 kB main-chunk warning. See "Before you ship".
 - **Auth posture:** real backend session at `/api/auth/*` (HttpOnly cookie); the frontend RBAC is **UX only, not a security boundary** — the proxy/backend authorizes `/api/*`. No tokens/passwords in the bundle. See `AUTH.md` + `SECURITY-AUDIT.md` (rotate any historically-exposed secret + purge git history before going live — that operational step is still owned by the deploying team).
 - **Known intentional artifacts shipped (not bugs):**
   - Company exclusion catalog is **empty** (nothing excluded; mechanism preserved). See Risk #9 + `EXCLUSION_RULES.md`.
@@ -148,6 +148,17 @@ Causa raíz de las quejas "datos incorrectos / atorados" (juntas de finanzas 202
 - **Bancos manuales (Bajío/Santander):** la ventana steady-state del backfill subió a `BANKS_BACKFILL_REVALIDATE_DAYS = 45` (las cargas manuales llegan con semanas de atraso; 14d no alcanzaba) y el saneo one-time pasó a marker **`midas.banks.emptyDayHeal.v2`** con ventana 120d (re-sanea caches envenenados abril/mayo). El single-day path sigue en `BANKS_EMPTY_DAY_REVALIDATE_DAYS = 14`.
 
 Tests: `dailyApiCache.revalidation.test.ts`. **No es la corrección del $0 en sí** — ese era un bug del SP `SP_Compras_Auditoria_IA` (lado JDE/BD, ya corregido: usa la cantidad abierta `PR UOPN`); esta capa sólo garantiza que el dato corregido **reemplace** el $0 cacheado.
+
+### Convergencia: capa aditiva sobre la revalidación (2026-06-15)
+
+Encima de la revalidación de arriba (Compras/Pagos), esta capa cierra los huecos que faltaban para que **todos los equipos vean exactamente lo mismo**. NO reemplaza nada de lo anterior — lo complementa.
+
+- **Días PARCIALES de bancos (`fetchBankStatementsRange({ revalidateSince })`, `jde.ts` + `BANKS_PARTIAL_REVALIDATE_DAYS=14` en `AppCore.tsx`):** la revalidación de bancos sólo cubría días **vacíos**; un día CON datos que se cacheó cuando JDE tenía sólo PARTE de los movimientos quedaba congelado → el síntoma "a mí me salen 300 y a él 330". Ahora los días recientes con datos se re-piden aunque no estén vacíos.
+- **Invariante "nunca degrada" (los 3 helpers de `dailyApiCache.ts`):** el `catch` de un refetch de revalidación ya NO hace `cached[idx] = []` (eso hundía a 0 un día/mes revalidado ante un timeout transitorio). Ahora conserva y sirve el valor previo del cache. Callbacks `onDayFailed`/`onMonthFailed`/`onChunkFailed`.
+- **Revalidación del cache CHUNKED (auxiliar):** `fetchRangeWithChunkedDailyCache({ revalidateSince })` + `fetchChunk` puede regresar `{ records, failedDays }` (los días fallidos del fallback per-día NO se cachean como `[]`). Cableado en `fetchAuxiliarContableRange({ revalidateSince })` + `AUX_PARTIAL_REVALIDATE_DAYS=14`.
+- **Errores ya no son silenciosos:** los fetchers de `jde.ts` cablean los callbacks de fallo a `reportDataGap()` (`services/dataHealth.ts`, registro de sesión cap 500) — bancos, pagos, compras, auxiliar y ventanas de `/cobranzaindicadores`.
+- **Fix de divergencia por-cía (`AppCore.tsx`):** los loaders de CXP y Cobranza ya NO usan el `lastSaved` global del store como fallback de frescura por cía. Una cía SIN timestamp propio es nueva (nunca consultada) y debe cargarse — marcarla "fresca" con el global la dejaba vacía para siempre en algunos navegadores. Se retiró el "repair effect" (`patchLoadedCiasForKeys`) que sobre-marcaba cías nuevas; las cías que regresan vacío conservan su stamp por-cía.
+- **Panel "Salud de datos" (`src/components/DataHealthPanel.tsx`):** overlay deslizable (espejo de `ActivityFeedPanel`), disparador en el header (ícono `Activity`, punto ámbar si hay huecos de sesión). Confiesa: frescura por módulo (`*LoadedCias` máx; bancos vía `banksLastSync`), huecos de la sesión (`getDataGaps()`), y botón **"Resincronizar todo"** → `clearDataLakeMarkers()` + `clearAllDailyCache()` + reload. Diagnóstico de consola `window.__midas__.dataHealth` (`gaps()`/`coverage()`/`counts(api,cia?)`/`countsByMonth()`). `dataHealth.ts` sólo hace VISIBLE el estado — NO decide ventanas de revalidación (eso vive en los loaders). Tests: `dailyApiCache.test.ts`, `dataHealth.test.ts`, `jde.test.ts` (días parciales).
 
 ## Bancos: caja disponible (concentradoras) (Etapa 3, 2026-06-17)
 
@@ -532,7 +543,7 @@ Locale and currency are hardcoded `es-MX` / `MXN` in `formatters.ts`. If you eve
 ## Before you ship
 
 - `npm install` first — the repo ships no `node_modules`. (Note: invoking a *global* `tsc`/`vitest` instead of the project's pinned ones can produce false errors, e.g. `TS5101 baseUrl deprecated` from a TS 7.x preview — the project pins TypeScript `^5.5.2` + `ignoreDeprecations` in `tsconfig.json`, so always run via `npm`/`npx` against installed deps.)
-- `npm test` — **baseline 2026-06-15: 116 files, 1083 passed, 12 skipped, 0 failed** (~35s). The 12 skips are the obsolete `it.skip` cases in `canonicalProjection.test.ts` (long-term projection removed). Any new failure is yours.
+- `npm test` — **baseline 2026-06-15: 124 files, 1150 passed, 12 skipped, 0 failed** (~40s). The 12 skips are the obsolete `it.skip` cases in `canonicalProjection.test.ts` (long-term projection removed). Any new failure is yours.
 - `npm run typecheck` — clean as of 2026-06-15. Any error is yours.
 - `npm run build` — passes as of 2026-06-15, with one expected warning: the `AppCoreWithProviders` chunk is ~771 kB (>500 kB Vite threshold). Code is already split into vendor-react / vendor-charts / per-tab chunks; the main app chunk is the remaining floor. Not a blocker.
 - Dev-dependency audit debt (no prod impact — `npm audit --omit=dev` is clean): the remaining `npm audit` findings require major upgrades of `vite` (5→8) and `vitest` (2→4); deferred deliberately. Do NOT run `npm audit fix --force`.

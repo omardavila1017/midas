@@ -26,6 +26,7 @@ import {
   isoDaysBefore,
   primeDailyCache,
 } from './dailyApiCache';
+import { reportDataGap } from './dataHealth';
 import { apiConfig } from '../config/api.config';
 import { findBankAccountByCuenta } from '../domain/bankAccountsCatalog';
 import { canonicalBankAccountNumber, canonicalBankName } from '../domain/bankStatements';
@@ -812,6 +813,17 @@ export async function fetchBankStatementsRange(
      * de AppCore pasa una ventana más amplia (60d).
      */
     revalidateEmptySince?: string;
+    /**
+     * Días cacheados CON datos con fecha >= este YYYY-MM-DD se re-piden AUNQUE
+     * ya tengan movimientos. Cura los días PARCIALES: JDE pudo tener solo
+     * parte de los movimientos cuando el navegador consultó (carga con atraso)
+     * y la entrada no-vacía quedaba congelada — cada usuario veía un conteo
+     * distinto del mismo día ("300 vs 330"). Si el refetch falla se conserva
+     * el valor previo (nunca degrada). `undefined` = no revalidar parciales.
+     */
+    revalidateSince?: string;
+    /** Día cuyo fetch falló tras los reintentos (ya reportado a dataHealth). */
+    onDayFailed?: (day: string) => void;
   } = {},
 ): Promise<BankAccountStatement[]> {
   const concurrency = Math.max(1, options.concurrency ?? 6);
@@ -853,7 +865,11 @@ export async function fetchBankStatementsRange(
   const today = todayISO();
   const revalidateEmptySince =
     options.revalidateEmptySince ?? isoDaysBefore(today, BANKS_EMPTY_DAY_REVALIDATE_DAYS);
+  const revalidateSince = options.revalidateSince;
   const results: BankAccountStatement[][] = new Array(dates.length);
+  // Nunca degradar: si el refetch de un día CON datos (revalidación parcial)
+  // falla, restauramos el valor previo en vez de mostrarlo vacío esta sesión.
+  const revalidateFallback = new Map<number, BankAccountStatement[]>();
   const needsFetch: number[] = [];
   // Membership es sync (keyIndex). El payload vive en IDB → leerlo es async;
   // los hits se resuelven en paralelo (pool acotado) para no congelar el boot
@@ -884,12 +900,21 @@ export async function fetchBankStatementsRange(
           dates[idx],
         );
         if (cached !== null) {
+          const partialReval =
+            revalidateSince != null && cached.length > 0 && dates[idx] >= revalidateSince;
           if (cached.length === 0 && dates[idx] >= revalidateEmptySince) {
             // Día vacío reciente: puede ser un estado de cuenta que llegó
             // tarde a JDE. Borramos la entrada (para que el fetch per-día
             // del worker no la re-sirva) y lo re-pedimos al API.
             deleteDailyCached(cacheApiKey, dates[idx]);
             revalidatedEmpty++;
+            needsFetch.push(idx);
+          } else if (partialReval) {
+            // Día reciente CON datos: re-pedirlo cura conteos parciales por
+            // captura tardía. Guardamos el valor previo como fallback (nunca
+            // degrada) y lo re-encolamos.
+            revalidateFallback.set(idx, cached);
+            deleteDailyCached(cacheApiKey, dates[idx]);
             needsFetch.push(idx);
           } else {
             results[idx] = cached;
@@ -968,9 +993,22 @@ export async function fetchBankStatementsRange(
           await new Promise((r) => setTimeout(r, delay));
         }
       }
-      results[idx] = dayResult;
       if (succeeded) {
+        results[idx] = dayResult;
         setDailyCached(cacheApiKey, dates[idx], dayResult);
+      } else {
+        // Fetch falló tras los reintentos. Si era una revalidación de un día
+        // CON datos, restaurar el valor previo (lo borramos antes de re-pedir)
+        // — la revalidación nunca debe degradar lo ya visto. Reportar el hueco.
+        const fallback = revalidateFallback.get(idx);
+        if (fallback) {
+          results[idx] = fallback;
+          setDailyCached(cacheApiKey, dates[idx], fallback);
+        } else {
+          results[idx] = dayResult;
+        }
+        reportDataGap('banks', 'day-failed', dates[idx]);
+        try { options.onDayFailed?.(dates[idx]); } catch { /* swallow */ }
       }
       done++;
       emitProgress();
@@ -1743,6 +1781,7 @@ export async function fetchComprasRange(
     onProgress: options.onProgress,
     concurrency: options.concurrency ?? 4,
     revalidateMonths: options.revalidateMonths,
+    onMonthFailed: (month) => reportDataGap('compras', 'month-failed', `${cia} ${month}`),
   });
 
   const seen = new Set<string>();
@@ -1912,6 +1951,12 @@ export async function fetchAuxiliarContableRange(
      * con un set de objetos contables diferente.
      */
     cacheNamespace?: string;
+    /**
+     * Días cacheados con fecha >= este YYYY-MM-DD fuerzan re-fetch de su chunk
+     * aunque tengan datos (pólizas posteadas con atraso → día parcial congelado;
+     * main no revalidaba el cache chunked). `undefined` = no revalidar.
+     */
+    revalidateSince?: string;
   } = {},
 ): Promise<AuxiliarContableRecord[]> {
   const config = options.config ?? {};
@@ -2017,6 +2062,8 @@ export async function fetchAuxiliarContableRange(
       onProgress: options.onProgress,
       onDay: options.onDay,
       concurrency: options.concurrency ?? 4,
+      revalidateSince: options.revalidateSince,
+      onChunkFailed: (f, t) => reportDataGap(cacheNamespace, 'chunk-failed', `${cia} ${f}..${t}`),
     },
   );
 
@@ -2221,6 +2268,7 @@ export async function fetchIndicadoresCobranzaRange(
         console.warn(
           `[cobranzaindicadores] ${cia} ventana ${w.from}..${w.to} falló: ${err instanceof Error ? err.message : String(err)}`,
         );
+        reportDataGap('cobranza-pagos', 'window-failed', `${cia} ${w.from}..${w.to}`);
         results[slot] = [];
       } finally {
         completed += 1;
@@ -2801,6 +2849,7 @@ export async function fetchPagoProveedorRange(
     onProgress: options.onProgress,
     concurrency: options.concurrency ?? 10,
     revalidateSince: options.revalidateSince,
+    onDayFailed: (day) => reportDataGap('pagoproveedor', 'day-failed', day),
   });
 
   const seen = new Set<string>();

@@ -21,7 +21,9 @@ import { loadProviderScoreOverlay } from './domain/loadProvidersCatalog';
 import { setProviderCatalogForCategoryLookup } from './modules/financial-planning/services/providerCategoryGeneralization';
 import { clearAuth } from './components/Login';
 import { fetchClientCatalog } from './services/catalog.service';
-import { primeDailyCache, getMaxCachedDay, nextIsoDay, isoDaysBefore, isDailyCachePersistent, dailyCacheStats } from './services/dailyApiCache';
+import { primeDailyCache, getMaxCachedDay, nextIsoDay, isoDaysBefore, isDailyCachePersistent, dailyCacheStats, clearAllDailyCache } from './services/dailyApiCache';
+import { publishDataHealthDiagnostics, getDataGaps, clearDataLakeMarkers } from './services/dataHealth';
+import { DataHealthPanel, type DataHealthDatasetRow } from './components/DataHealthPanel';
 import {
   loadBankStatementsFromIDB,
   saveBankJdeStatementsToIDB,
@@ -112,7 +114,7 @@ import {
   LogOut, ClipboardList, BarChart3, ShieldCheck, CreditCard, Scale,
   Target, KeyRound,
   ShoppingCart, SlidersHorizontal,
-  Menu, X,
+  Menu, X, Activity,
   type LucideIcon,
 } from 'lucide-react';
 import { filterActiveCompanies, matchesExclusionIdentity } from './domain/companyExclusion';
@@ -306,6 +308,14 @@ const PAGOS_REVALIDATE_DAYS = 21;
 // alcanzan para sanear "28-abril". 45d cubre el atraso típico de carga manual
 // a costa de ~pocas requests extra de días genuinamente vacíos por boot.
 const BANKS_BACKFILL_REVALIDATE_DAYS = 45;
+// Ventana de revalidación de días PARCIALES de bancos (días CON datos que se
+// re-piden por si JDE recibió movimientos con atraso → conteo divergente entre
+// equipos). Más corta que la de vacíos porque cada día no-vacío cuesta una
+// request por boot; el atraso de captura es de días.
+const BANKS_PARTIAL_REVALIDATE_DAYS = 14;
+// Ventana de revalidación de días parciales del Auxiliar Contable (pólizas
+// posteadas con atraso). Mismo razonamiento que bancos.
+const AUX_PARTIAL_REVALIDATE_DAYS = 14;
 // Whitelist explícito de cías que SÍ generan órdenes de compra relevantes.
 // El resto del catálogo JDE (subsidiarias dormidas, holdings, etc.) devuelve
 // OCs vacías o irrelevantes — pedirlas era ~17 cías × 13 meses ≈ 220 requests
@@ -631,25 +641,6 @@ function patchLoadedCiasFromRecords<T extends { cia?: string }>(
   });
 }
 
-function patchLoadedCiasForKeys(
-  setter: LoadedCiasSetter,
-  cias: string[],
-  loadedAt?: string,
-): void {
-  if (cias.length === 0) return;
-  const stamp = validLoadedAt(loadedAt);
-  setter(prev => {
-    let changed = false;
-    const next = { ...prev };
-    for (const cia of cias) {
-      if (!next[cia]) {
-        next[cia] = stamp;
-        changed = true;
-      }
-    }
-    return changed ? next : prev;
-  });
-}
 
 function patchRolLoadedKeysFromRecords(
   setter: LoadedCiasSetter,
@@ -1006,6 +997,9 @@ export default function App() {
   const [bankJdeStatements, setBankJdeStatements] = useState<BankAccountStatement[]>([]);
   const [bankSupplementalStatements, setBankSupplementalStatements] = useState<BankAccountStatement[]>([]);
   const [bankLastQuery, setBankLastQuery] = useState<BankQueryState | null>(null);
+  // Timestamp de la última sincronización exitosa de bancos (solo para la UI
+  // de Salud de datos — bancos no lleva mapa `*LoadedCias` por-cía).
+  const [banksLastSync, setBanksLastSync] = useState<string | null>(null);
   const [bankCacheLoaded, setBankCacheLoaded] = useState(false);
   // Hydrate bank caches on idle. Las statements (jde + supplemental) viven en
   // IDB heavy-store. bankLastQuery sigue en localStorage (es chico). Diferido
@@ -1591,6 +1585,61 @@ export default function App() {
   // ── New UI features state ──
   const { open: cmdOpen, setOpen: setCmdOpen } = useCommandPalette();
   const [activityOpen, setActivityOpen] = useState(false);
+  const [dataHealthOpen, setDataHealthOpen] = useState(false);
+  const [resyncing, setResyncing] = useState(false);
+
+  // Filas de la UI de Salud de datos: frescura por módulo. La última
+  // sincronización sale del máximo timestamp de los mapas `*LoadedCias` (se
+  // sella aunque la cía regrese vacía); bancos usa `banksLastSync`.
+  const dataHealthRows = useMemo<DataHealthDatasetRow[]>(() => {
+    const maxTs = (...maps: Record<string, string>[]): string | undefined => {
+      let max: string | undefined;
+      for (const map of maps) {
+        for (const v of Object.values(map)) {
+          if (typeof v === 'string' && (!max || v > max)) max = v;
+        }
+      }
+      return max;
+    };
+    return [
+      { key: 'banks', label: 'Bancos', status: datasetStatus.banks, lastSync: banksLastSync ?? undefined },
+      { key: 'cxp', label: 'CXP · Antigüedad de saldos', status: datasetStatus.cxp, lastSync: maxTs(cxpLoadedCias) },
+      { key: 'cobranza', label: 'Cobranza', status: datasetStatus.cobranza, lastSync: maxTs(cobranzaLoadedCias, cobranzaPaymentsLoadedCias) },
+      { key: 'compras', label: 'Compras (OCs)', status: datasetStatus.compras, lastSync: maxTs(comprasLoadedCias) },
+      { key: 'pagos', label: 'Pagos a proveedores', status: datasetStatus.pagos, lastSync: maxTs(pagoProveedorLoadedCias) },
+      { key: 'auxiliar', label: 'Auxiliar contable', status: datasetStatus.auxiliar, lastSync: maxTs(auxiliarContableLoadedCias) },
+      { key: 'nomina', label: 'Nómina (TRESS)', status: datasetStatus.nomina, lastSync: maxTs(nominaLoadedKeys) },
+      { key: 'rol', label: 'ROL · Viajes', status: datasetStatus.rol, lastSync: maxTs(rolLoadedKeys) },
+    ];
+  }, [
+    datasetStatus, banksLastSync, cxpLoadedCias, cobranzaLoadedCias,
+    cobranzaPaymentsLoadedCias, comprasLoadedCias, pagoProveedorLoadedCias,
+    auxiliarContableLoadedCias, nominaLoadedKeys, rolLoadedKeys,
+  ]);
+
+  // Punto ámbar del header: huecos de carga de esta sesión. Lee el arreglo de
+  // módulo en cada render (los cambios de datasetStatus durante el boot
+  // disparan re-render suficientes para refrescar el hint).
+  const dataHealthGapCount = getDataGaps().length;
+
+  // Resincronización total: borra el caché diario + markers de saneo y recarga
+  // → re-pull completo desde JDE. Para cuando el usuario sospecha divergencia
+  // con otro equipo y quiere reconverger desde cero.
+  const resyncDataLake = useCallback(async () => {
+    setResyncing(true);
+    try {
+      clearDataLakeMarkers();
+      await clearAllDailyCache();
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn('[data-health] resync falló al limpiar caché', err);
+    } finally {
+      window.location.reload();
+    }
+  }, []);
+
+  // Publica window.__midas__.dataHealth (gaps/coverage/counts) para soporte.
+  useEffect(() => { publishDataHealthDiagnostics(); }, []);
 
   // Planning scenarios + adjustments for Cmd+K — refreshed on every palette open.
   const [paletteScenarios, setPaletteScenarios] = useState<{ id: string; name: string }[]>([]);
@@ -1890,33 +1939,14 @@ export default function App() {
     };
   }, [requestedDatasets, hydrateDataset, storeHydrated]);
 
-  // Repair para caches pesados con respuestas vacías: una cía puede haber sido
-  // consultada exitosamente y devolver 0 registros, por lo que no aparece en
-  // `records` y no se puede reconstruir su timestamp desde IDB. Si el light
-  // store es fresco y el snapshot heavy ya existe, rellenamos las cías activas
-  // faltantes para no reconsultar vacíos en cada boot.
-  useEffect(() => {
-    if (!storeHydrated || companies.length === 0) return;
-    const loadedAt = lightStoreLastSavedRef.current;
-    if (!isFreshTimestamp(loadedAt, COBRANZA_AUTO_REFRESH_TTL_MS)) return;
-    const activeCias = filterActiveCompanies(companies).map(c => c.cia);
-    if (activeCias.length === 0) return;
-
-    if (idbHydratedDatasets.has('cxp') && cxpRecords.length > 0) {
-      patchLoadedCiasForKeys(setCxpLoadedCias, activeCias, loadedAt);
-    }
-    if (idbHydratedDatasets.has('cobranza') && (cobranzaRecords.length > 0 || cobranzaPayments.length > 0)) {
-      patchLoadedCiasForKeys(setCobranzaLoadedCias, activeCias, loadedAt);
-      patchLoadedCiasForKeys(setCobranzaPaymentsLoadedCias, activeCias, loadedAt);
-    }
-  }, [
-    storeHydrated,
-    companies,
-    idbHydratedDatasets,
-    cxpRecords.length,
-    cobranzaRecords.length,
-    cobranzaPayments.length,
-  ]);
+  // (Retirado 2026-06-15) El "repair" que rellenaba TODAS las cías activas con
+  // el timestamp global del store cuando el snapshot heavy existía marcaba como
+  // "frescas" también a las cías NUEVAS (agregadas al catálogo después del
+  // último sync) → nunca se consultaban y quedaban vacías para siempre, con
+  // navegadores divergentes. Su único efecto legítimo (no re-consultar cías que
+  // regresaron vacío) ya está cubierto: el stamp por-cía se persiste aunque la
+  // respuesta venga vacía. El caso raro de pérdida de stamps en localStorage
+  // con IDB sobreviviente se auto-cura re-consultando esas cías una vez.
 
   // ── Auto-resolución total matcher cliente↔cobranza ──────────────────────
   // Regla de negocio (Santiago, 2026-05-12):
@@ -2570,11 +2600,17 @@ export default function App() {
     // (IDB) hidrató VACÍO pero `cxpLoadedCias` (light, localStorage) sigue
     // "fresco", el delta-sync skippea toda cía → CXP queda vacío y "no carga
     // histórico" hasta refresh manual. Sin records hidratados → refetch full.
+    //
+    // NO usamos el timestamp global del store como fallback por cía: una cía
+    // SIN timestamp propio es una cía nueva (agregada al catálogo después del
+    // último sync) que NUNCA se consultó — marcarla "fresca" con el `lastSaved`
+    // global la dejaba vacía PARA SIEMPRE y producía divergencia entre
+    // navegadores (uno la trae, otro no). Las cías que regresaron vacío ya
+    // tienen su stamp por-cía persistido (se sella aunque `data` venga vacía).
     const cxpHeavyHydrated = cxpRecords.length > 0;
-    const cxpSnapshotLoadedAt = cxpHeavyHydrated ? lightStoreLastSavedRef.current : undefined;
     const ciasToFetch = cxpHeavyHydrated
       ? activeCias.filter(cia =>
-          !isFreshTimestamp(cxpLoadedCias[cia] ?? cxpSnapshotLoadedAt, CXP_AUTO_REFRESH_TTL_MS)
+          !isFreshTimestamp(cxpLoadedCias[cia], CXP_AUTO_REFRESH_TTL_MS)
         )
       : activeCias;
     // eslint-disable-next-line no-console
@@ -2943,6 +2979,11 @@ export default function App() {
         // `done|error` no por tiempo, y la pestaña Conciliación tolera
         // resultados vacíos hasta que llegue.
         const bootClampStart = `${today.getUTCFullYear()}-01-01`;
+        // Revalidación de días PARCIALES del auxiliar: pólizas se postean con
+        // atraso, así que re-pedimos los días recientes aunque estén cacheados
+        // (main no revalidaba el cache chunked). Floor del rango a la ventana +
+        // `revalidateSince` al fetcher para forzar el re-fetch de esos días.
+        const auxRevalidateSince = isoDaysBefore(fechaFinal, AUX_PARTIAL_REVALIDATE_DAYS);
         const perCiaFechaInicial = new Map<string, string>();
         for (const cia of ciasToFetch) {
           const maxCached = getMaxCachedDay('auxiliarcontable', cia);
@@ -2953,7 +2994,12 @@ export default function App() {
           const candidateFrom = lastSeen ? nextIsoDay(lastSeen) : lookbackStart;
           const flooredFrom = candidateFrom < lookbackStart ? lookbackStart : candidateFrom;
           // Clamp al inicio del año en curso — refleja la ventana YTD de los KPIs.
-          const clamped = flooredFrom < bootClampStart ? bootClampStart : flooredFrom;
+          let clamped = flooredFrom < bootClampStart ? bootClampStart : flooredFrom;
+          // Bajar el piso a la ventana de revalidación (sin pasar del año YTD)
+          // para que los días recientes cacheados entren al rango.
+          if (clamped > auxRevalidateSince) {
+            clamped = auxRevalidateSince < bootClampStart ? bootClampStart : auxRevalidateSince;
+          }
           perCiaFechaInicial.set(cia, clamped);
         }
         const errors: string[] = [];
@@ -3022,7 +3068,7 @@ export default function App() {
               console.info(`[auxiliarcontable] ${cia} · fetch ${fechaInicial}→${fechaFinal} (${fechaInicial === lookbackStart ? 'FULL' : 'DELTA'})`);
               const fetched = await fetchAuxiliarContableRange(
                 cia, fechaInicial, fechaFinal, AUX_RECON_PARAMS,
-                { concurrency: 4, onDay },
+                { concurrency: 4, onDay, revalidateSince: auxRevalidateSince },
               );
               successCount += 1;
               totalLines += fetched.length;
@@ -3329,7 +3375,6 @@ export default function App() {
         return;
       }
       const heavyHydrated = cobranzaRecords.length > 0 || cobranzaPayments.length > 0;
-      const snapshotLoadedAt = heavyHydrated ? lightStoreLastSavedRef.current : undefined;
       // Desync guard (mismo hardening que nómina `shouldSkip`): si el heavy
       // store (IDB, 2 años de historia) hidrató VACÍO — open-timeout de 5s,
       // sesión previa muerta a mitad del backfill antes del save debounced, o
@@ -3338,11 +3383,16 @@ export default function App() {
       // vacía para siempre y "no carga histórico" hasta un refresh manual.
       // Si no hay records hidratados, NO confíes en los timestamps: refetch
       // completo (2 años, todas las cías) en vez de quedarte en vacío.
+      //
+      // Tampoco usamos el `lastSaved` global como fallback por cía: una cía sin
+      // timestamp propio es nueva (nunca consultada) y debe cargarse — marcarla
+      // fresca con el global la dejaba vacía para siempre (divergencia entre
+      // navegadores). Las cías que regresaron vacío ya tienen su stamp.
       const ciasToFetch = force || !heavyHydrated
         ? activeCias
         : activeCias.filter(cia =>
-          !isFreshTimestamp(cobranzaLoadedCias[cia] ?? snapshotLoadedAt, COBRANZA_AUTO_REFRESH_TTL_MS)
-          || !isFreshTimestamp(cobranzaPaymentsLoadedCias[cia] ?? snapshotLoadedAt, COBRANZA_AUTO_REFRESH_TTL_MS)
+          !isFreshTimestamp(cobranzaLoadedCias[cia], COBRANZA_AUTO_REFRESH_TTL_MS)
+          || !isFreshTimestamp(cobranzaPaymentsLoadedCias[cia], COBRANZA_AUTO_REFRESH_TTL_MS)
         );
       // eslint-disable-next-line no-console
       console.info(`[cobranza] sync · ${ciasToFetch.length}/${activeCias.length} cías necesitan refresh (force=${force}, TTL ${Math.round(COBRANZA_AUTO_REFRESH_TTL_MS / 3600000)}h) · hydratedRecords=${cobranzaRecords.length}`);
@@ -4303,6 +4353,14 @@ export default function App() {
         emptyHealDone ? BANKS_BACKFILL_REVALIDATE_DAYS : 120,
       );
       if (rangeStart > revalidateEmptySince) rangeStart = revalidateEmptySince;
+      // Revalidación de días PARCIALES (no solo vacíos): un día CON datos pudo
+      // cachearse cuando JDE tenía solo PARTE de los movimientos (captura con
+      // atraso) y quedaba congelado — cada usuario veía un conteo distinto del
+      // mismo día ("300 vs 330"). Re-pedimos los días recientes aunque tengan
+      // datos; el valor previo se conserva si el refetch falla (nunca degrada).
+      // Ventana más corta que la de vacíos: el atraso de captura es de días, no
+      // de meses, y re-pedir días no-vacíos sí cuesta una request cada uno.
+      const revalidateSince = isoDaysBefore(today, BANKS_PARTIAL_REVALIDATE_DAYS);
       // eslint-disable-next-line no-console
       console.info(
         `[banks v3-fix] backfill sync · maxCachedIDB=${maxCachedBanks ?? 'none'} (${cachedDayCount}d) · hydratedState=${bankJdeStatements.length} stmts / ${distinctStateDates.size} dates · stateSpansHistory=${stateSpansHistory} · cacheSpansHistory=${cacheSpansHistory} · trustedStateMax=${trustedStateMax ?? 'null'} · trustedCacheMax=${trustedCacheMax ?? 'null'} · force=${force} · idbPersist=${isDailyCachePersistent()} · revalidateEmptySince=${revalidateEmptySince}${emptyHealDone ? '' : ' (HEAL 120d)'} · range ${rangeStart}→${today} (${force ? 'FULL' : 'DELTA'} via daily cache)`,
@@ -4324,6 +4382,7 @@ export default function App() {
         {
           concurrency: 10,
           revalidateEmptySince,
+          revalidateSince,
           onProgress: (done, total) => {
             lastTotal = total;
             const now = performance.now();
@@ -4358,6 +4417,7 @@ export default function App() {
           formatoElectronico: defaultFormat,
           hasUploadedSantander: bankSupplementalStatements.length > 0,
         });
+        setBanksLastSync(new Date().toISOString());
         ranged = true;
         // El rango regresó datos → el API es alcanzable; el saneo amplio
         // one-time ya corrió. Las siguientes pasadas usan la ventana de 14d.
@@ -4779,6 +4839,21 @@ export default function App() {
             {activeSection === 'proyeccion' && (
               <span className="hidden md:inline-flex"><GlobalScenarioSelector /></span>
             )}
+            <button
+              onClick={() => setDataHealthOpen(true)}
+              title="Salud de datos"
+              aria-label="Salud de datos"
+              className="relative shell-icon-btn flex items-center justify-center w-9 h-9 rounded-[var(--radius-md)] flex-shrink-0 transition-colors duration-150"
+            >
+              <Activity className="w-4 h-4" strokeWidth={1.5} />
+              {dataHealthGapCount > 0 && (
+                <span
+                  aria-hidden="true"
+                  className="absolute top-1 right-1 w-2 h-2 rounded-full"
+                  style={{ background: 'var(--warning, #d97706)', boxShadow: '0 0 0 2px var(--surface)' }}
+                />
+              )}
+            </button>
             <DarkModeToggle />
             {userEmail && (
               <button
@@ -5325,6 +5400,13 @@ export default function App() {
         open={activityOpen}
         onClose={() => setActivityOpen(false)}
         onNavigate={(tabId) => { setActiveTab(tabId as TabId); setActivityOpen(false); }}
+      />
+      <DataHealthPanel
+        open={dataHealthOpen}
+        onClose={() => setDataHealthOpen(false)}
+        datasets={dataHealthRows}
+        onResync={resyncDataLake}
+        resyncing={resyncing}
       />
       <KeyboardShortcutsModal
         open={shortcutsOpen}
