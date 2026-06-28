@@ -380,8 +380,13 @@ async function persistEntry(key: string, records: unknown[]): Promise<void> {
       store.put({ key, day, records });
       tx.oncomplete = () => {
         // Commit confirmado: el payload ya vive en IDB; suéltalo del buffer
-        // write-through para no retener nada.
-        recentWrites.delete(key);
+        // write-through para no retener nada — PERO solo si el buffer sigue
+        // teniendo el payload que ESTA tx persistió. Si una escritura posterior
+        // de la misma key ya reemplazó el buffer (otra tx en vuelo), no lo
+        // borres: su propia persistEntry lo liberará al confirmar. Sin esta
+        // guarda, la tx vieja borraba el payload nuevo y un lector concurrente
+        // leía datos stale de IDB hasta que la tx nueva commiteaba.
+        if (recentWrites.get(key) === records) recentWrites.delete(key);
         resolve();
       };
       tx.onerror = () => resolve();
