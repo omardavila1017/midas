@@ -76,6 +76,17 @@ describe('createApiProxy (openai)', () => {
     expect(url).toBe('https://api.openai.com/v1/chat/completions');
   });
 
+  it('drops "." and ".." segments so the path cannot escape the upstream base', async () => {
+    const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const { res } = makeRes();
+
+    await handler()({ method: 'GET', url: '/api/openai/../admin/keys', query: { path: ['..', 'admin', '.', 'keys'] } }, res);
+
+    const [url] = fetchMock.mock.calls[0] as unknown as [string];
+    expect(url).toBe('https://api.openai.com/v1/admin/keys');
+  });
+
   it('returns 500 with a clear error when OPENAI_API_KEY is missing', async () => {
     delete process.env.OPENAI_API_KEY;
     const { res, out } = makeRes();

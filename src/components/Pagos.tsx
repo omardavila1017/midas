@@ -435,7 +435,7 @@ export default function Pagos({
         if (statusFilter === 'matched' && display !== 'MATCHED_FULL') return false;
         if (statusFilter === 'cxp-only' && display !== 'MATCHED_CXP_ONLY') return false;
         if (statusFilter === 'bank-only' && display !== 'MATCHED_BANK_ONLY') return false;
-        if (statusFilter === 'orphan' && display !== 'UNMATCHED') return false;
+        if (statusFilter === 'orphan' && !isRealOrphan(m)) return false;
         if (statusFilter === 'no-bank-data' && display !== 'NO_BANK_DATA') return false;
       }
       if (q) {

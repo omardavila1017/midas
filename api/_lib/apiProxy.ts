@@ -33,9 +33,12 @@ function pathFromQuery(query: ApiProxyRequest['query']): string {
   // ("chat/completions") en vez de array. Encodear ese string completo
   // produce "chat%2Fcompletions" → 404 garantizado en upstream. Se parte
   // por '/' antes de encodear cada segmento.
+  // Los segmentos '.'/'..' se descartan: encodeURIComponent no los toca y
+  // fetch normaliza la URL, así que '..' escaparía el path base del upstream
+  // (p.ej. /v1) llevando el Bearer token a rutas no previstas del mismo host.
   return segments
     .flatMap((segment) => segment.split('/'))
-    .filter(Boolean)
+    .filter((segment) => Boolean(segment) && segment !== '.' && segment !== '..')
     .map(encodeURIComponent)
     .join('/');
 }

@@ -180,6 +180,38 @@ describe('<Pagos /> filters and sorting', () => {
     expect(rows(container)).toHaveLength(3);
   });
 
+  it('filtro "Huérfano" usa la definición isRealOrphan (excluye empleados y sin cobertura)', () => {
+    const records = [
+      pago({ noPago: '100', nombreProveedor: 'Proveedor Huerfano' }),
+      pago({ noPago: '200', nombreProveedor: 'Empleado Vale', tipoBusqueda: 'Employees' }),
+      pago({ noPago: '300', nombreProveedor: 'Proveedor Sin Banco' }),
+    ];
+    const matches: PaymentMatch[] = [
+      unmatchedMatch(records[0]),
+      unmatchedMatch(records[1]),
+      { ...unmatchedMatch(records[2]), bankCoverage: 'no-account' },
+    ];
+
+    const { container } = render(
+      <Pagos
+        pagoProveedorRecords={records}
+        pagoProveedorLoadedCias={{ __all__: '2026-06-02T00:00:00Z' }}
+        selectedCia="all"
+        providers={[]}
+        paymentMatches={matches}
+        comprasRecords={[]}
+        cxpRecords={[]}
+      />,
+    );
+
+    switchToFlatList();
+    expect(rows(container)).toHaveLength(3);
+
+    fireEvent.change(screen.getByTitle('Filtrar por estado de cruce'), { target: { value: 'orphan' } });
+    expect(rows(container)).toHaveLength(1);
+    expect(rows(container)[0].textContent).toContain('Proveedor Huerfano');
+  });
+
   it('focuses a month from the pagado-por-mes strip and clears via Limpiar', () => {
     const records = [
       pago({ noPago: '100', fechaPago: '2026-05-01', importePesos: 1000 }),
