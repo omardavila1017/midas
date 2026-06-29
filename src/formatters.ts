@@ -95,6 +95,11 @@ export function fmtDelta(value: number): string {
 /** Short date: "20 Abr 2026" */
 export function fmtDate(date: Date | string): string {
   const d = typeof date === 'string' ? new Date(date) : date;
+  // Defensive: malformed/empty date strings (legacy payloads, un-facturado
+  // CITI/JDE fields) yield an Invalid Date — render '' instead of the
+  // user-hostile "NaN undefined NaN". Mirrors the guards in
+  // fmtYearMonthShort/fmtYearMonthLong below.
+  if (Number.isNaN(d.getTime())) return '';
   const months = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
   return `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}`;
 }
