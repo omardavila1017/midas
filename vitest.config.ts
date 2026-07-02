@@ -13,5 +13,16 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     exclude: [...configDefaults.exclude, '.claude/**', 'tests-e2e/**', '**/tests-e2e/**'],
+    coverage: {
+      provider: 'v8',
+      reporter: ['text-summary', 'html', 'json-summary'],
+      include: ['src/**', 'api/**'],
+      exclude: [
+        'scripts/**',
+        '**/mock-data/**',
+        '**/*.d.ts',
+        '**/*.test.*',
+      ],
+    },
   },
 });
