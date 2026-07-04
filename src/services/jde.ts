@@ -25,6 +25,7 @@ import {
   deleteDailyCached,
   isoDaysBefore,
   primeDailyCache,
+  type ChunkFetchResult,
 } from './dailyApiCache';
 import { reportDataGap } from './dataHealth';
 import { apiConfig } from '../config/api.config';
@@ -2002,7 +2003,7 @@ export async function fetchAuxiliarContableRange(
   const fetchChunkWithRetry = async (
     chunkFrom: string,
     chunkTo: string,
-  ): Promise<AuxiliarContableRecord[]> => {
+  ): Promise<ChunkFetchResult<AuxiliarContableRecord>> => {
     let lastErr: unknown;
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       try {
@@ -2035,6 +2036,7 @@ export async function fetchAuxiliarContableRange(
       }
     }
     const perDay: AuxiliarContableRecord[][] = [];
+    const failedDays: string[] = [];
     let perDaySuccess = 0;
     for (const day of days) {
       try {
@@ -2044,10 +2046,15 @@ export async function fetchAuxiliarContableRange(
         // eslint-disable-next-line no-console
         console.warn(`[auxiliarcontable] ${cia} día ${day} falló: ${dayErr instanceof Error ? dayErr.message : String(dayErr)}`);
         perDay.push([]);
+        // Reportar el día fallido para que el cache NO lo persista como `[]`
+        // (cachear un día fallido como vacío lo envenena: los boots futuros lo
+        // saltan y ese día contable queda perdido). Sin esto, el `flat()` los
+        // hacía indistinguibles de un día genuinamente vacío.
+        failedDays.push(day);
       }
     }
     if (perDaySuccess === 0) throw lastErr;
-    return perDay.flat();
+    return { records: perDay.flat(), failedDays };
   };
 
   const all = await fetchRangeWithChunkedDailyCache<AuxiliarContableRecord>(
@@ -2064,6 +2071,7 @@ export async function fetchAuxiliarContableRange(
       concurrency: options.concurrency ?? 4,
       revalidateSince: options.revalidateSince,
       onChunkFailed: (f, t) => reportDataGap(cacheNamespace, 'chunk-failed', `${cia} ${f}..${t}`),
+      onDayFailed: (d) => reportDataGap(cacheNamespace, 'day-failed', `${cia} ${d}`),
     },
   );
 

@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { clearDailyCache, isoDaysBefore, primeDailyCache, setDailyCached } from './dailyApiCache';
+import { clearDailyCache, hasDailyCached, isoDaysBefore, primeDailyCache, setDailyCached } from './dailyApiCache';
 import { jdeFetchPauseGate } from './pauseGate';
 import { todayISO } from '../formatters';
 import {
@@ -7,6 +7,7 @@ import {
   type AuxiliarContableRecord,
   type BankAccountStatement,
   BANKS_EMPTY_DAY_REVALIDATE_DAYS,
+  fetchAuxiliarContableRange,
   fetchBankStatements,
   fetchBankStatementsRange,
   fetchIndicadoresCobranza,
@@ -99,6 +100,92 @@ describe('AuxiliarContable IVA discovery', () => {
   it('genera namespaces distintos para sets de objetos distintos', () => {
     expect(__internal.ivaCacheNamespace([{ ini: '1180', fin: '1180' }]))
       .not.toBe(__internal.ivaCacheNamespace([{ ini: '1180', fin: '1180' }, { ini: '2000', fin: '2999' }]));
+  });
+});
+
+describe('auxiliar contable — el fallback per-día no envenena el cache con días fallidos', () => {
+  // Contexto del bug: cuando un chunk multi-día rebota 3x, `fetchChunkWithRetry`
+  // reintenta día por día. Los días que IGUAL fallan deben quedar SIN cachear
+  // (no confirmados vacíos) para que un boot futuro los vuelva a pedir. El
+  // fallback devolvía un `perDay.flat()` plano — indistinguible de un día
+  // genuinamente vacío — así que el cache chunked persistía esos días como `[]`
+  // y quedaban perdidos para siempre (caían fuera de `revalidateSince`). El fix
+  // devuelve `{ records, failedDays }` para que el cache no los escriba.
+  const AUX_PARAMS = { tl: 'AA', nr: 999, objetos: [{ ini: '1020', fin: '1020' }] as const };
+  const NS = 'auxiliarcontable-test-failedday';
+
+  function auxJsonResponse(rows: unknown[]): Response {
+    return new Response(JSON.stringify(rows), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+  function auxErrorResponse(status: number): Response {
+    return new Response(JSON.stringify({ error: 'boom' }), {
+      status,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+  function auxApiRow(fecha: string, importe: number, noDocto: number) {
+    return {
+      Cia: '00011',
+      IdCuenta: 'id-1',
+      Cuenta_Objeto: '1020',
+      Tipo_Docto: 'PV',
+      No_Docto: noDocto,
+      Fecha_Contable: fecha,
+      Importe: String(importe),
+    };
+  }
+
+  afterEach(async () => {
+    await clearDailyCache(NS);
+  });
+
+  it('un día que falla en el fallback per-día NO se cachea como vacío y se re-pide después', async () => {
+    // El primer error de chunk dispararía el auto-pause del gate y colgaría los
+    // fetches per-día siguientes en `wait()`. Lo neutralizamos: tras la primera
+    // vez `autoPauseFired` queda en true y los errores subsecuentes se ignoran.
+    jdeFetchPauseGate.tryAutoPause({ path: 'test', status: 0, message: 'neutralize' });
+    jdeFetchPauseGate.resume();
+
+    const d1 = '2025-06-03';
+    const d2 = '2025-06-04';
+    await primeDailyCache();
+    await clearDailyCache(NS);
+
+    let chunkShouldFail = true;
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as { fechaInicial: string; fechaFinal: string };
+      const single = body.fechaInicial === body.fechaFinal;
+      if (!single) {
+        // Chunk multi-día: falla en la 1a corrida (fuerza el fallback per-día);
+        // en la 2a (ya sano) responde ambos días.
+        return chunkShouldFail
+          ? auxErrorResponse(500)
+          : auxJsonResponse([auxApiRow(d1, 111, 1), auxApiRow(d2, 222, 2)]);
+      }
+      // Per-día: d1 responde; d2 falla — es el día que NO debe cachearse.
+      return body.fechaInicial === d2
+        ? auxErrorResponse(500)
+        : auxJsonResponse([auxApiRow(body.fechaInicial, 111, 1)]);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const first = await fetchAuxiliarContableRange('00011', d1, d2, AUX_PARAMS, { cacheNamespace: NS });
+    // d1 se leyó; d2 falló en el fallback y quedó fuera del resultado.
+    expect(first.map(r => r.importe)).toEqual([111]);
+
+    // El día exitoso quedó cacheado; el fallido NO (si no, un boot futuro lo
+    // saltaría para siempre).
+    expect(hasDailyCached(NS, d1, '00011')).toBe(true);
+    expect(hasDailyCached(NS, d2, '00011')).toBe(false);
+
+    // Segunda corrida con el chunk ya sano: como d2 no está cacheado, la ventana
+    // se re-pide y trae su dato. Con el bug (d2 cacheado como []) seguiría vacío.
+    chunkShouldFail = false;
+    const second = await fetchAuxiliarContableRange('00011', d1, d2, AUX_PARAMS, { cacheNamespace: NS });
+    expect(second.map(r => r.importe).sort((a, b) => a - b)).toEqual([111, 222]);
   });
 });
 
