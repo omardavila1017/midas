@@ -148,8 +148,12 @@ export function fmtYearMonthLong(yearMonth: string): string {
 /** Relative date: "Hoy", "Ayer", "Hace 3 días" */
 export function fmtRelative(date: Date | string): string {
   const d = typeof date === 'string' ? new Date(date) : date;
+  if (Number.isNaN(d.getTime())) return '';
   const now = new Date();
   const diff = Math.floor((now.getTime() - d.getTime()) / 86_400_000);
+  // Future dates (diff < 0) would otherwise fall through to "Hace -3 días";
+  // render the absolute date, mirroring the >30-day branch.
+  if (diff < 0) return fmtDate(d);
   if (diff === 0) return 'Hoy';
   if (diff === 1) return 'Ayer';
   if (diff < 7) return `Hace ${diff} días`;

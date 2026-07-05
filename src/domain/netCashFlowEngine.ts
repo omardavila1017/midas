@@ -16,6 +16,7 @@ import type { ComprasRecord } from '../services/jdeTypes';
 import { enrichFromCatalog, Flexibility, Criticidad } from './providerCatalog';
 import { BANK_ACCOUNTS } from './bankAccountsCatalog';
 import type { BankAccountStatement, BankStatementLine } from '../services/jdeTypes';
+import { isoWeek } from './calendar';
 
 // ─────────────────────────────────────────────────────────────────────────
 // Internal transfer detection
@@ -1072,11 +1073,11 @@ function parseDate(dateStr: string | null | undefined): string | null {
  * @returns Week number (1–53)
  */
 function getISOWeekNumber(dateStr: string): number {
-  const date = new Date(dateStr + 'T00:00:00Z');
-  const jan4 = new Date(Date.UTC(date.getUTCFullYear(), 0, 4));
-  const dayDiff = date.getTime() - jan4.getTime();
-  const weekNumber = Math.floor(dayDiff / (7 * 24 * 60 * 60 * 1000)) + 1;
-  return Math.max(1, Math.min(53, weekNumber));
+  // Delegate to the canonical ISO-8601 implementation in calendar.ts. The
+  // previous naive `floor((date − Jan4)/7weeks) + 1` never snapped to Monday
+  // boundaries, so it was only correct in years where Jan 4 is a Monday and
+  // was off-by-one for most dates (e.g. 2023-01-09 → 1 instead of 2).
+  return isoWeek(new Date(dateStr + 'T00:00:00Z'));
 }
 
 /**

@@ -263,6 +263,17 @@ describe('aggregateWeekly / aggregateMonthly', () => {
     expect(weeks.map((w) => w.weekStart)).toEqual([...weeks.map((w) => w.weekStart)].sort());
   });
 
+  it('labels weeks with the correct ISO-8601 week number (not the naive Jan-4 offset)', () => {
+    const mk = (date: string): DailyFlow => ({
+      date, inflows: 0, outflows: 0, net: 0, cumulative: 0, confirmedIn: 0, projectedIn: 0,
+    });
+    // 2023-01-09 is a Monday; Jan 4 2023 is a Wednesday, so the old naive
+    // implementation returned week 1 — the true ISO week is 2.
+    expect(aggregateWeekly([mk('2023-01-09')])[0].weekNumber).toBe(2);
+    // 2021-01-01 (Friday) belongs to ISO week 53 of 2020, not week 1.
+    expect(aggregateWeekly([mk('2021-01-01')])[0].weekNumber).toBe(53);
+  });
+
   it('groups by calendar month, summing confirmed/projected and keeping last cumulative', () => {
     const months = aggregateMonthly(daily);
 

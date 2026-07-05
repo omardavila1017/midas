@@ -30,6 +30,14 @@ describe('formatters', () => {
     it('reports same-day as "Hoy"', () => {
       expect(fmtRelative(new Date())).toBe('Hoy');
     });
+
+    it('renders a future date as the absolute date, not "Hace -N días"', () => {
+      const future = new Date(Date.now() + 3 * 86_400_000);
+      const out = fmtRelative(future);
+      expect(out).not.toContain('-');
+      expect(out).not.toContain('Hace');
+      expect(out).toBe(fmtDate(future));
+    });
   });
 
   describe('fmtYearMonth*', () => {
