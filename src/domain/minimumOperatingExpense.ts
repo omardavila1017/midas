@@ -210,8 +210,13 @@ export function prorateMinimumExpense(
 ): number {
   if (!totalMonthly || totalMonthly <= 0) return 0;
   if (!startDateIso || !endDateIso) return 0;
-  const start = new Date(startDateIso);
-  const end = new Date(endDateIso);
+  // Fechas ISO simples parsean como UTC midnight; con getters locales en
+  // CST (UTC-6) la ventana se corría un día hacia atrás y cruzaba mal los
+  // límites de mes. Anclar a mediodía local las hace TZ-independientes.
+  const anchor = (iso: string) =>
+    new Date(/^\d{4}-\d{2}-\d{2}$/.test(iso) ? `${iso}T12:00:00` : iso);
+  const start = anchor(startDateIso);
+  const end = anchor(endDateIso);
   if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return 0;
   if (end < start) return 0;
 

@@ -27,6 +27,7 @@ Updated 2026-06-05 for delivery handoff.
 | `EXCLUSION_RULES.md` | The company exclusion filter (currently **empty** — nothing excluded; mechanism preserved). | Devs |
 | `AUDITORIA-INTEGRACION-MODULOS.md` | Module ↔ module / API integration map, persistence inventory, risk map, roadmap (snapshot 2026-05-19). | Devs / architects |
 | `AUDITORIA-CUADRE-PLANEACION.md` | Why the Base cash flow didn't square across modules: internal-transfer classification fix (2026-06-10), by-design divergences, the definitive missing-information list, how to verify the cuadre with real data. | Devs / treasury |
+| `docs/MAPA-CONEXIONES-APIS.md` | The API datalake join map (2026-07-05): every API↔API cross with its exact keys/normalizers, file:function, consumer and status (ACTIVE/DISPLAY/LEGACY); canonical normalizers; known divergences; missing connections and the open questions that block them. | Devs / integration |
 | `REPORTES-TRESS-COMPRAS-MAPEO.md` | Field-mapping spec for the TRESS (nómina) and Compras APIs, including fields still requested from the API. | Devs / integration |
 | `docs/MIGRACION-ESTADO-SERVIDOR.md` | Migración de estado a servidor (junta 2026-06-23): clear-on-entry de caches JDE/TRESS + modelo de datos y contrato de APIs (insert/consult/update) para escenarios/planeación que construye el equipo de backend. | Backend / integración |
 | `PURPOSE.md` | Product purpose statement and rationale. | Product / leadership |

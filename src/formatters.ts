@@ -94,7 +94,13 @@ export function fmtDelta(value: number): string {
 
 /** Short date: "20 Abr 2026" */
 export function fmtDate(date: Date | string): string {
-  const d = typeof date === 'string' ? new Date(date) : date;
+  // Bare YYYY-MM-DD strings parse as UTC midnight per spec, so the local
+  // getters below would render them a day early in America/Mexico_City
+  // (UTC-6). Anchor them to local noon — same trick callers were applying
+  // by hand with `${iso}T12:00:00`.
+  const d = typeof date === 'string'
+    ? new Date(/^\d{4}-\d{2}-\d{2}$/.test(date) ? `${date}T12:00:00` : date)
+    : date;
   // Defensive: malformed/empty date strings (legacy payloads, un-facturado
   // CITI/JDE fields) yield an Invalid Date — render '' instead of the
   // user-hostile "NaN undefined NaN". Mirrors the guards in

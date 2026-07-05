@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, ReactNode } from 'react';
+import { createContext, useContext, useState, useCallback, useMemo, ReactNode } from 'react';
 import {
   CheckCircle2,
   AlertCircle,
@@ -102,8 +102,16 @@ export function ToastProvider({ children }: ToastProviderProps) {
     removeToast(toast.id);
   }, [removeToast]);
 
+  // Identidad estable: sin el memo, cada alta/auto-dismiss de un toast
+  // publicaba un value nuevo y re-renderizaba TODO el shell (AppCore consume
+  // useToast() en la raíz), re-registrando de paso los pressure handlers.
+  const contextValue = useMemo(
+    () => ({ success, error, warning, info }),
+    [success, error, warning, info],
+  );
+
   return (
-    <ToastContext.Provider value={{ success, error, warning, info }}>
+    <ToastContext.Provider value={contextValue}>
       {children}
       <ToastContainer toasts={toasts} onRemove={removeToast} onUndo={handleUndo} />
     </ToastContext.Provider>

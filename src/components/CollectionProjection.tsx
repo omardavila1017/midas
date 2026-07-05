@@ -927,7 +927,7 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
             </span>
           </div>
           <div className="space-y-1.5 max-h-72 overflow-y-auto">
-            {selectedEvents.sort((a, b) => b.amount - a.amount).map((e, i) => {
+            {[...selectedEvents].sort((a, b) => b.amount - a.amount).map((e, i) => {
               const c = byId.get(e.clientId);
               const key = eventKey(e);
               const isConfirmed = confirmedSet.has(key);

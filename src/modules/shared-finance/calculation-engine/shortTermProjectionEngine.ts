@@ -26,6 +26,7 @@ import type { Client, Provider } from '../../../domain/types';
 import type { CobranzaRecord, ViajeEspecialRecord } from '../../../services/jdeTypes';
 import type { CXPRecord } from '../../../domain/persistence';
 import { buildViajesEspecialesCobranzaCross, buildViajesEspecialesFacturaKeys } from '../../../domain/viajesEspecialesCobranzaMatch';
+import { normFactura } from '../../../domain/rolCobranzaMatch';
 import { buildRolProjectedInflows, type RolProjectedInflow } from '../../../domain/rolProjectionEngine';
 import { todayISO } from '../../../formatters';
 import { enrichFromCatalog } from '../../../domain/providerCatalog';
@@ -299,6 +300,19 @@ function buildInflowContext(inputs: CanonicalProjectionInputs): InflowContext {
       + `unmatched=${viajesCross.unmatched.length} sinFactura=${viajesCross.withoutInvoice.length} `
       + `· líneas cxc:especial: proyectadas=${Array.from(viajesEspUnmatchedByYm.values()).reduce((s, a) => s + a.length, 0)}`,
     );
+    if (viajesCross.unmatched.length > 0) {
+      // Contrato confirmado por negocio (2026-07-05): Factura_JDE usa el MISMO
+      // consecutivo que cobranza.noFactura — el cruce debe dar ~100%. Un
+      // unmatched persistente (con la ventana de cobranza cargada) es defecto
+      // de datos a reportar a JDE.
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[viajes-esp-diag] ${viajesCross.unmatched.length} viajes FACTURADOS sin match en cobranza `
+        + `(contrato: mismo consecutivo → esperado ~0). Folios: `
+        + viajesCross.unmatched.slice(0, 10).map((v) => `${v.cia}:${v.facturaJDE}`).join(', ')
+        + (viajesCross.unmatched.length > 10 ? ` … (+${viajesCross.unmatched.length - 10})` : ''),
+      );
+    }
   }
 
   return {
@@ -490,8 +504,10 @@ function collectCxcInflowLines(
 
     // CXC proyectado: Citi por defecto, Viajes Especiales si la factura está
     // en el set de viajes especiales (cruce factura/UUID vs API).
+    // normFactura: MISMA normalización que buildViajesEspecialesFacturaKeys —
+    // un folio con espacios/guiones distintos debe re-etiquetar igual.
     const isViajeEspecialCxc = context.viajesEspFacturaKeys.has(
-      `${record.cia}::${(record.noFactura ?? '').trim().toUpperCase()}`,
+      `${record.cia}::${normFactura(record.noFactura)}`,
     );
     const cxcSubcat = isViajeEspecialCxc
       ? INCOME_SUBCAT_VIAJES_ESPECIALES

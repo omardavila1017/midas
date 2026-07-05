@@ -15,6 +15,14 @@ describe('formatters', () => {
       expect(fmtDate('2026-04-20T12:00:00')).toBe('20 Abr 2026');
     });
 
+    it('renders bare YYYY-MM-DD strings on the stated day (not a day early in UTC-negative zones)', () => {
+      // Bare ISO strings parse as UTC midnight; without local-noon anchoring,
+      // America/Mexico_City (UTC-6) rendered "16 Jun 2026" for '2026-06-17'.
+      expect(fmtDate('2026-06-17')).toBe('17 Jun 2026');
+      expect(fmtDate('2026-01-01')).toBe('1 Ene 2026');
+      expect(fmtDate('2026-12-31')).toBe('31 Dic 2026');
+    });
+
     it('returns "" for malformed/empty date strings instead of "NaN undefined NaN"', () => {
       expect(fmtDate('')).toBe('');
       expect(fmtDate('invalid-date-string')).toBe('');

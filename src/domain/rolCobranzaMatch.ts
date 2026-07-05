@@ -79,8 +79,13 @@ const FACTURA_PLACEHOLDERS = new Set(['', '-', '0', 'N/A', 'NA', 'S/F', 'SF', 'S
  * Normaliza UN folio de factura para comparación exacta: case-insensitive,
  * guiones sin espacios alrededor y sin whitespace interno
  * ("RI - 305405" / "ri-305405 " → "RI-305405").
+ *
+ * Exportada: es el normalizador CANÓNICO de folio para todos los cruces
+ * contra cobranza (ROL, Viajes Especiales, re-etiquetado del motor) — no
+ * dupliques una versión local, la asimetría de normalización produce
+ * no-matches silenciosos y dobles conteos.
  */
-function normFactura(value: string | undefined): string {
+export function normFactura(value: string | undefined): string {
   const t = trim(value).toUpperCase();
   if (FACTURA_PLACEHOLDERS.has(t)) return '';
   return t.replace(/\s*-\s*/g, '-').replace(/\s+/g, '');
@@ -121,11 +126,16 @@ function facturaDigitsKey(value: string): string {
 /**
  * Normaliza UUID fiscal (SAT) a hex puro: sin guiones, llaves ni espacios,
  * case-insensitive. Placeholders "-"/"0"/"N/A" cuentan como ausentes.
+ * Exportada por la misma razón que `normFactura`.
  */
-function normUuid(value: string | undefined): string {
+export function normUuid(value: string | undefined): string {
   const t = trim(value).toUpperCase();
   if (FACTURA_PLACEHOLDERS.has(t)) return '';
-  const hex = t.replace(/[^0-9A-Z]/g, '');
+  // Hex ESTRICTO (0-9 A-F): con [^0-9A-Z] un placeholder de texto libre
+  // ("PENDIENTE", "SIN TIMBRAR") ≥8 chars generaba llave y dos placeholders
+  // idénticos en ambos lados cruzaban un viaje contra una factura ajena —
+  // apagando su `rol:` proyectado sin razón.
+  const hex = t.replace(/[^0-9A-F]/g, '');
   return hex.length >= 8 ? hex : '';
 }
 

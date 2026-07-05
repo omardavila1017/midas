@@ -447,7 +447,8 @@ function groupLabelFor(
   const startISO = start.toISOString().slice(0, 10);
   const endISO = end.toISOString().slice(0, 10);
   return {
-    label: `${fmtDate(start)} – ${fmtDate(end)}`,
+    // ISO strings, no los Date UTC-midnight: fmtDate los rendería un día antes.
+    label: `${fmtDate(startISO)} – ${fmtDate(endISO)}`,
     sublabel: `Semana · ${items.length} ${items.length === 1 ? 'movimiento' : 'movimientos'}`,
     containsToday: today >= startISO && today <= endISO,
   };

@@ -260,7 +260,7 @@ export const CobranzaKpiCard: React.FC<{
           <p className="text-[11px] mt-0.5" style={{ color: 'var(--gray-500)' }}>
             {sinDatos
               ? 'Sin auxiliar contable cargado · revisa la pestaña Conciliación'
-              : `${cruzadas} de ${cruzables} líneas · ${s.glOrphanLineas} sin movimiento bancario`}
+              : `${cruzadas} de ${cruzables} líneas · ${s.pendienteRevisionLineas} sin movimiento bancario`}
           </p>
         </div>
 

@@ -33,6 +33,7 @@ import {
   Provider,
 } from '../domain/types';
 import type { CXPRecord } from '../domain/persistence';
+import { todayISO } from '../formatters';
 
 interface Props {
   provider: Provider;
@@ -54,7 +55,8 @@ const fmtCompact = (n: number | null | undefined): string => {
 
 const fmtDate = (iso?: string): string => {
   if (!iso) return '—';
-  const d = new Date(iso);
+  // Bare YYYY-MM-DD parses as UTC midnight → renders un día antes en CST.
+  const d = new Date(/^\d{4}-\d{2}-\d{2}$/.test(iso) ? `${iso}T12:00:00` : iso);
   if (!Number.isFinite(d.getTime())) return iso;
   return d.toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' });
 };
@@ -422,7 +424,10 @@ export default function ProviderDetailModal({ provider, cxpRecords, onClose }: P
                     <tbody>
                       {providerInvoices.slice(0, 50).map((r, i) => {
                         const due = r.fechaProgramacionPago || r.fechaVence || r.fechaFactura;
-                        const isOverdue = due && new Date(due).getTime() < Date.now();
+                        // Comparación por string ISO local: `new Date(due)` (UTC midnight)
+                        // marcaba vencida desde las 18:00 del día ANTERIOR, y una factura
+                        // que vence HOY se pintaba vencida todo el día.
+                        const isOverdue = Boolean(due && due.slice(0, 10) < todayISO());
                         return (
                           <tr key={i} className="border-t border-[var(--gray-200)]/40 hover:bg-[var(--gray-50)]/50">
                             <td className="px-3 py-2 font-mono text-[11px] text-[var(--gray-700)]">{r.noFactura || '—'}</td>

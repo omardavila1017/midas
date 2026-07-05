@@ -313,9 +313,13 @@ function mapAgedBalance(raw: RawRecord): AgedBalanceRecord {
     noProveedor:             toStr(pick(raw, ['noProveedor', 'no_prov', 'no_proveedor', 'proveedor'])),
     nombre:                  toStr(pick(raw, ['nombre', 'nombreProveedor', 'razonSocial'])),
     noFactura:               toStr(pick(raw, ['noFactura', 'no_factura', 'factura'])),
-    fechaFactura:            toStr(pick(raw, ['fechaFactura', 'fecha_factura'])),
-    fechaVence:              toStr(pick(raw, ['fechaVence', 'fecha_vence', 'fechaVencimiento'])),
-    fechaProgramacionPago:   toStr(pick(raw, ['fechaProgramacionPago', 'fecha_programacion_pago', 'fechaProgPago'])),
+    // trimIsoDate: los consumidores fechan con cleanDate (regex estricto
+    // ^\d{4}-\d{2}-\d{2}$). Si el API sirviera ISO+hora (como ya pasó en
+    // /cobranza), las 3 fechas fallarían el regex y TODO el CXP abierto se
+    // re-fecharía silenciosamente a asOfDate.
+    fechaFactura:            trimIsoDate(pick(raw, ['fechaFactura', 'fecha_factura'])),
+    fechaVence:              trimIsoDate(pick(raw, ['fechaVence', 'fecha_vence', 'fechaVencimiento'])),
+    fechaProgramacionPago:   trimIsoDate(pick(raw, ['fechaProgramacionPago', 'fecha_programacion_pago', 'fechaProgPago'])),
     diasVencida:             toNum(pick(raw, ['diasVencida', 'dias_vencida', 'diasVencido'])),
     importeBrutoPesos:       toNum(pick(raw, ['importeBrutoPesos', 'importe_bruto_pesos'])),
     importePendientePesos:   toNum(pick(raw, ['importePendientePesos', 'importe_pendiente_pesos'])),
@@ -1114,7 +1118,9 @@ export async function fetchBankStatementsRange(
 function mapCompany(raw: RawRecord): Company {
   const activaRaw = pick(raw, ['activa', 'activo', 'active', 'enabled']);
   return {
-    cia:        toStr(pick(raw, ['cia', 'codigo', 'code', 'compania'])),
+    // normalizeCia: Company.cia siembra cada request per-cía y las llaves de
+    // *LoadedCias — un código sin padding rompería todos los joins `cia::…`.
+    cia:        normalizeCia(pick(raw, ['cia', 'codigo', 'code', 'compania'])),
     nombre:     toStr(pick(raw, ['nombre', 'razonSocial', 'razon_social', 'name'])),
     rfc:        toStr(pick(raw, ['rfc', 'taxId', 'tax_id'])) || undefined,
     monedaBase: toStr(pick(raw, ['monedaBase', 'moneda_base', 'moneda', 'currency'])) || undefined,
@@ -2171,6 +2177,13 @@ export async function fetchAuxiliarContableIvaRange(
     /** Inicio de la ventana de discovery (default: primer día del mes de `to`). */
     discoveryFrom?: string;
     onDay?: (records: AuxiliarContableRecord[]) => void;
+    /**
+     * Pass-through a la fase B (mismo contrato que fetchAuxiliarContableRange):
+     * las pólizas de IVA también se postean con atraso — sin esto un día
+     * reciente cacheado PARCIAL en el namespace de IVA quedaba congelado y el
+     * acreditable REAL se subreportaba por navegador.
+     */
+    revalidateSince?: string;
     config?: JdeClientConfig;
   } = {},
 ): Promise<AuxiliarContableRecord[]> {
@@ -2196,7 +2209,7 @@ export async function fetchAuxiliarContableIvaRange(
     from,
     to,
     { tl: AUX_IVA_PARAMS.tl, nr: AUX_IVA_PARAMS.nr, objetos },
-    { config, onDay, cacheNamespace },
+    { config, onDay, cacheNamespace, revalidateSince: options.revalidateSince },
   );
 }
 
@@ -3093,15 +3106,17 @@ export async function fetchRolRange(
     console.warn(`[rol] completó parcial: ${windows.length - failedWindows.length}/${windows.length} ventanas`);
   }
 
-  const seen = new Set<string>();
-  const merged: RolRecord[] = [];
+  // Dedup LAST-WINS (mismo sentido que el merge fresh-wins de AppCore): las
+  // filas ROL vienen keyeadas por semana ISO pero el fetch es por ventanas de
+  // día — la ventana más reciente de la misma semana trae el snapshot más
+  // completo (un viaje que adquirió factura). First-wins conservaba el
+  // snapshot más viejo, el opuesto de lo que asume el consumidor.
+  const byKey = new Map<string, RolRecord>();
   for (const rec of results.flat()) {
     const key = `${rec.cia}::${rec.kCliente}::${rec.anio}::${rec.semana}::${rec.ruta}::${rec.tipoViaje}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    merged.push(rec);
+    byKey.set(key, rec);
   }
-  return merged;
+  return Array.from(byKey.values());
 }
 
 // ───────────────────────────────────────────────────────────────

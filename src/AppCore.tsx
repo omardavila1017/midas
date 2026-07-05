@@ -1556,7 +1556,10 @@ export default function App() {
         reducCountByWeek.set(wk, (reducCountByWeek.get(wk) ?? 0) + 1);
       }
     }
-    const currentWeek = weekKey(new Date().toISOString().slice(0, 10));
+    // todayISO(): la fecha UTC cruza medianoche 6h antes en CST — con ella,
+    // un domingo desde las 18:00 `currentWeek` apuntaba a la semana SIGUIENTE
+    // y la semana en curso (parcial) dejaba de excluirse.
+    const currentWeek = weekKey(todayISO());
     // Una semana es "cerrada" si tiene cash-out y sus deducciones ya se
     // contabilizaron (mismo guard que el cálculo mensual previo), y NO es la
     // semana en curso (posible nómina parcial). El guard sólo nos puede llevar
@@ -1919,9 +1922,15 @@ export default function App() {
   useEffect(() => {
     if (!storeHydrated) return;
     const priority: DatasetKey[] = ['cxp', 'pagos', 'cobranza', 'rol', 'nomina', 'compras'];
+    // indexOf(-1) sorted unlisted datasets (auxiliar, the heaviest) FIRST,
+    // inverting the staggering — rank them after every listed one instead.
+    const rank = (k: DatasetKey) => {
+      const i = priority.indexOf(k);
+      return i === -1 ? priority.length : i;
+    };
     const requested = Array.from(requestedDatasets)
       .filter((dataset) => dataset !== 'banks')
-      .sort((a, b) => priority.indexOf(a) - priority.indexOf(b));
+      .sort((a, b) => rank(a) - rank(b));
     const cancelers = requested.map((dataset, index) => {
       let cancelIdle: (() => void) | null = null;
       const timer = window.setTimeout(() => {
@@ -2207,15 +2216,20 @@ export default function App() {
       setClientsCatalogDone(true);
       return;
     }
+    // The IDB store hydration can land while this fetch is in flight; without
+    // both guards the resolved catalog would clobber the persisted clients
+    // (manual group overrides, API-patched credit days) and the autosave
+    // would persist the loss.
+    let cancelled = false;
     fetchClientCatalog()
       .then(loaded => {
-        if (loaded.length > 0) {
-          setClients(loaded);
-          setCatalogLoaded(true);
-        }
+        if (cancelled || loaded.length === 0) return;
+        setClients(prev => (prev.length > 0 ? prev : loaded));
+        setCatalogLoaded(true);
       })
-      .catch(() => { setClientsCatalogError(true); })
+      .catch(() => { if (!cancelled) setClientsCatalogError(true); })
       .finally(() => setClientsCatalogDone(true));
+    return () => { cancelled = true; };
   }, [catalogLoaded, clients.length]);
 
   // Providers — catálogo derivado en tiempo real desde las fuentes JDE
@@ -3235,7 +3249,13 @@ export default function App() {
               continue;
             }
             try {
-              await fetchAuxiliarContableIvaRange(cia, fechaInicial, fechaFinal, { onDay });
+              // Misma ventana de revalidación de días parciales que el
+              // auxiliar de conciliación: las pólizas de IVA se postean con
+              // atraso y el namespace de IVA no revalidaba.
+              await fetchAuxiliarContableIvaRange(cia, fechaInicial, fechaFinal, {
+                onDay,
+                revalidateSince: isoDaysBefore(fechaFinal, AUX_PARTIAL_REVALIDATE_DAYS),
+              });
               setAuxiliarIvaLoadedCias(prev => ({
                 ...prev,
                 [cia]: {
@@ -3480,7 +3500,15 @@ export default function App() {
           if (paymentsResult.status === 'fulfilled') {
             const payments = paymentsResult.value;
             const ts = new Date().toISOString();
-            paymentsByCia.set(cia, payments);
+            // Merge por idPago (lo fetcheado gana) en vez de replace:
+            // fetchIndicadoresCobranzaRange tolera ventanas mensuales fallidas
+            // y regresa un set PARCIAL — un replace destruía (y persistía vía
+            // saveHeavyRecords) los meses de pagos que sí teníamos, rompiendo
+            // el invariante "nunca degrada" de la capa de revalidación.
+            const mergedPayments = new Map<string, CobranzaPayment>();
+            for (const p of paymentsByCia.get(cia) ?? []) mergedPayments.set(p.idPago, p);
+            for (const p of payments) mergedPayments.set(p.idPago, p);
+            paymentsByCia.set(cia, Array.from(mergedPayments.values()));
             const snapshot = flattenPayments();
             setCobranzaPayments(snapshot);
             setCobranzaPaymentsLoadedCias(prev => ({ ...prev, [cia]: ts }));
@@ -3735,7 +3763,12 @@ export default function App() {
           onPartialBatch: (batch) => {
             let changed = false;
             for (const v of batch) {
-              if (!mergedByKey.has(v.kRenta)) {
+              // Fresh-wins (espejo del merge de ROL): un viaje que adquiere
+              // `facturaJDE` DEBE actualizar el record hidratado. Con
+              // first-wins el viaje quedaba sin factura para siempre → el
+              // cruce lo emitía como sintético cxc:especial:viaje: DUPLICANDO
+              // el cxc: real de cobranza en Base.
+              if (!mergedByKey.has(v.kRenta) || mergedByKey.get(v.kRenta) !== v) {
                 mergedByKey.set(v.kRenta, v);
                 changed = true;
               }
@@ -3750,7 +3783,7 @@ export default function App() {
         if (records.length > 0 && mergedByKey.size === lastPersistedSize) {
           let changed = false;
           for (const v of records) {
-            if (!mergedByKey.has(v.kRenta)) {
+            if (!mergedByKey.has(v.kRenta) || mergedByKey.get(v.kRenta) !== v) {
               mergedByKey.set(v.kRenta, v);
               changed = true;
             }
@@ -4167,11 +4200,16 @@ export default function App() {
     });
   }, [bankJdeStatements, bankSupplementalStatements.length]);
   useEffect(() => {
+    // Espera la hidratación: este efecto corre en el primer commit con
+    // `bankLastQuery === null` y borraba `midas.bankLastQuery.v2` ANTES de
+    // que loadBankCaches (idle, async) lo leyera — el query persistido se
+    // perdía en cada boot y el path Santander/synth corría siempre.
+    if (!bankCacheLoaded) return;
     try {
       if (bankLastQuery) localStorage.setItem('midas.bankLastQuery.v2', JSON.stringify(bankLastQuery));
       else localStorage.removeItem('midas.bankLastQuery.v2');
     } catch { /* ignore */ }
-  }, [bankLastQuery]);
+  }, [bankCacheLoaded, bankLastQuery]);
 
   // ── JDE: fetch bank statements ──
   // Boot sólo hace prime corto. El backfill año-a-la-fecha queda para refresh

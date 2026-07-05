@@ -333,11 +333,11 @@ export interface AuxiliarReconOptions {
 
 /** Dirección de flujo de una línea GL. Chokepoint único — ver Riesgos del plan. */
 export function deriveFlujo(record: Pick<AuxiliarContableRecord, 'importe'>): AuxiliarFlujo {
-  // Convención asumida: en una cuenta de activo (banco/caja) un cargo
-  // contable (importe positivo) incrementa el saldo = entra dinero = ingreso;
-  // un abono contable (negativo) lo reduce = egreso. PENDIENTE de verificar
-  // con datos reales — si el API entrega todo positivo habrá que derivar la
-  // dirección de `Tipo_Docto`.
+  // Convención CONFIRMADA por negocio (Santiago, 2026-07-05): en una cuenta
+  // de activo (banco/caja) un cargo contable (importe positivo) incrementa el
+  // saldo = entra dinero = ingreso; un abono contable (NEGATIVO) lo reduce =
+  // EGRESO. El gate de regresión (`computeFlujoSignAudit` en
+  // auxiliarKeyValidation.ts) se conserva por si el contrato del API cambiara.
   return record.importe < 0 ? 'egreso' : 'ingreso';
 }
 
@@ -357,6 +357,12 @@ function accountMatchKey(cuenta: string | null | undefined): string {
   if (entry && entry.cuentaDigits) {
     const digits = entry.cuentaDigits.replace(/\D+/g, '').replace(/^0+/, '');
     if (digits) return `c:${digits}`;
+    // Cuenta centinela sin dígitos (BANBAJIO: mapBankLine colapsa todas las
+    // líneas Bajío a cuenta="BANBAJIO"). Sin esta rama la llave era '' y TODO
+    // el flujo Bajío quedaba fuera del pool de match: sus movimientos salían
+    // como bank-orphans permanentes y sus líneas GL nunca cruzaban.
+    const sentinel = entry.cuentaDigits.trim().toUpperCase();
+    if (sentinel) return `s:${sentinel}`;
   }
   const raw = (cuenta ?? '').replace(/\D+/g, '').replace(/^0+/, '');
   return raw ? `d:${raw}` : '';
@@ -700,7 +706,17 @@ export function reconcileAuxiliar(
     // imposible por gap estructural — no inflar gl-orphan. La R-override del
     // paso 5 todavía puede confirmar la línea si JDE la marcó como conciliada.
     const auxAccountKey = accountMatchKey(rec.cuentaBanco);
-    if (auxAccountKey && !bankAccountKeys.has(auxAccountKey)) {
+    // Sin llave derivable (cuentaBanco poblada pero sin dígitos ni centinela
+    // del catálogo): no hay contra qué emparejar — mismo bucket que la línea
+    // sin cuenta. Antes caía al loop de match con llave '' y terminaba
+    // inflando pendiente-revision (la cola de revisión humana) por un gap
+    // estructural de datos.
+    if (!auxAccountKey) {
+      base.matchTier = 'sin-cuenta-aux';
+      lines.push(base);
+      continue;
+    }
+    if (!bankAccountKeys.has(auxAccountKey)) {
       base.matchTier = 'cuenta-no-en-banco';
       lines.push(base);
       continue;
@@ -941,14 +957,15 @@ export function reconcileAuxiliar(
 
 /** Tiers estructurales que NO cuentan como flujo económico (excluidos del
  *  denominador del % cruce y de los totales reconciliados por mes). Coincide
- *  con los `continue` de `buildSummary`; `gl-orphan` NO está aquí (es flujo
- *  económico sin cruce). */
+ *  con los `continue` de `buildSummary`; `gl-orphan`/`pendiente-revision` NO
+ *  están aquí (son flujo económico sin cruce — el paso 5c reclasifica todo
+ *  gl-orphan a pendiente-revision, así que excluirlo dejaba el denominador
+ *  igual al numerador y los `*Total` idénticos a `*Cruzado`). */
 const STRUCTURAL_NON_FLOW_TIERS: ReadonlySet<AuxiliarMatchTier> = new Set([
   'caja',
   'interno',
   'asiento-interno',
   'asiento-contable',
-  'pendiente-revision',
   'sin-banco',
   'sin-cuenta-aux',
   'cuenta-no-en-banco',
@@ -1110,7 +1127,12 @@ function buildSummary(
     if (line.matchTier === 'pendiente-revision') {
       s.pendienteRevisionLineas += 1;
       s.pendienteRevisionMonto += monto;
-      continue;
+      // SIN `continue`: pendiente-revision es el gl-orphan reclasificado —
+      // flujo económico QUE NO CRUZÓ. Debe contar en los denominadores del
+      // % cruce (ingresoLineas/egresoLineas + ciaBreakdown). Con el continue,
+      // el denominador solo contenía tiers cruzados y pctIngresoCruzado /
+      // pctEgresoCruzado / ciaBreakdown.pct eran SIEMPRE 100% — el semáforo
+      // del KPI de cobertura no podía disparar jamás.
     }
     if (line.matchTier === 'sin-banco') {
       s.sinBancoLineas += 1;

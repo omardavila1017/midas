@@ -6,6 +6,12 @@
  * sin facturar todavía. El API de Viajes Especiales devuelve siempre el
  * folio de factura cuando ya se emitió.
  *
+ * CONTRATO CONFIRMADO por negocio (2026-07-05): `Factura_JDE` sale del MISMO
+ * consecutivo que `noFactura` de cobranza — el cruce por folio debe dar ~100%.
+ * Un viaje facturado que quede en `unmatched` de forma persistente (con la
+ * ventana de cobranza cargada) es un DEFECTO DE DATOS a reportar a JDE, no
+ * comportamiento esperado.
+ *
  *   Viaje especial ejecutado  →  Factura emitida  →  Cobro recibido
  *   (Viajes Especiales API)      (Cobranza JDE)       (Banco ABONO)
  *
@@ -24,6 +30,7 @@
  */
 
 import type { CobranzaRecord, ViajeEspecialRecord } from '../services/jdeTypes';
+import { normFactura, normUuid } from './rolCobranzaMatch';
 
 export type ViajeEspecialMatchSource = 'factura' | 'uuid';
 
@@ -42,21 +49,13 @@ export interface ViajeEspecialCobranzaCrossResult {
   withoutInvoice: ViajeEspecialRecord[];
 }
 
-function trim(v: string | undefined): string {
-  return (v ?? '').trim();
-}
-
-function normFactura(v: string | undefined): string {
-  const t = trim(v).toUpperCase();
-  if (t === '-' || t === '0' || t === 'N/A' || t === 'NA') return '';
-  return t;
-}
-
-function normUuid(v: string | undefined): string {
-  const t = trim(v).toUpperCase();
-  if (t === '-' || t === '0' || t === 'N/A' || t === 'NA') return '';
-  return t;
-}
+// Normalización COMPARTIDA con el cruce ROL (`rolCobranzaMatch.normFactura`/
+// `normUuid`). Antes este archivo tenía versiones locales más débiles (solo
+// trim+upper, sin quitar espacios/guiones ni purificar el UUID a hex) — el
+// header prometía "mismo patrón que rolCobranzaMatch" pero un folio con drift
+// de formato ("RI - 123" vs "RI-123") no cruzaba, y el viaje emitía un
+// sintético `cxc:especial:viaje:` DUPLICANDO el `cxc:` real de cobranza en el
+// Escenario Base.
 
 export function buildViajesEspecialesCobranzaCross(
   viajes: ViajeEspecialRecord[],
