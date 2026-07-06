@@ -13,7 +13,7 @@ export const config = {
 export default createApiProxy({
   label: 'viajes-especiales',
   upstreamEnvVar: 'VIAJES_ESPECIALES_UPSTREAM',
-  defaultUpstream: 'http://srv-desarrollo:95/ViajesEspeciales',
+  defaultUpstream: 'https://appqa.gruposenda.com/WS/sentur/ViajesEspeciales',
   tokenEnvVar: 'VIAJES_ESPECIALES_TOKEN',
   fallbackTokenEnvVar: 'JDE_TOKEN',
 });

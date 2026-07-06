@@ -97,8 +97,8 @@ export default defineConfig(({ mode }) => {
     })
   }
 
-  const jdeUp = parseUpstream(env.VITE_JDE_UPSTREAM || 'https://api.gruposenda.com/JDEdwards')
-  const tressUp = parseUpstream(env.VITE_TRESS_UPSTREAM || 'https://api.gruposenda.com/v1/erp/tress')
+  const jdeUp = parseUpstream(env.VITE_JDE_UPSTREAM || 'https://appqa.gruposenda.com/WS/jde/JDEdwards')
+  const tressUp = parseUpstream(env.VITE_TRESS_UPSTREAM || 'https://appqa.gruposenda.com/WS/tress/TRESS')
   const openaiUp = parseUpstream(env.OPENAI_UPSTREAM || 'https://api.openai.com/v1')
   // Diagnóstico temprano MIDAS AI: sin OPENAI_API_KEY el proxy responde 401
   // upstream; un OPENAI_UPSTREAM de api.openai.com SIN /v1 responde 404
@@ -110,14 +110,15 @@ export default defineConfig(({ mode }) => {
     console.warn(`[vite] OPENAI_UPSTREAM (${env.OPENAI_UPSTREAM}) no incluye /v1 — OpenAI responderá 404 "Invalid URL". Usa https://api.openai.com/v1.`)
   }
   const jdeToken = env.JDE_TOKEN || env.VITE_JDE_TOKEN
-  // CITI: red interna srv-desarrollo:92/CITI. En prod requiere proxy server-side
-  // (nginx/cloudflare) que reescriba /api/citi → http://srv-desarrollo:92/CITI.
-  const citiUp = parseUpstream(env.VITE_CITI_UPSTREAM || env.CITI_UPSTREAM || 'http://srv-desarrollo:92/CITI')
+  // CITI: upstream QA https://appqa.gruposenda.com/WS/citi. En prod el proxy
+  // server-side (nginx/cloudflare o la función serverless) reescribe /api/citi.
+  const citiUp = parseUpstream(env.VITE_CITI_UPSTREAM || env.CITI_UPSTREAM || 'https://appqa.gruposenda.com/WS/citi/CITI')
   const citiToken = env.CITI_TOKEN || jdeToken || env.VITE_CITI_TOKEN
-  // Viajes Especiales — endpoint dev srv-desarrollo:95. Comparte token JDE
-  // (mismo backend Senda). Prod pendiente; ajustar VITE_VIAJES_ESPECIALES_UPSTREAM
-  // cuando se publique el endpoint productivo.
-  const viajesEspUp = parseUpstream(env.VITE_VIAJES_ESPECIALES_UPSTREAM || env.VIAJES_ESPECIALES_UPSTREAM || 'http://srv-desarrollo:95/ViajesEspeciales')
+  // Viajes Especiales (SENTUR) — upstream QA
+  // https://appqa.gruposenda.com/WS/sentur/ViajesEspeciales. Comparte token JDE
+  // (mismo backend Senda). Ajustar VITE_VIAJES_ESPECIALES_UPSTREAM para apuntar
+  // a otro entorno (p.ej. productivo) cuando se publique.
+  const viajesEspUp = parseUpstream(env.VITE_VIAJES_ESPECIALES_UPSTREAM || env.VIAJES_ESPECIALES_UPSTREAM || 'https://appqa.gruposenda.com/WS/sentur/ViajesEspeciales')
   const viajesEspToken = env.VIAJES_ESPECIALES_TOKEN || jdeToken || env.VITE_VIAJES_ESPECIALES_TOKEN
   // Shared server-side store (Omar Dávila's deployment). Sin STORE_UPSTREAM no
   // se registra el proxy `/api/store` (target vacío rompería la config de Vite);

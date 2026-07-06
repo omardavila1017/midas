@@ -44,7 +44,7 @@ export const apiConfig = {
     authValue: '',
   },
   // CITI / Senda Citi — namespace para el ROL diario (viajes ejecutados).
-  // Endpoint productivo: http://srv-desarrollo:92/CITI/RolDiario. En dev el
+  // Upstream QA: https://appqa.gruposenda.com/WS/citi/CITI/RolDiario. En dev el
   // proxy de Vite (vite.config.ts) reescribe `/api/citi/*` hacia upstream
   // para evitar CORS. Comparte el token JDE — son el mismo backend Senda.
   citi: {
@@ -56,7 +56,7 @@ export const apiConfig = {
   // K_Cliente / D_Cliente / Clave_JDE / K_Empresa para auto-poblar el grupo
   // "Viajes Especiales" del catalogo de clientes y Factura_JDE + UUID para
   // cruzar contra cobranza JDE (mismo patron ROL ↔ cobranza).
-  // Endpoint dev: http://srv-desarrollo:95/ViajesEspeciales/Servicios.
+  // Upstream QA: https://appqa.gruposenda.com/WS/sentur/ViajesEspeciales/Servicios.
   viajesEspeciales: {
     baseUrl: import.meta.env.VITE_VIAJES_ESPECIALES_BASE_URL || DEFAULT_VIAJES_ESPECIALES_BASE_URL,
     authValue: '',

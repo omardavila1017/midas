@@ -7,6 +7,6 @@ export const config = {
 export default createApiProxy({
   label: 'jde',
   upstreamEnvVar: 'JDE_UPSTREAM',
-  defaultUpstream: 'https://api.gruposenda.com/JDEdwards',
+  defaultUpstream: 'https://appqa.gruposenda.com/WS/jde/JDEdwards',
   tokenEnvVar: 'JDE_TOKEN',
 });

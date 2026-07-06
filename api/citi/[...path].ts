@@ -7,7 +7,7 @@ export const config = {
 export default createApiProxy({
   label: 'citi',
   upstreamEnvVar: 'CITI_UPSTREAM',
-  defaultUpstream: 'http://srv-desarrollo:92/CITI',
+  defaultUpstream: 'https://appqa.gruposenda.com/WS/citi/CITI',
   tokenEnvVar: 'CITI_TOKEN',
   fallbackTokenEnvVar: 'JDE_TOKEN',
 });

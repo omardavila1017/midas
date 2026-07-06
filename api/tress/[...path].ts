@@ -10,6 +10,6 @@ export const config = {
 export default createApiProxy({
   label: 'tress',
   upstreamEnvVar: 'TRESS_UPSTREAM',
-  defaultUpstream: 'https://api.gruposenda.com/v1/erp/tress',
+  defaultUpstream: 'https://appqa.gruposenda.com/WS/tress/TRESS',
   tokenEnvVar: 'JDE_TOKEN',
 });
