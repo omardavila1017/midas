@@ -38,6 +38,19 @@ list and code are public in the bundle. In this mode:
   them to a set-password screen, and `completeFirstLogin` fixes the password and
   opens the session. An email that is **not** pre-registered can neither register
   nor log in.
+- **⚠️ Hardcoded universal password (deliberate, 2026-06-10 — commit `c08ddc3`).**
+  On top of the model above, `localAuth.ts` ships `HARDCODED_LOCAL_PASSWORD =
+  'Senda123'`: `verifyLocalPassword` short-circuits on that literal for **every
+  known account** (even after the user set their own password), and
+  `currentHashForEmail` falls back to its hash, so every pre-registered email
+  logs in immediately without the first-login setup. Explicit rollout decision
+  to unblock all users at once. Consequences: the first-login/register flow is
+  effectively bypassed (`hasLocalPassword` is always true), and anyone reading
+  the public bundle can authenticate as any user, including admins. Consistent
+  with "local mode is obfuscation, not security" — but it **must be removed
+  (delete the short-circuit + hash fallback in `localAuth.ts`) before any
+  deployment where the UI gate is expected to mean anything**. It does not
+  exist in backend mode.
 - **Admin sets passwords** directly via `adminSetPassword` (writes the overlay).
 - **Per-browser limitation:** the registry and password overlay live in
   `localStorage`, so an admin registering a user / setting a password on their

@@ -56,6 +56,7 @@ import type { Provider } from '../domain/types';
 import type { PaymentMatch, CxpMatchTier, CargoMatchTier } from '../domain/paymentReconciliationEngine';
 import type { CXPRecord } from '../domain/persistence';
 import { isInternalCounterparty, isInternalProviderClassification } from '../domain/netCashFlowEngine';
+import { normFactura } from '../domain/rolCobranzaMatch';
 import {
   PAGO_STATUS_LABEL,
   buildPagadoPorMes,
@@ -204,10 +205,6 @@ function bancoLabel(cuentaBancaria: string): string {
   return cuentaBancaria.trim();
 }
 
-function normFactura(s: string): string {
-  return s.trim().toUpperCase();
-}
-
 function normProv(s: string): string {
   return s.trim().toUpperCase();
 }
@@ -226,19 +223,23 @@ interface ComprasBridge {
 function buildComprasBridge(records: ComprasRecord[]): ComprasBridge {
   const byFactura = new Map<string, ComprasRecord[]>();
   for (const r of records) {
-    if (!r.noFactura) continue;
-    const k = `${r.cia}::${normProv(r.noProveedor)}::${normFactura(r.noFactura)}`;
+    // normFactura canónico (rolCobranzaMatch): tolera drift de formato
+    // ("RI - 123" vs "RI-123") y mapea placeholders ("S/F", "N/A") a '' —
+    // esos se saltan para no puentear OCs sin factura real entre sí.
+    const folio = normFactura(r.noFactura);
+    if (!folio) continue;
+    const k = `${r.cia}::${normProv(r.noProveedor)}::${folio}`;
     const list = byFactura.get(k);
     if (list) list.push(r);
     else byFactura.set(k, [r]);
   }
-  return byFactura
-    ? { byFactura }
-    : { byFactura: new Map() };
+  return { byFactura };
 }
 
 function findOCsForCxp(cxp: CXPRecord, bridge: ComprasBridge): ComprasRecord[] {
-  const k = `${cxp.cia}::${normProv(cxp.noProveedor)}::${normFactura(cxp.noFactura)}`;
+  const folio = normFactura(cxp.noFactura);
+  if (!folio) return [];
+  const k = `${cxp.cia}::${normProv(cxp.noProveedor)}::${folio}`;
   return bridge.byFactura.get(k) ?? [];
 }
 

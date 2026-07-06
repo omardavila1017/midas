@@ -876,7 +876,8 @@ export function reconcileAuxiliar(
   //     traspaso interno; N:1 cuando varias líneas aux agregan a un solo
   //     ABONO; importe difiere >10% por comisiones). El motor no los puede
   //     confirmar sin intervención humana — quedan en `pendiente-revision`,
-  //     fuera del denominador del % cruce. La drilldown los expone como la
+  //     que SÍ cuenta en el denominador del % cruce (flujo económico no
+  //     cruzado; ver buildSummary). La drilldown los expone como la
   //     sección primaria accionable para que contabilidad los marque R en
   //     JDE o ajuste el asiento. NOTA: si en el futuro se agrega N:M
   //     aggregation o intercompany cross-cia detection, esos buckets deben

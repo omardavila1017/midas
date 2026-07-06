@@ -3194,12 +3194,22 @@ export default function App() {
     (async () => {
       try {
         await primeDailyCache();
+        // Floor del rango a la ventana de revalidación de días parciales
+        // (espejo del loader del auxiliar principal): `revalidateSince` sólo
+        // re-pide días DENTRO de [from..to], así que sin bajar el `from` el
+        // watermark steady-state (loadedThrough = ayer) deja los días
+        // recientes cacheados PARCIALES fuera del rango para siempre.
+        const ivaRevalidateSince = isoDaysBefore(fechaFinal, AUX_PARTIAL_REVALIDATE_DAYS);
         const perCiaFechaInicial = new Map<string, string>();
         for (const cia of ciasToFetch) {
           const meta = auxiliarIvaLoadedCias[cia];
           const lastSeen = meta?.version === AUX_IVA_LEDGER_VERSION ? meta.loadedThrough : null;
           const candidateFrom = lastSeen ? nextIsoDay(lastSeen) : bootClampStart;
-          perCiaFechaInicial.set(cia, candidateFrom < bootClampStart ? bootClampStart : candidateFrom);
+          let clamped = candidateFrom < bootClampStart ? bootClampStart : candidateFrom;
+          if (clamped > ivaRevalidateSince) {
+            clamped = ivaRevalidateSince < bootClampStart ? bootClampStart : ivaRevalidateSince;
+          }
+          perCiaFechaInicial.set(cia, clamped);
         }
 
         const mergedByKey = new Map<string, AuxiliarContableRecord>();
@@ -3254,7 +3264,7 @@ export default function App() {
               // atraso y el namespace de IVA no revalidaba.
               await fetchAuxiliarContableIvaRange(cia, fechaInicial, fechaFinal, {
                 onDay,
-                revalidateSince: isoDaysBefore(fechaFinal, AUX_PARTIAL_REVALIDATE_DAYS),
+                revalidateSince: ivaRevalidateSince,
               });
               setAuxiliarIvaLoadedCias(prev => ({
                 ...prev,
@@ -3639,46 +3649,55 @@ export default function App() {
         const mergedByKey = new Map<string, RolRecord>();
         for (const r of rolRecords) mergedByKey.set(rolKey(r), r);
         const initialSize = mergedByKey.size;
-        let lastPersistedSize = initialSize;
+        // Flush con throttle temporal: en un refresh force sobre datos ya
+        // hidratados TODO record refetcheado es un objeto nuevo (referencia
+        // distinta) — persistir el array completo por cada ventana (~185 en
+        // rango anual) era una tormenta de writes IDB + setState. El
+        // throttle colapsa ráfagas a 1 write por intervalo; el flush final
+        // (force) garantiza que nada quede sin persistir.
+        let dirty = false;
+        let lastFlushAt = 0;
+        const flush = (force = false) => {
+          if (!dirty) return;
+          const now = Date.now();
+          if (!force && now - lastFlushAt < 3000) return;
+          dirty = false;
+          lastFlushAt = now;
+          const snapshot = Array.from(mergedByKey.values());
+          setRolRecords(snapshot);
+          void saveHeavyRecords('rolRecords', snapshot);
+        };
 
         const records = await fetchRolRange(fechaInicial, fechaFinal, {
           onProgress: progressSlot === 'rol'
             ? (done, total) => setRolBootProgress({ done, total })
             : undefined,
           onPartialBatch: (batch) => {
-            let changed = false;
             for (const r of batch) {
               const k = rolKey(r);
-              if (!mergedByKey.has(k) || mergedByKey.get(k) !== r) {
+              if (mergedByKey.get(k) !== r) {
                 mergedByKey.set(k, r);
-                changed = true;
+                dirty = true;
               }
             }
-            if (!changed) return;
-            const snapshot = Array.from(mergedByKey.values());
-            setRolRecords(snapshot);
-            void saveHeavyRecords('rolRecords', snapshot);
-            lastPersistedSize = snapshot.length;
+            flush();
           },
         });
 
-        // Safety net: si `onPartialBatch` no se disparó (todas las ventanas
-        // vacías) pero records final tiene algo, hacer save una vez.
-        if (records.length > 0 && mergedByKey.size === lastPersistedSize) {
-          let changed = false;
-          for (const r of records) {
-            const k = rolKey(r);
-            if (!mergedByKey.has(k)) {
-              mergedByKey.set(k, r);
-              changed = true;
-            }
-          }
-          if (changed) {
-            const snapshot = Array.from(mergedByKey.values());
-            setRolRecords(snapshot);
-            void saveHeavyRecords('rolRecords', snapshot);
+        // Reconciliación final contra el retorno de fetchRolRange, que ya
+        // viene dedupeado LAST-WINS por ORDEN DE DÍA (slot), no por orden de
+        // llegada: con concurrency 2 una ventana más vieja puede terminar
+        // DESPUÉS y pisar en mergedByKey el snapshot más nuevo de la misma
+        // semana ISO (viaje que ya adquirió factura). `records` es la verdad
+        // para el rango fetcheado; fuera del rango manda lo hidratado.
+        for (const r of records) {
+          const k = rolKey(r);
+          if (mergedByKey.get(k) !== r) {
+            mergedByKey.set(k, r);
+            dirty = true;
           }
         }
+        flush(true);
 
         if (records.length > 0) {
           setRolLoadedKeys(prev => ({ ...prev, [cacheKey]: new Date().toISOString() }));
@@ -3758,42 +3777,49 @@ export default function App() {
         const mergedByKey = new Map<number, ViajeEspecialRecord>();
         for (const v of viajesEspecialesRecords) mergedByKey.set(v.kRenta, v);
         const initialSize = mergedByKey.size;
-        let lastPersistedSize = initialSize;
+        // Flush con throttle temporal (espejo de ROL): en refresh force todo
+        // record refetcheado es referencia nueva — sin throttle cada ventana
+        // no vacía persistía el array completo (tormenta IDB + setState).
+        let dirty = false;
+        let lastFlushAt = 0;
+        const flush = (force = false) => {
+          if (!dirty) return;
+          const now = Date.now();
+          if (!force && now - lastFlushAt < 3000) return;
+          dirty = false;
+          lastFlushAt = now;
+          const snapshot = Array.from(mergedByKey.values());
+          setViajesEspecialesRecords(snapshot);
+          void saveHeavyRecords('viajesEspecialesRecords', snapshot);
+        };
         const records = await fetchViajesEspecialesRange(fechaInicial, fechaFinal, {
           onPartialBatch: (batch) => {
-            let changed = false;
             for (const v of batch) {
               // Fresh-wins (espejo del merge de ROL): un viaje que adquiere
               // `facturaJDE` DEBE actualizar el record hidratado. Con
               // first-wins el viaje quedaba sin factura para siempre → el
               // cruce lo emitía como sintético cxc:especial:viaje: DUPLICANDO
               // el cxc: real de cobranza en Base.
-              if (!mergedByKey.has(v.kRenta) || mergedByKey.get(v.kRenta) !== v) {
+              if (mergedByKey.get(v.kRenta) !== v) {
                 mergedByKey.set(v.kRenta, v);
-                changed = true;
+                dirty = true;
               }
             }
-            if (!changed) return;
-            const snapshot = Array.from(mergedByKey.values());
-            setViajesEspecialesRecords(snapshot);
-            void saveHeavyRecords('viajesEspecialesRecords', snapshot);
-            lastPersistedSize = snapshot.length;
+            flush();
           },
         });
-        if (records.length > 0 && mergedByKey.size === lastPersistedSize) {
-          let changed = false;
-          for (const v of records) {
-            if (!mergedByKey.has(v.kRenta) || mergedByKey.get(v.kRenta) !== v) {
-              mergedByKey.set(v.kRenta, v);
-              changed = true;
-            }
-          }
-          if (changed) {
-            const snapshot = Array.from(mergedByKey.values());
-            setViajesEspecialesRecords(snapshot);
-            void saveHeavyRecords('viajesEspecialesRecords', snapshot);
+        // Safety net SOLO-ADD: fetchViajesEspecialesRange dedup-ea FIRST-wins
+        // (kRenta es id único; duplicado cross-ventana "no debería pasar"),
+        // así que sobrescribir por referencia contra `records` REVERTIRÍA al
+        // snapshot de la ventana más vieja. Sólo agrega llaves que
+        // onPartialBatch no vio (defensa; no debería ocurrir).
+        for (const v of records) {
+          if (!mergedByKey.has(v.kRenta)) {
+            mergedByKey.set(v.kRenta, v);
+            dirty = true;
           }
         }
+        flush(true);
         if (records.length > 0) {
           setViajesEspecialesLoadedKeys(prev => ({ ...prev, [cacheKey]: new Date().toISOString() }));
         }
