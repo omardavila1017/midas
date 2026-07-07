@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   fmtDate,
   fmtRelative,
@@ -31,12 +31,26 @@ describe('formatters', () => {
   });
 
   describe('fmtRelative', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
     it('degrades to "" for invalid dates (falls through to fmtDate guard)', () => {
       expect(fmtRelative('invalid-date-string')).toBe('');
     });
 
     it('reports same-day as "Hoy"', () => {
       expect(fmtRelative(new Date())).toBe('Hoy');
+    });
+
+    it('anchors bare YYYY-MM-DD to local noon like fmtDate ("Hoy", not "Ayer", in the evening)', () => {
+      // 20:00 in America/Mexico_City (UTC-6) on 2026-06-17. Without the
+      // noon anchor the bare string parses as UTC midnight, diff >= 24h,
+      // and today's date rendered as "Ayer".
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-06-18T02:00:00Z'));
+      expect(fmtRelative('2026-06-17')).toBe('Hoy');
+      expect(fmtRelative('2026-06-16')).toBe('Ayer');
     });
 
     it('renders a future date as the absolute date, not "Hace -N días"', () => {

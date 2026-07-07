@@ -153,7 +153,12 @@ export function fmtYearMonthLong(yearMonth: string): string {
 
 /** Relative date: "Hoy", "Ayer", "Hace 3 días" */
 export function fmtRelative(date: Date | string): string {
-  const d = typeof date === 'string' ? new Date(date) : date;
+  // Same local-noon anchor as fmtDate: a bare YYYY-MM-DD parses as UTC
+  // midnight, which diffed against a local `now` classifies today's date
+  // as "Ayer" after 18:00 in America/Mexico_City.
+  const d = typeof date === 'string'
+    ? new Date(/^\d{4}-\d{2}-\d{2}$/.test(date) ? `${date}T12:00:00` : date)
+    : date;
   if (Number.isNaN(d.getTime())) return '';
   const now = new Date();
   const diff = Math.floor((now.getTime() - d.getTime()) / 86_400_000);

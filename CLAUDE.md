@@ -10,7 +10,7 @@ Operational context for any agent or new dev touching `midas` (formerly `flowsen
 
 This is the handoff snapshot for delivering Midas in its current state. **`CLAUDE.md` is the single source of truth** for code/architecture; `AGENTS.md` intentionally points here (no second copy to drift). `DOCS.md` is the index of every doc in the repo (what is current vs. an archived historical snapshot under `docs/archive/`).
 
-- **Verified baseline (run after `npm install`, re-verified 2026-06-15):** `npm run typecheck` clean · `npm test` → 1150 passed / 12 skipped / 0 failed (124 files) · `npm run build` passes with the expected ~789 kB main-chunk warning. See "Before you ship".
+- **Verified baseline (run after `npm install`, re-verified 2026-07-07):** `npm run typecheck` clean · `npm test` → 1231 passed / 12 skipped / 0 failed (130 files) · `npm run build` passes with the expected ~789 kB main-chunk warning. See "Before you ship".
 - **Auth posture:** real backend session at `/api/auth/*` (HttpOnly cookie); the frontend RBAC is **UX only, not a security boundary** — the proxy/backend authorizes `/api/*`. No tokens/passwords in the bundle. See `AUTH.md` + `SECURITY-AUDIT.md` (rotate any historically-exposed secret + purge git history before going live — that operational step is still owned by the deploying team).
 - **Known intentional artifacts shipped (not bugs):**
   - Company exclusion catalog is **empty** (nothing excluded; mechanism preserved). See Risk #9 + `EXCLUSION_RULES.md`.
@@ -544,9 +544,9 @@ Locale and currency are hardcoded `es-MX` / `MXN` in `formatters.ts`. If you eve
 ## Before you ship
 
 - `npm install` first — the repo ships no `node_modules`. (Note: invoking a *global* `tsc`/`vitest` instead of the project's pinned ones can produce false errors, e.g. `TS5101 baseUrl deprecated` from a TS 7.x preview — the project pins TypeScript `^5.5.2` + `ignoreDeprecations` in `tsconfig.json`, so always run via `npm`/`npx` against installed deps.)
-- `npm test` — **baseline 2026-06-15: 124 files, 1150 passed, 12 skipped, 0 failed** (~40s). The 12 skips are the obsolete `it.skip` cases in `canonicalProjection.test.ts` (long-term projection removed). Any new failure is yours.
-- `npm run typecheck` — clean as of 2026-06-15. Any error is yours.
-- `npm run build` — passes as of 2026-06-15, with one expected warning: the `AppCoreWithProviders` chunk is ~771 kB (>500 kB Vite threshold). Code is already split into vendor-react / vendor-charts / per-tab chunks; the main app chunk is the remaining floor. Not a blocker.
+- `npm test` — **baseline 2026-07-07: 130 files, 1231 passed, 12 skipped, 0 failed** (~40s). The 12 skips are intentional and spread across 3 files (each carries its inline reason): 5 in `canonicalProjection.test.ts` (long-term projection removed), 6 in `CollectionProjection.test.tsx` (removed UI: source-filter chips / cruce-banco banner), 1 in `TaxDashboard.test.tsx`. Any new failure is yours.
+- `npm run typecheck` — clean as of 2026-07-07. Any error is yours.
+- `npm run build` — passes as of 2026-07-07, with one expected warning: the `AppCoreWithProviders` chunk is ~789 kB (>500 kB Vite threshold). Code is already split into vendor-react / vendor-charts / per-tab chunks; the main app chunk is the remaining floor. Not a blocker.
 - Dev-dependency audit debt (no prod impact — `npm audit --omit=dev` is clean): the remaining `npm audit` findings require major upgrades of `vite` (5→8) and `vitest` (2→4); deferred deliberately. Do NOT run `npm audit fix --force`.
 - Smoke `npm run dev` against real JDE data (or empty store) for the path you touched.
 - For visual changes, toggle dark mode (add `dark` class to `<html>` via DevTools) and verify your component reads correctly. The splash, dashboard, planning grid, charts, CommandPalette (⌘K), modals, and form inputs should all be coherent.
