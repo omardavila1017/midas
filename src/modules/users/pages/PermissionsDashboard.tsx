@@ -13,6 +13,7 @@ import PageHeader from '../../../components/ui/PageHeader';
 import { useAuth } from '../../../contexts/AuthContext';
 import { PERMISSION_GROUPS, GRANTABLE_TABS, tabLabel } from '../../../config/appTabs';
 import {
+  getHardcodedFloorTabs,
   listManagedUsers,
   setPermission,
   setPermissions,
@@ -49,9 +50,17 @@ export default function PermissionsDashboard() {
     [users, selectedEmail],
   );
 
-  const grantedSet = useMemo(
-    () => new Set(selected?.permissions ?? []),
+  // Piso hardcodeado del JSON (`authLocalUsers.json`): módulos que este usuario
+  // SIEMPRE ve, en todos los navegadores. Se muestran forzados ON y no editables
+  // aquí (para quitarlos se edita el JSON) — mismo trato que un admin.
+  const floorSet = useMemo(
+    () => new Set(getHardcodedFloorTabs(selected?.email ?? null)),
     [selected],
+  );
+
+  const grantedSet = useMemo(
+    () => new Set([...(selected?.permissions ?? []), ...floorSet]),
+    [selected, floorSet],
   );
 
   const handleToggle = (tab: (typeof GRANTABLE_TABS)[number], enabled: boolean) => {
@@ -203,6 +212,7 @@ export default function PermissionsDashboard() {
                       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                         {group.tabs.map((tab) => {
                           const checked = grantedSet.has(tab);
+                          const forced = floorSet.has(tab);
                           return (
                             <label
                               key={tab}
@@ -212,10 +222,21 @@ export default function PermissionsDashboard() {
                                 background: checked ? 'var(--gray-50)' : 'transparent',
                               }}
                             >
-                              <span style={{ color: 'var(--gray-800)' }}>{tabLabel(tab)}</span>
+                              <span className="flex items-center gap-1.5" style={{ color: 'var(--gray-800)' }}>
+                                {tabLabel(tab)}
+                                {forced && (
+                                  <span
+                                    className="rounded px-1.5 py-0.5 text-[10px] font-semibold"
+                                    style={{ background: 'var(--primary-muted)', color: 'var(--primary)' }}
+                                    title="Módulo fijo del roster (authLocalUsers.json). Se edita en el JSON, no aquí."
+                                  >
+                                    Fijo
+                                  </span>
+                                )}
+                              </span>
                               <PermissionToggle
                                 checked={checked}
-                                disabled={!canEdit}
+                                disabled={!canEdit || forced}
                                 label={`Acceso a ${tabLabel(tab)}`}
                                 onChange={(enabled) => handleToggle(tab, enabled)}
                               />

@@ -9,6 +9,7 @@ import {
   listManagedUsers,
   removeUser,
   setPermission,
+  setPermissions,
   setUserRole,
   upsertUser,
 } from './accessControlStore';
@@ -78,6 +79,25 @@ describe('canAccess', () => {
     expect(canAccess(SEEDED_USER, 'user', 'collections')).toBe(true);
     expect(canAccess(SEEDED_USER, 'user', 'venta')).toBe(true);
     expect(canAccess(SEEDED_USER, 'user', 'taxes')).toBe(false);
+  });
+
+  it('the hardcoded JSON permissions are an authoritative floor a stale registry cannot drop', () => {
+    // Reproduce el bug de Blanca: un registro por-navegador stale/tocado que
+    // dejó al usuario sin sus módulos. El piso del JSON se auto-repara.
+    setPermissions(SEEDED_USER, []);
+    expect(canAccess(SEEDED_USER, 'user', 'netflow')).toBe(true);
+    expect(canAccess(SEEDED_USER, 'user', 'collections')).toBe(true);
+    expect(canAccess(SEEDED_USER, 'user', 'venta')).toBe(true);
+    expect([...getGrantedTabs(SEEDED_USER)].sort()).toEqual(
+      ['clients', 'collections', 'fideicomiso', 'netflow', 'venta'].sort(),
+    );
+  });
+
+  it('the portal can still ADD extras on top of the hardcoded floor', () => {
+    setPermission(SEEDED_USER, 'taxes', true);
+    expect(canAccess(SEEDED_USER, 'user', 'taxes')).toBe(true);
+    // El piso hardcodeado sigue intacto junto al extra.
+    expect(canAccess(SEEDED_USER, 'user', 'netflow')).toBe(true);
   });
 
   it('limits a user to granted tabs and blocks admin-only tabs', () => {

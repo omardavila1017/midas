@@ -718,6 +718,23 @@ export default function App() {
   // RBAC: identidad + permisos del usuario actual. `can(tab)` decide qué
   // módulos se muestran. Ver src/contexts/AuthContext.tsx y src/config/roles.ts.
   const { can: canAccessTab, role: userRole, email: userEmail } = useAuth();
+  // Datasets (APIs JDE/TRESS/bancos) que el usuario REALMENTE necesita = unión
+  // de `TAB_DATASETS` sobre los tabs a los que tiene acceso. Un admin ve todos
+  // los tabs → todos los datasets; un `user` sólo baja las APIs de sus módulos
+  // (no cargar lo que no puede ver — ahorra red y memoria). `AppCore` sólo monta
+  // tras el AuthGate, así que `canAccessTab` ya es correcto en el primer render.
+  const allowedDatasets = useMemo(() => {
+    const set = new Set<DatasetKey>();
+    for (const tab of Object.keys(TAB_DATASETS) as TabId[]) {
+      if (!canAccessTab(tab as AppTabId)) continue;
+      for (const dataset of TAB_DATASETS[tab] ?? []) set.add(dataset);
+    }
+    return set;
+  }, [canAccessTab]);
+  // Ref espejo para leer el set actual desde callbacks estables (requestDatasets,
+  // boot effects de bancos) sin invalidar su identidad en cada cambio de auth.
+  const allowedDatasetsRef = useRef(allowedDatasets);
+  useEffect(() => { allowedDatasetsRef.current = allowedDatasets; }, [allowedDatasets]);
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
   // Mobile navigation drawer (off-canvas). Desktop (lg+) renders the inline
   // section nav + sub-tab strip; below lg the sections collapse behind a
@@ -945,11 +962,15 @@ export default function App() {
     auxiliar: 'idle',
   });
   const requestDatasets = useCallback((keys: DatasetKey[]) => {
-    if (keys.length === 0) return;
+    // Sólo se piden datasets que el usuario necesita según sus módulos visibles.
+    // Un `user` sin acceso a un módulo NO dispara la API de ese módulo.
+    const allowed = allowedDatasetsRef.current;
+    const filtered = keys.filter(key => allowed.has(key));
+    if (filtered.length === 0) return;
     setRequestedDatasets(prev => {
       let changed = false;
       const next = new Set(prev);
-      for (const key of keys) {
+      for (const key of filtered) {
         if (!next.has(key)) {
           next.add(key);
           changed = true;
@@ -4541,6 +4562,12 @@ export default function App() {
     if (banksBootDone.current) return;
     if (!storeHydrated) return;
     if (!bankCacheLoaded) return;
+    // Usuario sin ningún módulo que use bancos → no primar ni revalidar la API.
+    if (!allowedDatasetsRef.current.has('banks')) {
+      banksBootDone.current = true;
+      setBootSlot('banks', 'done');
+      return;
+    }
     banksBootDone.current = true;
     // Cache-first boot (stale-while-revalidate, like every fast SPA): bank
     // statements are persisted in IDB/localStorage and already hydrated here
@@ -4578,6 +4605,7 @@ export default function App() {
   useEffect(() => {
     if (bankRangeBackfillDone.current) return;
     if (bootStatus.banks !== 'done') return;
+    if (!allowedDatasetsRef.current.has('banks')) return;
     bankRangeBackfillDone.current = true;
     void refreshBankStatementsRange(false, true);
   }, [bootStatus.banks, refreshBankStatementsRange]);

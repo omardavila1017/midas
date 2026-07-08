@@ -85,6 +85,32 @@ export function effectiveRole(email: string | null, sessionRole: Role): Role {
   return registryRole ?? sessionRole;
 }
 
+/**
+ * Permisos HARDCODEADOS del roster (`authLocalUsers.json`) para un `user`, o `[]`
+ * si el correo no está en el JSON, es admin, o el modo local está deshabilitado.
+ *
+ * Es un **piso autoritativo**: mismo blindaje que `hardcodedRoleFor` da al rol
+ * admin, pero para los módulos de un `user`. El registro por-navegador
+ * (`localStorage`) sólo se SIEMBRA una vez por versión, así que un registro
+ * stale/parcial (sembrado antes de un cambio en el JSON, o tocado en el portal)
+ * dejaba a un usuario sin acceso a un módulo que el JSON sí le concede — sin
+ * auto-reparación. Al tratar el JSON como piso, un `user` SIEMPRE ve sus módulos
+ * hardcodeados en TODOS los navegadores; el portal de Permisos sólo puede
+ * AGREGAR extras encima (no quitar el piso — para eso se edita el JSON).
+ */
+export function getHardcodedFloorTabs(email: string | null): AppTabId[] {
+  if (!email) return [];
+  const key = normalizeEmail(email);
+  for (const u of listLocalUsers()) {
+    if (u.email === key) {
+      // Un admin del roster ve todo — no necesita piso de permisos.
+      if (coerceRole(u.role) === 'admin') return [];
+      return sanitizePermissions(u.permissions);
+    }
+  }
+  return [];
+}
+
 function storage(): Storage | undefined {
   try {
     return window.localStorage;
@@ -213,11 +239,20 @@ export function getRegistryRole(email: string): ManagedRole | null {
   return loadRegistry()[normalizeEmail(email)]?.role ?? null;
 }
 
-/** Tabs concedidos a un correo (vacío si es admin o no existe). */
+/**
+ * Tabs concedidos a un correo (vacío si es admin — ve todo por otra vía).
+ *
+ * Unión de dos fuentes: el **piso hardcodeado** del JSON (`getHardcodedFloorTabs`,
+ * autoritativo/auto-reparable) y los **extras del registro** por-navegador (lo
+ * que un admin agregó en el portal de Permisos). Así un `user` nunca pierde
+ * acceso a un módulo que el JSON le concede aunque su registro esté stale.
+ */
 export function getGrantedTabs(email: string): AppTabId[] {
   const stored = loadRegistry()[normalizeEmail(email)];
-  if (!stored || stored.role === 'admin') return [];
-  return [...stored.permissions];
+  if (stored?.role === 'admin') return [];
+  const floor = getHardcodedFloorTabs(email);
+  const registryTabs = stored?.role === 'user' ? stored.permissions : [];
+  return [...new Set<AppTabId>([...floor, ...registryTabs])];
 }
 
 /**
