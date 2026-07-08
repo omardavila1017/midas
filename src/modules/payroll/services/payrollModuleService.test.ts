@@ -11,6 +11,7 @@ import {
   lastNMonths,
   mergeNominaBatch,
   nominaCacheKey,
+  payrollTypeClass,
   refineBatch,
   refineCashTreatment,
   summarizeByConcept,
@@ -412,6 +413,33 @@ describe('computeKpis', () => {
   });
 });
 
+describe('payrollTypeClass', () => {
+  it('mapea los valores reales del API a su clase de pago', () => {
+    // Tipo 1 (pago semanal): "Semanal" y "Operadores".
+    expect(payrollTypeClass('Semanal')).toBe('semanal');
+    expect(payrollTypeClass('Operadores')).toBe('semanal');
+    // Tipo 3 (pago quincenal): "Quincenal" y "Ejecutivos".
+    expect(payrollTypeClass('Quincenal')).toBe('quincenal');
+    expect(payrollTypeClass('Ejecutivos')).toBe('quincenal');
+  });
+  it('tolera acentos, mayúsculas y variantes de string', () => {
+    expect(payrollTypeClass('QUINCENA Y EJECUTIVOS')).toBe('quincenal');
+    expect(payrollTypeClass('  Semana y Operadores ')).toBe('semanal');
+    expect(payrollTypeClass('Nómina Quincenal')).toBe('quincenal');
+  });
+  it('acepta el enum numérico y nulos', () => {
+    expect(payrollTypeClass(1)).toBe('semanal');
+    expect(payrollTypeClass(3)).toBe('quincenal');
+    expect(payrollTypeClass('1')).toBe('semanal');
+    expect(payrollTypeClass('3')).toBe('quincenal');
+    expect(payrollTypeClass(null)).toBe('unknown');
+    expect(payrollTypeClass('')).toBe('unknown');
+  });
+  it('marca lo no reconocido como especial (no lo fuerza a una clase)', () => {
+    expect(payrollTypeClass('Vales Despensa')).toBe('especial');
+  });
+});
+
 describe('filterRecords', () => {
   const records = [
     rec({ cia: '00001', year: 2026, month: 5, payrollType: 'Semanal' }),
@@ -426,5 +454,23 @@ describe('filterRecords', () => {
   });
   it('filtra por month', () => {
     expect(filterRecords(records, { month: 4 })).toHaveLength(1);
+  });
+  it('filtra por CLASE tolerante — quincena ya NO sale en cero con valores reales', () => {
+    const real = [
+      rec({ payrollType: 'Operadores' }),
+      rec({ payrollType: 'Quincenal' }),
+      rec({ payrollType: 'Ejecutivos' }),
+    ];
+    expect(filterRecords(real, { payrollTypeClass: 'quincenal' })).toHaveLength(2);
+    expect(filterRecords(real, { payrollTypeClass: 'semanal' })).toHaveLength(1);
+  });
+  it('filtra por periodo y fecha de pago (desglose)', () => {
+    const scoped = [
+      rec({ payrollPeriod: 22, paymentDate: '2026-06-04' }),
+      rec({ payrollPeriod: 23, paymentDate: '2026-06-11' }),
+    ];
+    expect(filterRecords(scoped, { payrollPeriod: 22 })).toHaveLength(1);
+    expect(filterRecords(scoped, { payrollPeriod: '22' })).toHaveLength(1);
+    expect(filterRecords(scoped, { paymentDate: '2026-06-11' })).toHaveLength(1);
   });
 });

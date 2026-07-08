@@ -525,6 +525,38 @@ export function computeKpis(records: PayrollCostRecord[]): PayrollKpis {
 }
 
 /**
+ * Clase de tipo de nómina, tolerante al string CRUDO que emite TRESS.
+ *
+ * `payrollType` en el record es el `TipoNomina` sin normalizar del API (ver
+ * `mapNominaRow` en `jde.ts`). Los valores reales son "Semanal" / "Operadores"
+ * (tipo 1, pago semanal) y "Quincenal" / "Ejecutivos" (tipo 3, pago quincenal),
+ * NO los literales antiguos `'Semanal'`/`'Quincenal'` que el filtro comparaba
+ * por igualdad estricta — por eso quincena mostraba cero. Clasificamos por
+ * substring des-acentuado, mismo patrón que `loadClientsCatalog`.
+ */
+export type PayrollTypeClass = 'semanal' | 'quincenal' | 'especial' | 'unknown';
+
+export function payrollTypeClass(raw: string | number | null | undefined): PayrollTypeClass {
+  if (raw == null) return 'unknown';
+  if (typeof raw === 'number') {
+    if (raw === 1) return 'semanal';
+    if (raw === 3) return 'quincenal';
+    return 'unknown';
+  }
+  const s = String(raw)
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .trim();
+  if (!s) return 'unknown';
+  if (s === '1') return 'semanal';
+  if (s === '3') return 'quincenal';
+  if (/quincen|ejecutiv/.test(s)) return 'quincenal';
+  if (/seman|operador/.test(s)) return 'semanal';
+  return 'especial';
+}
+
+/**
  * Filtros para el dashboard. Cualquier valor falsy se interpreta como "sin
  * filtro" (no restringe).
  */
@@ -532,7 +564,14 @@ export interface PayrollFilter {
   cia?: string;
   year?: number;
   month?: number;
+  /** Empata el string CRUDO exacto de `payrollType` (uso legado/tests). */
   payrollType?: string;
+  /** Empata por CLASE tolerante (semanal/quincenal) — preferido en la UI. */
+  payrollTypeClass?: 'semanal' | 'quincenal';
+  /** Empata el número de periodo (coerción a string). */
+  payrollPeriod?: string | number;
+  /** Empata la fecha de pago exacta (desglose por periodo). */
+  paymentDate?: string;
   cashTreatment?: PayrollCashTreatment;
 }
 
@@ -542,6 +581,9 @@ export function filterRecords(records: PayrollCostRecord[], f: PayrollFilter): P
     if (f.year && r.year !== f.year) return false;
     if (f.month && r.month !== f.month) return false;
     if (f.payrollType && r.payrollType !== f.payrollType) return false;
+    if (f.payrollTypeClass && payrollTypeClass(r.payrollType) !== f.payrollTypeClass) return false;
+    if (f.payrollPeriod != null && String(r.payrollPeriod) !== String(f.payrollPeriod)) return false;
+    if (f.paymentDate && r.paymentDate !== f.paymentDate) return false;
     if (f.cashTreatment && r.cashTreatment !== f.cashTreatment) return false;
     return true;
   });

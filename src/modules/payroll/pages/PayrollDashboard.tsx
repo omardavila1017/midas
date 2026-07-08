@@ -24,6 +24,7 @@ import {
   AlertTriangle,
   BarChart3,
   Building2,
+  CalendarClock,
   LayoutGrid,
   Loader2,
   PieChart,
@@ -51,6 +52,7 @@ const PayrollConceptView = lazy(() => import('../components/PayrollConceptView')
 const PayrollTrendView = lazy(() => import('../components/PayrollTrendView'));
 const PayrollForecastView = lazy(() => import('../components/PayrollForecastView'));
 const PayrollAlertsView = lazy(() => import('../components/PayrollAlertsView'));
+const PayrollPeriodsView = lazy(() => import('../components/PayrollPeriodsView'));
 const PayrollTablesView = lazy(() => import('../components/PayrollTablesView'));
 
 /** Mes actual + N-1 anteriores. Refresh jala este histórico para proyectar. */
@@ -97,7 +99,7 @@ const MONTHS = [
   'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre',
 ];
 
-type SubTabId = 'resumen' | 'empresa' | 'conceptos' | 'tendencia' | 'predictivo' | 'alertas' | 'detalle';
+type SubTabId = 'resumen' | 'empresa' | 'conceptos' | 'tendencia' | 'predictivo' | 'alertas' | 'periodos' | 'detalle';
 
 interface SubTabDef {
   id: SubTabId;
@@ -114,6 +116,7 @@ const SUB_TABS: SubTabDef[] = [
   { id: 'tendencia', label: 'Tendencia', icon: TrendingUp, scope: 'history' },
   { id: 'predictivo', label: 'Predictivo', icon: Sparkles, scope: 'history' },
   { id: 'alertas', label: 'Alertas', icon: AlertTriangle, scope: 'history' },
+  { id: 'periodos', label: 'Periodos', icon: CalendarClock, scope: 'snapshot' },
   { id: 'detalle', label: 'Detalle', icon: Table, scope: 'snapshot' },
 ];
 
@@ -152,24 +155,28 @@ export default function PayrollDashboard({
   const ciaFilter = idEmpresa === 99
     ? (companyCode && companyCode !== 'all' ? companyCode : undefined)
     : normalizeCia(idEmpresa);
-  const tipoFilter = tipoNomina === 99 ? undefined : (tipoNomina === 1 ? 'Semanal' : 'Quincenal');
+  // Filtro por CLASE tolerante (no por string exacto): TRESS emite "Semanal"/
+  // "Operadores" (tipo 1) y "Quincenal"/"Ejecutivos" (tipo 3), así que comparar
+  // contra 'Semanal'/'Quincenal' literal dejaba quincena en cero.
+  const tipoClassFilter: 'semanal' | 'quincenal' | undefined =
+    tipoNomina === 99 ? undefined : (tipoNomina === 1 ? 'semanal' : 'quincenal');
 
-  // Snapshot del mes: alimenta Resumen / Comparativo / Conceptos / Detalle.
+  // Snapshot del mes: alimenta Resumen / Comparativo / Conceptos / Periodos / Detalle.
   const monthSnapshot = useMemo(
     () => filterRecords(nominaRecords, {
       cia: ciaFilter,
       year: anio,
       month: mes,
-      payrollType: tipoFilter,
+      payrollTypeClass: tipoClassFilter,
     }),
-    [nominaRecords, ciaFilter, anio, mes, tipoFilter],
+    [nominaRecords, ciaFilter, anio, mes, tipoClassFilter],
   );
 
   // Historia completa (cía + tipo, todos los meses): Tendencia / Predictivo /
   // Alertas. No filtra por año/mes a propósito.
   const historyFiltered = useMemo(
-    () => filterRecords(nominaRecords, { cia: ciaFilter, payrollType: tipoFilter }),
-    [nominaRecords, ciaFilter, tipoFilter],
+    () => filterRecords(nominaRecords, { cia: ciaFilter, payrollTypeClass: tipoClassFilter }),
+    [nominaRecords, ciaFilter, tipoClassFilter],
   );
 
   /**
@@ -436,6 +443,7 @@ export default function PayrollDashboard({
         {activeTab === 'tendencia' && <PayrollTrendView records={historyFiltered} />}
         {activeTab === 'predictivo' && <PayrollForecastView records={historyFiltered} />}
         {activeTab === 'alertas' && <PayrollAlertsView records={historyFiltered} />}
+        {activeTab === 'periodos' && <PayrollPeriodsView records={monthSnapshot} />}
         {activeTab === 'detalle' && <PayrollTablesView records={monthSnapshot} />}
       </Suspense>
 
