@@ -26,6 +26,74 @@ No requiere trabajo de backend. Se documenta para contexto.
 
 > **Lo único que el backend podría querer ofrecer aquí** (opcional, mejora futura): que la propia carga JDE/TRESS la haga el servidor (un endpoint que entregue el snapshot ya procesado) en vez de que cada navegador la reconstruya. No es requisito de esta fase.
 
+### 1.bis — Snapshot compartido (arranque <1 min + cero deriva) — cliente LISTO-Y-APAGADO
+
+Esta es la mejora del párrafo anterior, ahora aterrizada. Ataca de raíz que el
+arranque tarde ~5 min (peor caso 12–30 min): con clear-on-entry, **cada** navegador
+reconstruye ~2 años de datos con **~5,000–7,000 requests a JDE** (~60s c/u, tope 10
+concurrentes). Dominadores: Auxiliar Contable (~3,500 reqs), Cobranza (~700), Bancos
+(~730), ROL (día-por-día). Y como cada navegador reconstruye por su cuenta, derivan
+entre sí (la razón por la que clear-on-entry existe).
+
+**La solución:** un builder server-side arma el dataset UNA vez y publica un
+**snapshot atómico**; cada navegador **DESCARGA el MISMO snapshot** (segundos, no miles
+de llamadas a JDE). Server-fed + escritor único + versionado atómico ⇒ **cero deriva**.
+Regla de oro (heredada de la reversión de `cacheRemoteSync`): **el cliente NUNCA escribe
+el cache compartido**; sólo lee.
+
+**Ya construido en el front (apagado):**
+- Cliente SOLO-LECTURA `src/services/snapshotRemoteSync.ts` (namespace `cache`):
+  `getSnapshotPointer()`, `hydrateHeavyStoreFromSnapshot(pointer)`, marker local
+  `midas.snapshot.version`. Materializa a IDB con los writers existentes
+  (`saveHeavyRecords` / `saveBankJdeStatementsToIDB`).
+- Selector de arranque en `AppCore.tsx` (efecto clear-on-entry): si hay snapshot →
+  descarga a IDB y **no borra**; si no → clear-on-entry de hoy. El resto del boot no
+  cambia (reusa `hydrateDataset` + el delta forward de los auto-fetch).
+- **Fase 0 (ya activa, sin backend):** ROL y Auxiliar salen del gate del splash y
+  cargan detrás del dashboard (`GATING_BOOT_IDS`).
+- Kill switch: requiere `VITE_STORE_ENABLED=true`; `VITE_SNAPSHOT_ENABLED='false'`
+  apaga SOLO el snapshot (deja viva la sync de planeación). OFF ⇒ comportamiento
+  idéntico a hoy.
+
+**Contrato que debe cumplir el builder (namespace `cache`):**
+```
+GET /api/store/cache/snapshot.current →
+  { version, builtAt, schema, collections: { <col>: { shardCount, total } } }
+GET /api/store/cache/snapshot.{version}.{collection}.{shardIndex} → { value: Record[] }
+```
+- `{collection}` ∈ las 10 `HEAVY_KEYS` (`cxpRecords`, `cobranzaRecords`,
+  `cobranzaPayments`, `comprasRecords`, `pagoProveedorRecords`, `nominaRecords`,
+  `rolRecords`, `viajesEspecialesRecords`, `auxiliarContableRecords`,
+  `auxiliarIvaRecords`) + `bankJdeStatements`. NUNCA `bankSupplementalStatements`.
+- **Sharding obligatorio ~2–3 MB serializado por shard** (el proxy `api/_lib/apiProxy.ts`
+  bufferiza el body y las respuestas serverless topan ~4.5 MB). 90 MB ⇒ ~40–60 shards.
+- **Atomicidad:** escribir TODOS los shards de la versión `V` y **después** voltear
+  `snapshot.current` a `V`. Nunca se publica una versión a medio armar.
+- **`version`:** opaco y monotónico; evitar `/` (los `:` se encodean OK). El cliente
+  salta la re-descarga si `version` coincide con el marker local, y re-hidrata el
+  snapshot completo al cambiar (⇒ convergencia entre navegadores).
+- **Cadencia:** reconstruir **cada 30 min**. El delta chico del cliente (forward desde
+  `builtAt`) cubre lo que Tesorería subió desde el último build.
+
+**Quién construye el snapshot (decisión pendiente):**
+- (a) **Recomendado:** el backend de Omar (STORE_UPSTREAM) contra la BD directa —
+  arma los 90 MB en segundos/minutos, escritor único nativo, sin límite serverless.
+- (b) Cron serverless en este repo: **descartado** como primario (una función topa
+  `maxDuration=300`; un build frío son ~5,000 requests JDE → imposible en una
+  invocación).
+- (c) **Puente interino:** una sesión "publicadora" designada (kiosco/headless) corre
+  el fetch completo una vez y publica el snapshot completo atómico. NO reintroduce la
+  deriva de `cacheRemoteSync` (aquella venía de muchos navegadores escribiendo días
+  parciales; aquí es un escritor único de snapshot completo). Requiere una variante
+  write-capable mínima del sync (solo-publicador, fuera del bundle del cliente).
+
+> **Pendiente de refinamiento (cuando el builder exista):** acotar la revalidación de
+> días recientes de los loaders (`revalidateSince`/`revalidateMonths`/partial-day) en
+> modo snapshot, para que el delta nunca pise un día que trajo el snapshot con un
+> fetch vivo vacío. Hoy la convergencia la garantiza la re-hidratación completa al
+> cambiar de versión (cada 30 min); el refinamiento reduce la ventana de deriva
+> transitoria por-navegador a ~0.
+
 ---
 
 ## 2. Clase B — Modelo de datos de escenarios / planeación financiera
@@ -168,8 +236,11 @@ ManagedUser { email: string; role: 'admin' | 'user'; permissions: AppTabId[] }
 ---
 
 ## 7. Entregables que el equipo debe estimar
+- [ ] **Builder del snapshot Clase A (§1.bis)** — arma el dataset y publica el pointer
+      + shards en el namespace `cache` cada 30 min (recomendado: backend de Omar contra
+      la BD directa). El cliente lector ya está construido y apagado. **Éste es el
+      entregable que baja el arranque a <1 min y mata la deriva entre navegadores.**
 - [ ] Tablas de §2 (6 colecciones) en la BD.
 - [ ] APIs de §3 (insert/consult/update) — elegir Opción 1 o 2.
 - [ ] Esquema de auth para `/api/store/*` (o el equivalente REST).
-- [ ] (Opcional/futuro) endpoint server-side que entregue el snapshot JDE/TRESS ya procesado.
 - [ ] (Futuro) usuarios/roles + auth real server-side.

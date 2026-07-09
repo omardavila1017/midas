@@ -110,6 +110,7 @@ export const MIDAS_STORAGE_REGISTRY: StorageEntry[] = [
 
   // ── Boot / storage health ───────────────────────────────────────────────
   { key: 'midas.cache.loadedAt', scope: 'localStorage', owner: 'AppCore.tsx', description: 'Timestamp ISO de la última limpieza+recarga de caches JDE/TRESS (clear-on-entry). Lo lee el boot para decidir si re-limpiar según la ventana VITE_CACHE_MAX_AGE_MIN (default 0 = cada ingreso).' },
+  { key: 'midas.snapshot.version', scope: 'localStorage', owner: 'services/snapshotRemoteSync.ts', description: 'Versión del snapshot compartido JDE/TRESS ya materializada en IDB. El boot salta la re-descarga si coincide con el pointer server-side (snapshot.current); al cambiar la versión, re-hidrata el snapshot completo (convergencia entre navegadores).' },
   { key: 'midas.boot.inflight', scope: 'localStorage', owner: 'services/storageHealthGuard.ts', description: 'Flag de boot en curso: se setea al arrancar y se limpia al terminar; si sobrevive a un boot previo señala crash durante el arranque.' },
   { key: 'midas.boot.purgedReason', scope: 'localStorage', owner: 'services/storageHealthGuard.ts', description: 'Motivo de la última purga selectiva del guard de salud de storage (diagnóstico).' },
   { key: 'midas.boot.purgedAt', scope: 'localStorage', owner: 'services/storageHealthGuard.ts', description: 'Timestamp de la última purga del guard de salud de storage.' },

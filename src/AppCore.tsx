@@ -5,6 +5,12 @@ import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './domai
 import { MidasStore, loadLightStore, saveLightStore, CXPRecord, type AuxiliarIvaLoadedCiaMeta } from './domain/persistence';
 import { CACHE_LOADED_AT_KEY, clearCacheStorageOnEntry } from './domain/storageRegistry';
 import { loadHeavyRecords, saveHeavyRecords, type HeavyKey } from './services/heavyStoreIDB';
+import {
+  getLocalSnapshotVersion,
+  getSnapshotPointer,
+  hydrateHeavyStoreFromSnapshot,
+  isSnapshotEnabled,
+} from './services/snapshotRemoteSync';
 import { recomputeClientCreditDaysFromCobranza } from './domain/collectionCalendarEngine';
 import { comprasToPurchaseReceipts } from './domain/comprasToPurchaseReceipts';
 import { compraEstado } from './domain/comprasInsights';
@@ -273,6 +279,26 @@ const BANK_STORAGE_SAVE_DEBOUNCE_MS = 1200;
 // más UNA vez por carga de página (no por remount del componente raíz). Un
 // reload del navegador es un nuevo contexto JS → vuelve a false → re-limpia.
 let cacheEntryHandled = false;
+// Boot slots que RETIENEN el splash. ROL (día-por-día, "toma horas") y Auxiliar
+// Contable (~3,500 requests, "20-30 min" en frío) son los 2 datasets más pesados;
+// se dejan cargar EN SEGUNDO PLANO detrás del dashboard en vez de gatear el splash
+// (Fase 0 del plan de arranque <1min). Siguen apareciendo en la lista del splash y
+// alimentando el punto de "Salud de datos" — su `bootStatus`/`datasetStatus` se
+// sigue actualizando — sólo que `isBooted` no los espera. `auxiliarIva` ya no
+// gateaba. En modo snapshot (ver clear-on-entry selector) TODOS los slots cubiertos
+// se marcan 'done' tras la descarga, así que este subset sólo muerde el path
+// puro-local / sin snapshot.
+const GATING_BOOT_IDS = new Set<string>([
+  'catalog', 'companies', 'banks', 'cxp', 'cobranza', 'compras', 'pagos', 'nomina', 'projection',
+]);
+// Slots que el snapshot compartido cubre. En modo snapshot (ver el selector de
+// clear-on-entry) se marcan 'done' apenas termina la descarga y se CONGELAN ahí:
+// los auto-fetch delta corren detrás del dashboard sin re-abrir el gate del splash.
+// `catalog`/`companies`/`banks`/`projection` NO están aquí — tienen su propio path
+// rápido (cache-first / first-paint).
+const SNAPSHOT_COVERED_SLOTS = new Set<string>([
+  'cxp', 'cobranza', 'compras', 'pagos', 'nomina', 'rol', 'auxiliar',
+]);
 const COBRANZA_AUTO_REFRESH_TTL_MS = 6 * 60 * 60 * 1000;
 const CXP_AUTO_REFRESH_TTL_MS = 6 * 60 * 60 * 1000;
 const COMPRAS_AUTO_REFRESH_TTL_MS = 6 * 60 * 60 * 1000;
@@ -942,8 +968,16 @@ export default function App() {
   const [, setCxpBootProgress] = useState<{ done: number; total: number } | null>(null);
   const [, setCobranzaBootProgress] = useState<{ done: number; total: number } | null>(null);
   const [, setRolBootProgress] = useState<{ done: number; total: number } | null>(null);
+  // Modo snapshot: cuando el arranque hidrató desde el snapshot compartido, los
+  // slots cubiertos quedan 'done' y no deben re-abrirse por los auto-fetch delta
+  // (que corren detrás del dashboard). Ref (síncrono) para que el guard de
+  // `setBootSlot` lo lea sin re-crear el callback.
+  const snapshotActiveRef = useRef(false);
   const setBootSlot = useCallback(
     (slot: 'catalog' | 'companies' | 'banks' | 'cxp' | 'cobranza' | 'compras' | 'pagos' | 'nomina' | 'rol' | 'auxiliar' | 'projection', status: BootTaskStatus) => {
+      // En modo snapshot los slots cubiertos están congelados en 'done': ignoramos
+      // cualquier transición de los auto-fetch delta para no re-gatear el splash.
+      if (snapshotActiveRef.current && SNAPSHOT_COVERED_SLOTS.has(slot)) return;
       setBootStatus(prev => (prev[slot] === status ? prev : { ...prev, [slot]: status }));
     },
     [],
@@ -1715,6 +1749,37 @@ export default function App() {
     let cancelled = false;
     const run = async () => {
       try {
+        // ── Rama SNAPSHOT ──────────────────────────────────────────────────
+        // Si el store está encendido y hay un snapshot compartido, se DESCARGA a
+        // IDB (no se borra nada): todos los navegadores convergen al MISMO dato
+        // (cero deriva) y el arranque es una descarga, no un storm de miles de
+        // llamadas a JDE (<1 min). El delta reciente lo cubren los auto-fetch
+        // (forward desde `builtAt`), que corren detrás del dashboard.
+        if (isSnapshotEnabled()) {
+          const pointer = await getSnapshotPointer();
+          if (pointer) {
+            if (pointer.version !== getLocalSnapshotVersion()) {
+              await hydrateHeavyStoreFromSnapshot(pointer);
+            } else {
+              // eslint-disable-next-line no-console
+              console.info(`[snapshot] version ${pointer.version} ya en IDB — se omite la re-descarga`);
+            }
+            // Congelar los slots cubiertos en 'done': el dato ya está en IDB; el
+            // delta corre detrás del dashboard sin re-gatear el splash. El guard
+            // de setBootSlot (via snapshotActiveRef) mantiene el congelado.
+            setBootStatus(prev => ({
+              ...prev,
+              cxp: 'done', cobranza: 'done', compras: 'done',
+              pagos: 'done', nomina: 'done', rol: 'done', auxiliar: 'done',
+            }));
+            snapshotActiveRef.current = true;
+            // eslint-disable-next-line no-console
+            console.info('[snapshot] modo snapshot activo — arranque desde el snapshot compartido');
+            return; // NO borrar el cache local
+          }
+          // Store ON pero sin snapshot publicado todavía → cae al clear-on-entry.
+        }
+        // ── Rama FALLBACK (OFF / sin snapshot): comportamiento de hoy ────────
         const raw = (import.meta.env.VITE_CACHE_MAX_AGE_MIN as string | undefined) ?? '0';
         const maxAgeMin = Number.parseInt(raw, 10);
         let fresh = false;
@@ -1737,8 +1802,11 @@ export default function App() {
     };
     // Tope duro: aunque las clears tienen sus propios timeouts de apertura de
     // IDB (resuelven solas), un fallback evita congelar el boot ante lo
-    // imprevisto. Generoso (>timeout interno de IDB ~5s) para no pisar la clear.
-    const fallback = window.setTimeout(() => { if (!cancelled) setCacheCleared(true); }, 10000);
+    // imprevisto. En modo snapshot la descarga de ~90MB (pointer + ~40-60 shards)
+    // puede tardar decenas de segundos, así que el fallback es más generoso (60s)
+    // para no soltar el gate a media hidratación; fuera de snapshot, 10s.
+    const fallbackMs = isSnapshotEnabled() ? 60000 : 10000;
+    const fallback = window.setTimeout(() => { if (!cancelled) setCacheCleared(true); }, fallbackMs);
     void run().finally(() => {
       window.clearTimeout(fallback);
       if (!cancelled) setCacheCleared(true);
@@ -2547,7 +2615,12 @@ export default function App() {
   }, [setBootSlot]);
   useEffect(() => {
     if (isBooted) return;
-    const allSettled = bootTasks.every(t => t.status === 'done' || t.status === 'error');
+    // Sólo los slots de GATING_BOOT_IDS retienen el splash. ROL/Auxiliar quedan
+    // fuera → cargan detrás del dashboard (Fase 0). Filtramos por id en vez de
+    // quitar entradas de `bootTasks` para que sigan visibles en el splash.
+    const allSettled = bootTasks
+      .filter(t => GATING_BOOT_IDS.has(t.id))
+      .every(t => t.status === 'done' || t.status === 'error');
     if (allSettled) {
       const t = setTimeout(() => {
         setIsBooted(true);
