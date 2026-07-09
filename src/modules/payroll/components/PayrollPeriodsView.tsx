@@ -118,9 +118,16 @@ export default function PayrollPeriodsView({ records }: { records: PayrollCostRe
     });
   }, [periods]);
 
+  // Un filtro que ya no existe en el mes/empresa/tipo actual (el usuario eligió
+  // un periodo y luego cambió los filtros del dashboard) dejaría la tabla en
+  // blanco sin explicación — cae a 'all' en vez de filtrar contra nada.
+  const effectivePeriodFilter = periodFilter !== 'all' && !distinctPeriods.includes(periodFilter)
+    ? 'all'
+    : periodFilter;
+
   const visiblePeriods = useMemo(
-    () => (periodFilter === 'all' ? periods : periods.filter(p => String(p.payrollPeriod) === periodFilter)),
-    [periods, periodFilter],
+    () => (effectivePeriodFilter === 'all' ? periods : periods.filter(p => String(p.payrollPeriod) === effectivePeriodFilter)),
+    [periods, effectivePeriodFilter],
   );
 
   const hasData = records.length > 0;
@@ -156,8 +163,8 @@ export default function PayrollPeriodsView({ records }: { records: PayrollCostRe
               onClick={() => setPeriodFilter(prev => (prev === per ? 'all' : per))}
               className="rounded-md px-2 py-0.5 text-xs font-medium transition"
               style={{
-                background: periodFilter === per ? 'var(--accent-blue)' : 'var(--gray-100)',
-                color: periodFilter === per ? '#fff' : 'var(--gray-700)',
+                background: effectivePeriodFilter === per ? 'var(--accent-blue)' : 'var(--gray-100)',
+                color: effectivePeriodFilter === per ? '#fff' : 'var(--gray-700)',
               }}
             >
               {per}
@@ -183,7 +190,7 @@ export default function PayrollPeriodsView({ records }: { records: PayrollCostRe
           </div>
           <div className="flex items-center gap-2">
             <select
-              value={periodFilter}
+              value={effectivePeriodFilter}
               onChange={(e) => setPeriodFilter(e.target.value)}
               className="rounded-md border px-2 py-1.5 text-sm"
               style={{ borderColor: 'var(--gray-300)', background: 'var(--surface)' }}

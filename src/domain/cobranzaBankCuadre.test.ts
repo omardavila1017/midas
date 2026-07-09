@@ -114,6 +114,20 @@ describe('buildCobranzaBankCuadre — agregación por cliente y totales', () => 
     expect(res.totals.pctCuadradoImporte).toBeCloseTo(80, 5);
   });
 
+  it('AMBIGUOUS no suma su candidato a totalBanco (el motor cuelga el MISMO abono en todo el grupo)', () => {
+    // 3 recibos ambiguos contra UN depósito de $1000: sumarlo por recibo
+    // reportaría $3000 de banco contra $1000 reales.
+    const candidato = bankMov(1000);
+    const res = buildCobranzaBankCuadre([
+      pay({ idPago: 'P1', status: 'AMBIGUOUS', importeRecibo: 1000, bankMovement: candidato }),
+      pay({ idPago: 'P2', status: 'AMBIGUOUS', importeRecibo: 1000, bankMovement: candidato }),
+      pay({ idPago: 'P3', status: 'AMBIGUOUS', importeRecibo: 1000, bankMovement: candidato }),
+    ]);
+    expect(res.totals.totalBanco).toBe(0);
+    expect(res.payments.every(p => p.importeBanco === 0)).toBe(true);
+    expect(res.payments.every(p => p.diferencia === 1000)).toBe(true);
+  });
+
   it('ciaFilter restringe el conjunto', () => {
     const res = buildCobranzaBankCuadre([
       pay({ idPago: 'P1', cia: '00011', status: 'UNMATCHED' }),
@@ -175,6 +189,18 @@ describe('buildCobranzaBankCuadre — corroboración GL (auxiliar)', () => {
       { glConfirmedInvoiceKeys: new Set(['00011::RI-1']) },
     );
     expect(res.payments[0].glConfirmado).toBe(false);
+  });
+
+  it('glConfirmado cruza con folio normalizado (drift "RI - 1" vs "ri-1 ") — normFactura canónico en ambos lados', () => {
+    const res = buildCobranzaBankCuadre(
+      // Lado indicadores: folio con espacios alrededor del guión.
+      [withApps('P1', [{ cia: '00011', noFactura: 'RI - 1' }])],
+      // Lado GL: minúsculas + espacio colgante (formato crudo del ledger).
+      { glConfirmedInvoiceKeys: glConfirmedInvoiceKeysFromSourceConfirmation(new Map([
+        ['factura:00011::ri-1 ', { confirmed: true, flujo: 'ingreso' }],
+      ])) },
+    );
+    expect(res.payments[0].glConfirmado).toBe(true);
   });
 
   it('glConfirmado=false para recibo sin aplicaciones', () => {

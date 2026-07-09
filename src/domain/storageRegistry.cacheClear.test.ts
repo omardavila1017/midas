@@ -46,7 +46,17 @@ describe('clearCacheStorageOnEntry — clear-on-entry selectivo', () => {
       .toHaveBeenCalledWith('midas-financial-projection-cache');
   });
 
-  it('NO toca localStorage (el trabajo capturado por el usuario sobrevive)', async () => {
+  it('invalida el marker de snapshot (marker e IDB pesado viven o mueren juntos)', async () => {
+    localStorage.setItem('midas.snapshot.version', '2026-07-09T00:00:00Z');
+
+    await clearCacheStorageOnEntry();
+
+    // Si el marker sobreviviera al borrado del IDB, el siguiente boot con
+    // pointer vigente "omitiría la re-descarga" contra un IDB vacío.
+    expect(localStorage.getItem('midas.snapshot.version')).toBeNull();
+  });
+
+  it('NO toca el trabajo capturado por el usuario en localStorage', async () => {
     localStorage.setItem('midas.financialPlanning.scenarios.v1', '[{"id":"s1"}]');
     localStorage.setItem('midas.taxes.v1', '{"adjustments":[]}');
     localStorage.setItem('midas.users.registry.v6', '{"a@b.com":{"role":"admin"}}');

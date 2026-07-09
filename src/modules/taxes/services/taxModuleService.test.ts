@@ -1285,6 +1285,40 @@ describe('taxModuleService', () => {
     expect(may.iva.unclassifiedLines).toHaveLength(1);
   });
 
+  it('counts manual IVA adjustments ONCE in totals (period.iva.ivaCaused already includes them)', () => {
+    const store = {
+      ...defaultTaxStore(),
+      adjustments: [
+        createTaxManualAdjustment({
+          taxType: 'IVA',
+          period: '2026-05',
+          kind: 'IVA_CAUSED',
+          amount: 100,
+        }),
+        createTaxManualAdjustment({
+          taxType: 'IVA',
+          period: '2026-05',
+          kind: 'IVA_CREDITABLE',
+          amount: 40,
+        }),
+      ],
+    };
+    const view = buildTaxDashboardView({
+      companyCode: 'all',
+      startDate: '2026-05-01',
+      endDate: '2026-05-31',
+      store,
+      today: '2026-05-01',
+    });
+    const may = view.periods.find((period) => period.period === '2026-05')!;
+    // El detalle del periodo ya trae el manual sumado…
+    expect(may.iva.ivaCaused).toBe(100);
+    expect(may.iva.ivaCreditable).toBe(40);
+    // …y los totales del dashboard NO lo vuelven a sumar (antes reportaban 200/80).
+    expect(view.totals.ivaCaused).toBe(100);
+    expect(view.totals.ivaCreditable).toBe(40);
+  });
+
   it('calculates ISN as 3% of payroll and supports manual override', () => {
     const projection = projectionFor([
       movement('payroll', 'OUTFLOW', 'PAYROLL', '2026-06-15', 1000, {
@@ -1442,6 +1476,28 @@ describe('taxModuleService', () => {
     // The per-company split reconciles to the consolidated view.
     const consolidated = buildTaxDashboardView(params);
     expect(a.totals.ivaNet + b.totals.ivaNet).toBeCloseTo(consolidated.totals.ivaNet);
+  });
+
+  it('keeps a company with ONLY ledger creditable IVA in the breakdown (ivaNet=0, grossIncome=0)', () => {
+    // Cia con puro gasto (acreditable del ledger, sin cobranza): payable se
+    // clampa a 0 y grossIncome es 0 — antes el predicado hasData la omitía y
+    // el acreditable del grupo quedaba subestimado.
+    const breakdown = buildTaxByCompany({
+      auxiliarIvaRecords: [
+        auxIvaRecord({ nombreCuenta: 'IVA ACREDITABLE PAGADO', cuentaObjeto: '1180', importe: 1600, fechaContable: '2026-05-10', cia: '00042' }),
+      ],
+      companyCode: 'all',
+      startDate: '2026-05-01',
+      endDate: '2026-05-31',
+      store: defaultTaxStore(),
+      today: '2026-05-01',
+      ivaMode: 'REAL' as const,
+    }, []);
+
+    expect(breakdown).toHaveLength(1);
+    expect(breakdown[0].cia).toBe('00042');
+    expect(breakdown[0].totals.ivaCreditable).toBeCloseTo(1600);
+    expect(breakdown[0].totals.ivaNet).toBe(0);
   });
 
   it('omits companies without tax movement and falls back to cia as name', () => {

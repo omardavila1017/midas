@@ -640,8 +640,8 @@ function TaxOperationalOverview({ period, today }: { period: TaxPeriodSummary | 
   const monthLabel = fmtYearMonthLong(period.period);
   // Lado de ingresos (causado) y egresos (acreditable) del IVA del MES, desde
   // los campos ya computados por el motor. Neto a pagar = `period.ivaNet`.
-  const ivaCaused = period.iva.ivaCaused + period.iva.manualCaused;
-  const ivaCreditable = period.iva.ivaCreditable + period.iva.manualCreditable;
+  const ivaCaused = period.iva.ivaCaused; // ya incluye ajustes manuales (buildIvaDetail)
+  const ivaCreditable = period.iva.ivaCreditable; // ya incluye ajustes manuales (buildIvaDetail)
   const ivaNet = period.ivaNet;
   const scheduledCash = period.cashImpact;
   const unscheduled = period.obligations.reduce((sum, obligation) => {
@@ -1187,8 +1187,8 @@ function TaxPeriodTable({
                   style={{ background: active ? 'var(--gray-50)' : undefined }}
                 >
                   <td className="px-4 py-3 font-bold text-[var(--gray-950)]">{period.period}</td>
-                  <td className="px-4 py-3 text-right tabular-nums text-[var(--gray-600)]">{fmtCurrency(period.iva.ivaCaused + period.iva.manualCaused)}</td>
-                  <td className="px-4 py-3 text-right tabular-nums text-[var(--gray-600)]">{fmtCurrency(period.iva.ivaCreditable + period.iva.manualCreditable)}</td>
+                  <td className="px-4 py-3 text-right tabular-nums text-[var(--gray-600)]">{fmtCurrency(period.iva.ivaCaused)}</td>
+                  <td className="px-4 py-3 text-right tabular-nums text-[var(--gray-600)]">{fmtCurrency(period.iva.ivaCreditable)}</td>
                   <EditableCell
                     value={period.ivaNet}
                     editing={editingCell?.period === period.period && editingCell.field === 'iva'}
@@ -1323,8 +1323,8 @@ function TaxPeriodDetail({
 
       {/* Summary mini-stats */}
       <div className="grid grid-cols-2 gap-2 border-b border-[var(--gray-200)] px-4 py-3 sm:grid-cols-4">
-        <MiniStat label="IVA causado" value={fmtCurrency(period.iva.ivaCaused + period.iva.manualCaused)} />
-        <MiniStat label="IVA acreditable" value={fmtCurrency(period.iva.ivaCreditable + period.iva.manualCreditable)} />
+        <MiniStat label="IVA causado" value={fmtCurrency(period.iva.ivaCaused)} />
+        <MiniStat label="IVA acreditable" value={fmtCurrency(period.iva.ivaCreditable)} />
         <MiniStat label="IVA neto" value={fmtCurrency(period.ivaNet)} />
         <MiniStat label="ISN + IMSS" value={fmtCurrency(period.isn + period.imss)} />
       </div>
@@ -1420,8 +1420,8 @@ function PeriodOperationalSummary({
         </div>
       </div>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <MiniStat label="IVA causado" value={fmtCurrency(period.iva.ivaCaused + period.iva.manualCaused)} />
-        <MiniStat label="IVA acreditable" value={fmtCurrency(period.iva.ivaCreditable + period.iva.manualCreditable)} />
+        <MiniStat label="IVA causado" value={fmtCurrency(period.iva.ivaCaused)} />
+        <MiniStat label="IVA acreditable" value={fmtCurrency(period.iva.ivaCreditable)} />
         <MiniStat label="IVA neto" value={fmtCurrency(period.ivaNet)} />
         <MiniStat label="ISN + IMSS" value={fmtCurrency(period.isn + period.imss)} />
       </div>

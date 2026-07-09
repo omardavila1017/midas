@@ -711,8 +711,11 @@ export function buildTaxDashboardView(params: {
   const totalOverdue = overdueBalance + pastPendingObligations;
 
   const totals = periods.reduce<TaxDashboardView['totals']>((sum, period) => ({
-    ivaCaused: sum.ivaCaused + period.iva.ivaCaused + period.iva.manualCaused,
-    ivaCreditable: sum.ivaCreditable + period.iva.ivaCreditable + period.iva.manualCreditable,
+    // `period.iva.ivaCaused/ivaCreditable` YA incluyen los ajustes manuales
+    // (buildIvaDetail suma manualIvaCaused/manualIvaCreditable) — volver a
+    // sumar `manualCaused`/`manualCreditable` aquí los contaba doble.
+    ivaCaused: sum.ivaCaused + period.iva.ivaCaused,
+    ivaCreditable: sum.ivaCreditable + period.iva.ivaCreditable,
     ivaNet: sum.ivaNet + period.ivaNet,
     isn: sum.isn + period.isn,
     imss: sum.imss + period.imss,
@@ -793,7 +796,13 @@ export function buildTaxByCompany(
       projection: undefined,
     });
     const totals = view.totals;
+    // `ivaCaused`/`ivaCreditable` cuentan como dato: una cia con sólo IVA
+    // acreditable del ledger (gasto sin cobranza) tiene ivaNet=payable=0 y
+    // grossIncome=0, pero omitirla subestimaba el acreditable del grupo y
+    // descuadraba el pie "Consolidado" contra la vista consolidada.
     const hasData = totals.ivaNet !== 0
+      || totals.ivaCaused !== 0
+      || totals.ivaCreditable !== 0
       || totals.isn !== 0
       || totals.imss !== 0
       || totals.grossIncome !== 0

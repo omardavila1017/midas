@@ -1772,26 +1772,41 @@ export default function App() {
         if (isSnapshotEnabled()) {
           const pointer = await getSnapshotPointer();
           if (pointer) {
+            // Sólo se activa el modo snapshot si la hidratación fue COMPLETA:
+            // una hidratación parcial (colecciones fallidas conservan el IDB
+            // por-navegador previo) presentada como 'done' es exactamente la
+            // deriva que el clear-on-entry existe para matar. En parcial se cae
+            // al clear-on-entry (el marker de versión ya queda retenido por
+            // hydrateHeavyStoreFromSnapshot, así que el siguiente boot reintenta).
+            let snapshotComplete = true;
             if (pointer.version !== getLocalSnapshotVersion()) {
-              await hydrateHeavyStoreFromSnapshot(pointer);
+              const result = await hydrateHeavyStoreFromSnapshot(pointer);
+              snapshotComplete = result.failed.length === 0;
+              if (!snapshotComplete) {
+                // eslint-disable-next-line no-console
+                console.warn(`[snapshot] hidratación PARCIAL (fallaron: ${result.failed.join(', ')}) — se cae al clear-on-entry`);
+              }
             } else {
               // eslint-disable-next-line no-console
               console.info(`[snapshot] version ${pointer.version} ya en IDB — se omite la re-descarga`);
             }
-            // Congelar los slots cubiertos en 'done': el dato ya está en IDB; el
-            // delta corre detrás del dashboard sin re-gatear el splash. El guard
-            // de setBootSlot (via snapshotActiveRef) mantiene el congelado.
-            setBootStatus(prev => ({
-              ...prev,
-              cxp: 'done', cobranza: 'done', compras: 'done',
-              pagos: 'done', nomina: 'done', rol: 'done', auxiliar: 'done',
-            }));
-            snapshotActiveRef.current = true;
-            // eslint-disable-next-line no-console
-            console.info('[snapshot] modo snapshot activo — arranque desde el snapshot compartido');
-            return; // NO borrar el cache local
+            if (snapshotComplete) {
+              // Congelar los slots cubiertos en 'done': el dato ya está en IDB; el
+              // delta corre detrás del dashboard sin re-gatear el splash. El guard
+              // de setBootSlot (via snapshotActiveRef) mantiene el congelado.
+              setBootStatus(prev => ({
+                ...prev,
+                cxp: 'done', cobranza: 'done', compras: 'done',
+                pagos: 'done', nomina: 'done', rol: 'done', auxiliar: 'done',
+              }));
+              snapshotActiveRef.current = true;
+              // eslint-disable-next-line no-console
+              console.info('[snapshot] modo snapshot activo — arranque desde el snapshot compartido');
+              return; // NO borrar el cache local
+            }
           }
-          // Store ON pero sin snapshot publicado todavía → cae al clear-on-entry.
+          // Store ON pero sin snapshot publicado (o hidratación parcial) → cae
+          // al clear-on-entry.
         }
         // ── Rama FALLBACK (OFF / sin snapshot): comportamiento de hoy ────────
         const raw = (import.meta.env.VITE_CACHE_MAX_AGE_MIN as string | undefined) ?? '0';
@@ -1929,6 +1944,21 @@ export default function App() {
     const cancel2 = scheduleIdleTask(() => requestDatasets(secondWave), 3500);
     return () => { cancel1?.(); cancel2?.(); };
   }, [storeHydrated, requestDatasets]);
+
+  // Un `user` sin permiso a un módulo NO pide su dataset (requestDatasets
+  // filtra por allowedDatasets), pero los slots del splash arrancan 'pending'
+  // y sólo su auto-fetch los saca de ahí → sin este escape, un usuario
+  // restringido dejaba cxp/compras/pagos/nomina en 'pending' para siempre y
+  // el splash quedaba atorado hasta el hard-timeout de 30 min. Espejo del
+  // escape que `banks` ya tenía en su boot effect. Si un admin concede el tab
+  // a media sesión, el slot ya quedó 'done' (el splash ya cerró) y el loader
+  // corre al navegar al tab vía requestDatasets, igual que banks.
+  useEffect(() => {
+    const datasetSlots = ['cxp', 'cobranza', 'compras', 'pagos', 'nomina', 'rol', 'auxiliar'] as const;
+    for (const slot of datasetSlots) {
+      if (!allowedDatasets.has(slot)) setBootSlot(slot, 'done');
+    }
+  }, [allowedDatasets, setBootSlot]);
 
   useEffect(() => {
     if (bankCacheLoaded) setDatasetSlot('banks', 'ready');

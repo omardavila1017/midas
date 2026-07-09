@@ -17,6 +17,7 @@
 
 import { BANK_JDE_IDB_KEY, HEAVY_KEYS, clearHeavyKeys } from '../services/heavyStoreIDB';
 import { clearAllDailyCache } from '../services/dailyApiCache';
+import { SNAPSHOT_VERSION_KEY } from '../services/snapshotRemoteSync';
 
 export type StorageScope = 'localStorage' | 'indexedDB';
 
@@ -208,6 +209,15 @@ export const CACHE_LOADED_AT_KEY = 'midas.cache.loadedAt';
  * acotar el peor caso al timeout de apertura de IDB. Best-effort: nunca tira.
  */
 export async function clearCacheStorageOnEntry(): Promise<void> {
+  // El marker `midas.snapshot.version` describe lo que hay en el IDB pesado;
+  // si borramos el IDB y el marker sobrevive, un boot posterior con pointer
+  // vigente "omite la re-descarga" contra un IDB VACÍO y congela los slots
+  // 'done' sin datos. Marker e IDB viven o mueren juntos.
+  try {
+    localStorage.removeItem(SNAPSHOT_VERSION_KEY);
+  } catch {
+    /* ignore */
+  }
   await Promise.all([
     clearHeavyKeys([...HEAVY_KEYS, BANK_JDE_IDB_KEY]).catch(() => undefined),
     clearAllDailyCache().catch(() => undefined),

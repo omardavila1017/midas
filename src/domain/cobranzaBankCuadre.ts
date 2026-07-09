@@ -1,4 +1,5 @@
 import type { PaymentReconciliation } from './realReconciliationEngine';
+import { normFactura } from './rolCobranzaMatch';
 
 /**
  * Cuadre de la cobranza APLICADA en Edwards contra el BANCO (y, opcionalmente,
@@ -121,13 +122,24 @@ function classify(p: PaymentReconciliation): CuadreStatus {
   return importesCuadran(p.importeRecibo, p.bankMovement.importe) ? 'cuadrado' : 'descuadre-importe';
 }
 
+/**
+ * El folio de /cobranzaindicadores y el del ledger GL vienen de APIs distintas
+ * y su formato deriva ("RI - 305405" vs "RI-305405") — el cruce crudo producía
+ * falsos "no corroborado". Ambos lados se pasan por el normalizador CANÓNICO
+ * (`normFactura`); folio placeholder/vacío normaliza a `''` y se trata como
+ * no-corroborable (nunca cruza).
+ */
 function glConfirmedFor(
   p: PaymentReconciliation,
   glKeys: ReadonlySet<string> | undefined,
 ): boolean | undefined {
   if (!glKeys) return undefined;
   if (p.applications.length === 0) return false;
-  return p.applications.every(app => glKeys.has(`${app.cia}::${app.noFactura}`));
+  return p.applications.every(app => {
+    const folio = normFactura(app.noFactura);
+    if (!folio) return false;
+    return glKeys.has(`${app.cia}::${folio}`);
+  });
 }
 
 function emptyBucket(): CuadreBucket {
@@ -181,7 +193,12 @@ export function buildCobranzaBankCuadre(
     if (useCiaFilter && !ciaFilter!.has(p.cia)) continue;
     const status = classify(p);
     const importeEdwards = p.importeRecibo;
-    const importeBanco = p.bankMovement?.importe ?? 0;
+    // AMBIGUOUS: el motor cuelga el MISMO abono candidato en cada recibo del
+    // grupo (markPaymentAmbiguous) — sumarlo por recibo multi-contaba un solo
+    // depósito en `totalBanco` y presentaba el candidato sin confirmar como
+    // cruzado en el CSV. Un candidato no es un cruce: banco = 0, como sin-banco
+    // (consistente con el contrato "0 si no cruzó" de `importeBanco`).
+    const importeBanco = status === 'revisar' ? 0 : (p.bankMovement?.importe ?? 0);
     const cuadre: PaymentCuadre = {
       idPago: p.idPago,
       cia: p.cia,
@@ -257,7 +274,15 @@ export function glConfirmedInvoiceKeysFromSourceConfirmation(
   for (const [key, conf] of sourceConfirmation) {
     if (!conf.confirmed || conf.flujo !== 'ingreso') continue;
     if (!key.startsWith('factura:')) continue;
-    keys.add(key.slice('factura:'.length));
+    // La llave viene `factura:${cia}::${noFactura}` con el folio GL crudo;
+    // se re-emite con el folio canónico (`normFactura`) para que cruce con
+    // el lado de /cobranzaindicadores aunque el formato derive.
+    const rest = key.slice('factura:'.length);
+    const sep = rest.indexOf('::');
+    if (sep < 0) continue;
+    const folio = normFactura(rest.slice(sep + 2));
+    if (!folio) continue;
+    keys.add(`${rest.slice(0, sep)}::${folio}`);
   }
   return keys;
 }
