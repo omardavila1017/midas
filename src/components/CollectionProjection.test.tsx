@@ -3,6 +3,8 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import CollectionProjection from './CollectionProjection';
 import type { Client, CashFlowAssumptions } from '../domain/types';
 import type { BankAccountStatement, CobranzaPayment, CobranzaRecord } from '../services/jdeTypes';
+import { emptyRealReconciliationResult } from '../domain/emptyRealReconciliationResult';
+import type { PaymentReconciliation } from '../domain/realReconciliationEngine';
 import { downloadFile } from '../utils/export';
 
 vi.mock('../utils/export', async () => {
@@ -129,6 +131,29 @@ function makeCobranzaPayment(overrides: Partial<CobranzaPayment> = {}): Cobranza
       tasaIva: 'IVA16',
       importeIvaFacturaOriginal: 400,
     }],
+  };
+}
+
+function makePaymentRecon(
+  over: Partial<PaymentReconciliation> & Pick<PaymentReconciliation, 'idPago' | 'status'>,
+): PaymentReconciliation {
+  return {
+    cia: '00011',
+    fechaCobro: isoForCurrentMonthDay(15),
+    fechaContable: isoForCurrentMonthDay(15),
+    cuentaBancaria: '12345',
+    banco: 'BANAMEX',
+    noRecibo: 'RI-1',
+    importeRecibo: 2500,
+    pendienteAplicar: 0,
+    noCliente: '9001',
+    cliente: 'Cliente Demo',
+    noBatch: 'B1',
+    tipoCambio: 1,
+    applicationCount: 0,
+    importeAplicado: 2500,
+    applications: [],
+    ...over,
   };
 }
 
@@ -466,6 +491,46 @@ describe('<CollectionProjection />', () => {
     expect(csv).toContain('ReglaAplicada');
     expect(csv).toContain('MotivoFecha');
     expect(csv).toContain('Ingreso');
+  });
+
+  it('muestra el panel de cuadre cobranza-aplicada vs banco (cuadre/descuadre por cliente)', () => {
+    const currentYear = new Date().getFullYear();
+    const recon = {
+      ...emptyRealReconciliationResult(),
+      paymentReconciliations: [
+        makePaymentRecon({
+          idPago: 'P1', status: 'CONFIRMED_REF', importeRecibo: 2500,
+          cliente: 'Cliente Demo', noCliente: '9001',
+          bankMovement: { movementKey: 'k1', cia: '00011', cuenta: '12345', fechaOperacion: isoForCurrentMonthDay(15), importe: 2500, concepto: 'SPEI', referencia: 'R1' },
+        }),
+        makePaymentRecon({
+          idPago: 'P2', status: 'UNMATCHED', importeRecibo: 900,
+          cliente: 'Cliente Moroso', noCliente: '9002', bankMovement: undefined,
+        }),
+      ],
+    };
+    render(
+      <CollectionProjection
+        clients={[makeClient({ id: '9001', name: 'Cliente Demo' })]}
+        assumptions={{ ...ASSUMPTIONS, year: currentYear }}
+        onAssumptionsChange={() => {}}
+        confirmedPayments={[]}
+        onConfirm={() => {}}
+        onUnconfirm={() => {}}
+        companies={[{ cia: '00011', nombre: 'Senda Demo' }]}
+        cobranzaRecords={[]}
+        cobranzaPayments={[makeCobranzaPayment()]}
+        bankStatements={[]}
+        cobranzaReconciliation={recon}
+        selectedCia="00011"
+      />,
+    );
+    // El panel de cuadre aplicada↔banco aparece con su encabezado…
+    expect(screen.getByText(/Cobranza aplicada en Edwards vs banco/i)).toBeTruthy();
+    // …la tarjeta de descuadre "Sin banco (no entró)"…
+    expect(screen.getAllByText(/Sin banco/i).length).toBeGreaterThan(0);
+    // …y el cliente con cobro aplicado que no entró al banco en la tabla por cliente.
+    expect(screen.getByText('Cliente Moroso')).toBeTruthy();
   });
 
   // "Recibos JDE / Banco" panel was replaced by the day-cell drilldown +

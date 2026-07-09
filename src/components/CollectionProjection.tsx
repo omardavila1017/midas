@@ -22,6 +22,10 @@ import {
   type CollectionCalendarEventSource,
 } from '../domain/collectionCalendarEngine';
 import { buildRolProjectedInflows } from '../domain/rolProjectionEngine';
+import {
+  buildCobranzaBankCuadre,
+  type CuadreStatus,
+} from '../domain/cobranzaBankCuadre';
 import { CXPRecord } from '../domain/persistence';
 import type { BankAccountStatement, CobranzaPayment, CobranzaRecord } from '../services/jde';
 import type { RolRecord } from '../services/jdeTypes';
@@ -101,6 +105,12 @@ interface Props {
    * global del app.
    */
   selectedCia?: string;
+  /**
+   * Facturas confirmadas como cobradas en el Auxiliar Contable
+   * (`${cia}::${noFactura}`). Corroboración GL opcional para el panel de cuadre
+   * cobranza-aplicada↔banco; best-effort (vacío si el auxiliar no está cargado).
+   */
+  glConfirmedInvoiceKeys?: ReadonlySet<string>;
 }
 
 interface EnsureBankCoverageRequest {
@@ -129,7 +139,7 @@ function defaultActiveMonth(year: number): number {
   return now.getFullYear() === year ? now.getMonth() : 0;
 }
 
-export default function CollectionProjection({ clients, assumptions, onAssumptionsChange, confirmedPayments, onConfirm, onUnconfirm, cxpRecords = [], bankStatements = [], companies = [], cobranzaRecords = [], cobranzaPayments = [], rolRecords = [], cobranzaLoadedCias = {}, cobranzaReconciliation, cobranzaFacturaIndex, cobranzaError, onRefreshCobranza, cobranzaRefreshing, selectedCia, onEnsureBankCoverage, bankCoverageLoading }: Props) {
+export default function CollectionProjection({ clients, assumptions, onAssumptionsChange, confirmedPayments, onConfirm, onUnconfirm, cxpRecords = [], bankStatements = [], companies = [], cobranzaRecords = [], cobranzaPayments = [], rolRecords = [], cobranzaLoadedCias = {}, cobranzaReconciliation, cobranzaFacturaIndex, cobranzaError, onRefreshCobranza, cobranzaRefreshing, selectedCia, onEnsureBankCoverage, bankCoverageLoading, glConfirmedInvoiceKeys }: Props) {
   const [query, setQuery] = useState('');
   const [freqFilter, setFreqFilter] = useState<Set<Frequency>>(new Set());
   const [factorajeFilter, setFactorajeFilter] = useState<FactorajeFilter>('all');
@@ -234,6 +244,7 @@ export default function CollectionProjection({ clients, assumptions, onAssumptio
             defaultCia={selectedCia}
             onEnsureBankCoverage={onEnsureBankCoverage}
             bankCoverageLoading={!!bankCoverageLoading}
+            glConfirmedInvoiceKeys={glConfirmedInvoiceKeys}
           />
           <RolCobranzaPanel rolRecords={rolRecords} cobranzaRecords={cobranzaRecords} cobranzaPayments={cobranzaPayments} />
         </>
@@ -1878,6 +1889,193 @@ function CobranzaRealCalendar({
 // produzca los matches; mientras, esta tabla deja al equipo validar que
 // los datos de JDE son los esperados.
 // ─────────────────────────────────────────────────────────────────────────
+const CUADRE_META: Record<CuadreStatus, { label: string; color: string; Icon: typeof CheckCircle2 }> = {
+  'cuadrado': { label: 'Cuadrado', color: 'var(--success)', Icon: CheckCircle2 },
+  'descuadre-importe': { label: 'Descuadre de importe', color: 'var(--warning)', Icon: AlertTriangle },
+  'sin-banco': { label: 'Sin banco (no entró)', color: 'var(--danger)', Icon: Landmark },
+  'revisar': { label: 'Revisar', color: 'var(--info)', Icon: HelpCircle },
+};
+
+/**
+ * Panel de cuadre de la cobranza APLICADA en Edwards contra el banco. Deriva de
+ * `reconciliation.paymentReconciliations` (ya computado por el motor); read-only.
+ * Responde "¿el cobro que Verito aplicó en JDE sí entró al banco?" con desglose
+ * cuadre/descuadre por cliente e importe + corroboración GL (Auxiliar) opcional.
+ */
+function CobranzaBankCuadrePanel({
+  paymentReconciliations,
+  ciaFilter,
+  glConfirmedInvoiceKeys,
+}: {
+  paymentReconciliations: RealReconciliationResult['paymentReconciliations'];
+  ciaFilter: Set<string>;
+  glConfirmedInvoiceKeys?: ReadonlySet<string>;
+}) {
+  const [expanded, setExpanded] = useState(true);
+  const [showAllClients, setShowAllClients] = useState(false);
+  const cuadre = useMemo(
+    () => buildCobranzaBankCuadre(paymentReconciliations, { ciaFilter, glConfirmedInvoiceKeys }),
+    [paymentReconciliations, ciaFilter, glConfirmedInvoiceKeys],
+  );
+
+  // Sin recibos aplicados (indicadores) en el rango → el panel no aporta nada.
+  if (paymentReconciliations.length === 0) return null;
+
+  const { totals, byClient, payments } = cuadre;
+  const glTracked = glConfirmedInvoiceKeys != null && glConfirmedInvoiceKeys.size > 0;
+  const glCount = glTracked ? payments.filter(p => p.glConfirmado).length : 0;
+  const descuadreImporte = totals.sinBanco.importe + totals.descuadreImporte.importe;
+
+  const CLIENT_PAGE = 15;
+  const visibleClients = showAllClients ? byClient : byClient.slice(0, CLIENT_PAGE);
+
+  const cards: Array<{ status: CuadreStatus; bucket: typeof totals.cuadrado }> = [
+    { status: 'cuadrado', bucket: totals.cuadrado },
+    { status: 'descuadre-importe', bucket: totals.descuadreImporte },
+    { status: 'sin-banco', bucket: totals.sinBanco },
+    { status: 'revisar', bucket: totals.revisar },
+  ];
+
+  const pctColor = totals.pctCuadradoImporte >= 95
+    ? 'text-[var(--success)]'
+    : totals.pctCuadradoImporte >= 70
+      ? 'text-[var(--warning)]'
+      : 'text-[var(--danger)]';
+
+  const exportCsv = () => {
+    const rows = payments.map(p => ({
+      Cia: p.cia,
+      Cliente: p.cliente,
+      NoCliente: p.noCliente,
+      IdPago: p.idPago,
+      NoRecibo: p.noRecibo,
+      FechaCobro: (p.fechaCobro || '').slice(0, 10),
+      Banco: p.banco,
+      Cuenta: p.cuentaBancaria,
+      ImporteEdwards: p.importeEdwards,
+      ImporteBanco: p.importeBanco,
+      Diferencia: p.diferencia,
+      Cuadre: CUADRE_META[p.status].label,
+      EstatusMotor: p.paymentStatus,
+      ...(glTracked ? { ConfirmadoGL: p.glConfirmado ? 'Sí' : 'No' } : {}),
+    }));
+    downloadFile(toCSV(rows), `cobranza-cuadre-banco-${todayISO()}.csv`);
+  };
+
+  return (
+    <div className="bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)] overflow-hidden">
+      <button
+        onClick={() => setExpanded(v => !v)}
+        className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-[var(--gray-50)]"
+      >
+        <ArrowRightLeft className="w-4 h-4 text-[var(--gray-400)]" />
+        <div className="flex-1 min-w-0">
+          <div className="text-[13px] font-semibold text-[var(--gray-950)]">Cobranza aplicada en Edwards vs banco</div>
+          <div className="text-[11px] text-[var(--gray-500)]">
+            {totals.totalPagos.toLocaleString('es-MX')} recibos aplicados · descuadre {fmtCompact(descuadreImporte)}
+          </div>
+        </div>
+        <div className="inline-flex items-center gap-2 px-3 h-8 rounded-[var(--radius-md)] border border-[var(--gray-200)] bg-[var(--surface-alt)]">
+          <span className="text-[11px] uppercase tracking-wide text-[var(--gray-500)]">Cuadrado</span>
+          <span className={`text-[13px] font-bold tabular-nums ${pctColor}`}>{totals.pctCuadradoImporte.toFixed(1)}%</span>
+        </div>
+        <ChevronDown className={`w-4 h-4 text-[var(--gray-400)] transition-transform ${expanded ? 'rotate-180' : ''}`} />
+      </button>
+
+      {expanded && (
+        <div className="px-4 pb-4 space-y-4 border-t border-[var(--gray-200)]/60 pt-4">
+          {/* Tarjetas de resumen */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+            {cards.map(({ status, bucket }) => {
+              const meta = CUADRE_META[status];
+              return (
+                <div key={status} className="rounded-[var(--radius-md)] border border-[var(--gray-200)] p-3">
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <meta.Icon className="w-3.5 h-3.5" style={{ color: meta.color }} />
+                    <span className="text-[11px] text-[var(--gray-500)]">{meta.label}</span>
+                  </div>
+                  <div className="text-[15px] font-bold tabular-nums" style={{ color: meta.color }}>
+                    {fmtCurrency(bucket.importe)}
+                  </div>
+                  <div className="text-[11px] text-[var(--gray-400)] tabular-nums">
+                    {bucket.count.toLocaleString('es-MX')} recibos
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Barra apilada por importe */}
+          {totals.totalEdwards > 0 && (
+            <div className="h-2 w-full rounded-full overflow-hidden flex bg-[var(--gray-100)]">
+              {cards.map(({ status, bucket }) => {
+                const pct = (bucket.importe / totals.totalEdwards) * 100;
+                if (pct <= 0) return null;
+                return (
+                  <div key={status} style={{ width: `${pct}%`, background: CUADRE_META[status].color }} title={`${CUADRE_META[status].label}: ${pct.toFixed(1)}%`} />
+                );
+              })}
+            </div>
+          )}
+
+          {glTracked && (
+            <div className="text-[11px] text-[var(--gray-500)] inline-flex items-center gap-1.5">
+              <CheckCircle2 className="w-3.5 h-3.5 text-[var(--success)]" />
+              Corroborado en Auxiliar Contable: {glCount.toLocaleString('es-MX')}/{totals.totalPagos.toLocaleString('es-MX')} recibos con todas sus facturas conciliadas en el libro mayor.
+            </div>
+          )}
+
+          {/* Tabla por cliente */}
+          <div className="overflow-x-auto">
+            <table className="w-full text-[12px]">
+              <thead>
+                <tr className="text-left text-[var(--gray-500)] border-b border-[var(--gray-200)]">
+                  <th className="py-1.5 pr-2 font-medium">Cliente</th>
+                  <th className="py-1.5 px-2 font-medium text-right">Recibos</th>
+                  <th className="py-1.5 px-2 font-medium text-right">Aplicado</th>
+                  <th className="py-1.5 px-2 font-medium text-right">Cuadrado</th>
+                  <th className="py-1.5 px-2 font-medium text-right">Descuadre imp.</th>
+                  <th className="py-1.5 pl-2 font-medium text-right">Sin banco</th>
+                </tr>
+              </thead>
+              <tbody>
+                {visibleClients.map(c => (
+                  <tr key={c.clientKey} className="border-b border-[var(--gray-100)]">
+                    <td className="py-1.5 pr-2 max-w-[240px] truncate" title={`${c.cliente}${c.noCliente ? ` (${c.noCliente})` : ''}`}>
+                      {c.cliente || c.noCliente || '—'}
+                    </td>
+                    <td className="py-1.5 px-2 text-right tabular-nums">{c.totalPagos.toLocaleString('es-MX')}</td>
+                    <td className="py-1.5 px-2 text-right tabular-nums">{fmtCompact(c.totalEdwards)}</td>
+                    <td className="py-1.5 px-2 text-right tabular-nums text-[var(--success)]">{c.cuadrado.importe > 0 ? fmtCompact(c.cuadrado.importe) : '—'}</td>
+                    <td className="py-1.5 px-2 text-right tabular-nums text-[var(--warning)]">{c.descuadreImporte.importe > 0 ? fmtCompact(c.descuadreImporte.importe) : '—'}</td>
+                    <td className="py-1.5 pl-2 text-right tabular-nums text-[var(--danger)]">{c.sinBanco.importe > 0 ? fmtCompact(c.sinBanco.importe) : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="flex items-center justify-between">
+            {byClient.length > CLIENT_PAGE ? (
+              <button onClick={() => setShowAllClients(v => !v)} className="text-[12px] text-[var(--primary)] hover:underline">
+                {showAllClients ? 'Ver menos' : `Ver todos (${byClient.length.toLocaleString('es-MX')})`}
+              </button>
+            ) : <span />}
+            <button
+              onClick={exportCsv}
+              className="inline-flex items-center gap-1.5 px-3 h-8 rounded-[var(--radius-md)] border border-[var(--gray-200)] text-[12px] text-[var(--gray-500)] hover:text-[var(--gray-950)] hover:bg-[var(--gray-50)]"
+              title="Exporta el detalle por recibo (cuadre vs banco)."
+            >
+              <Download className="w-3.5 h-3.5" />
+              Exportar CSV ({totals.totalPagos.toLocaleString('es-MX')})
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CobranzaRealView({
   clients,
   assumptions,
@@ -1895,6 +2093,7 @@ function CobranzaRealView({
   defaultCia,
   onEnsureBankCoverage,
   bankCoverageLoading,
+  glConfirmedInvoiceKeys,
 }: {
   clients: Client[];
   assumptions: CashFlowAssumptions;
@@ -1913,6 +2112,7 @@ function CobranzaRealView({
   defaultCia?: string;
   onEnsureBankCoverage?: (request: EnsureBankCoverageRequest) => void | Promise<void>;
   bankCoverageLoading?: boolean;
+  glConfirmedInvoiceKeys?: ReadonlySet<string>;
 }) {
   // Default del filtro local: si el global selectedCia es una cía válida
   // (no 'all'), arrancamos filtrados por esa cía. Si después el usuario
@@ -2238,6 +2438,16 @@ function CobranzaRealView({
           Exportar CSV ({filtered.length.toLocaleString('es-MX')})
         </button>
       </div>
+
+      {/* Cuadre de cobranza APLICADA en Edwards vs banco (Bloque 2). Valida
+          que cada cobro que Verito aplicó en JDE realmente entró al banco;
+          marca cuadre vs descuadre por cliente/importe. Read-only, deriva de
+          reconciliation.paymentReconciliations (ya computado). */}
+      <CobranzaBankCuadrePanel
+        paymentReconciliations={reconciliation.paymentReconciliations}
+        ciaFilter={ciaFilter}
+        glConfirmedInvoiceKeys={glConfirmedInvoiceKeys}
+      />
 
       {/* Calendario real — ABONOs bancarios cruzados con cobranza JDE.
           Esta es la vista principal: ver de un vistazo qué entró cada día,

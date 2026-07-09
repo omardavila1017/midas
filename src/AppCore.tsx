@@ -160,6 +160,7 @@ import {
   COBRANZA_LOOKBACK_DAYS,
   COBRANZA_REVALIDATE_DAYS,
 } from './domain/cobranzaRefreshWindow';
+import { glConfirmedInvoiceKeysFromSourceConfirmation } from './domain/cobranzaBankCuadre';
 import { useToast } from './components/Toast';
 import { useAuth } from './contexts/AuthContext';
 import {
@@ -1388,6 +1389,13 @@ export default function App() {
   );
   const shouldComputeAuxiliarReconciliation =
     auxiliarContableRecords.length > 0 && RECONCILIATION_TABS.has(activeTab);
+  // Facturas confirmadas como cobradas en el Auxiliar Contable — corroboración
+  // GL (best-effort) para el panel de cuadre cobranza-aplicada↔banco. Vacío si
+  // el auxiliar no está cargado en este tab (no se fuerza su carga).
+  const cobranzaGlConfirmedKeys = useMemo(
+    () => glConfirmedInvoiceKeysFromSourceConfirmation(auxiliarReconciliation.sourceConfirmation),
+    [auxiliarReconciliation],
+  );
   const auxiliarReconWorkerRef = useRef<Worker | null>(null);
   const auxiliarReconJobRef = useRef(0);
   useEffect(() => {
@@ -5413,6 +5421,7 @@ export default function App() {
                   selectedCia={selectedCia}
                   onEnsureBankCoverage={ensureBankCoverageForCollections}
                   bankCoverageLoading={bankCoverageLoading}
+                  glConfirmedInvoiceKeys={cobranzaGlConfirmedKeys}
                 />
               </Suspense>
             )}
