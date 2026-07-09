@@ -18,8 +18,9 @@
  *   • **SIR** — Servicio Industrial Regiomontano (cabeza: cía 00011, RFC SIR870615345)
  *
  * El mapeo empresa→código de cía JDE se amarra con:
- *   1. Los reportes `SIR/TT. Reporte Egreso - Ingreso JDE.xlsx` (hojas
- *      `Gastos`/`Ingresos`, cuyo `Cia`/`Nombre Cia` trae el código JDE).
+ *   1. El RFC de cada persona moral, tomado directo del escrito CANAPAT
+ *      (2026-01-29). Tras recibir los adjuntos de José Luis (2026-07-09) TODOS
+ *      los RFC de ambos coordinados quedaron confirmados (ver `docs/fiscal/`).
  *   2. Los registros de cía autoritativos que ya viven en este repo:
  *        - `AUXILIAR_CIA_ALLOWLIST` (`domain/auxiliarReconciliationConfig.ts`):
  *          00001 TAMAULIPAS · 00011 SIR · 00033 MULTICARGA · 00038 STDN ·
@@ -27,8 +28,15 @@
  *        - El mapa TRESS `idEmpresa` (`services/jdeTypes.ts`):
  *          1 Federal(=Tamaulipas) · 11 SIR · 17 SIT · 33 Multicarga · 42 TICH.
  *        - `bankAccountsCatalog.json` (razón social × `unidadNegocio`).
- *   3. El RFC de cada persona moral (del escrito CANAPAT) como llave
- *      autoritativa alterna cuando el código de cía JDE no está confirmado.
+ *
+ * ⚠️ Los reportes `SIR/TT. Reporte Egreso - Ingreso JDE.xlsx` (recibidos
+ * 2026-07-09) resultaron estar filtrados por la empresa **cabeza**: su columna
+ * `Cia`/`Nombre Cia` sólo trae `00001` (TT) / `00011` (SIR). Los demás
+ * integrantes aparecen únicamente como proveedores "Filiales" (con su RFC), NO
+ * como `Cia` — así que el Excel NO entrega los códigos JDE de los miembros. Por
+ * eso el RFC del escrito es la llave autoritativa de los integrantes cuyo código
+ * de cía aún no está en el allowlist/TRESS; el nombre queda sólo como red de
+ * seguridad.
  *
  * Precedencia del resolver: **código de cía (autoritativo) → RFC (autoritativo)
  * → patrón de nombre (fallback)**. El patrón de nombre YA NO es una siembra
@@ -86,12 +94,14 @@ export const COORDINADO_OPT_OUT: Pick<CoordinadoRule, 'cias' | 'rfcs' | 'namePat
  * razones sociales del escrito (fallback).
  *
  *  - **TT** (Transportes Tamaulipas): cabeza cía 00001. Integrantes confirmados
- *    por código: 00038 STDN, 00043 SES. Resto por RFC/nombre (Turimex, Operadora
- *    de Ventas, Adventur, Oficios y Proyectos, Inmuebles Autobuses Coahuilenses).
+ *    por código: 00038 STDN, 00043 SES. Resto por RFC del escrito (Turimex,
+ *    Operadora de Ventas, Adventur, Oficios y Proyectos, Inmuebles Autobuses
+ *    Coahuilenses) — su código de cía JDE no está en el allowlist/TRESS.
  *  - **SIR** (Servicio Industrial Regiomontano): cabeza cía 00011. Integrantes
- *    confirmados por código: 00042 TICH, 00017 SIT (familia Servicio Industrial).
- *    Resto por RFC/nombre (Potosino, Zacatecano, Senda Servicio Industrial,
- *    Servicios Industriales Senda).
+ *    confirmados por código: 00042 TICH, 00017 SIT (familia Servicio Industrial,
+ *    TRESS idEmpresa 17 — no aparece por nombre en el escrito SIR). Resto por RFC
+ *    del escrito (Potosino, Zacatecano, Senda Servicio Industrial, Servicios
+ *    Industriales Senda).
  */
 export const COORDINADO_FISCAL_RULES: CoordinadoRule[] = [
   {
@@ -131,8 +141,9 @@ export const COORDINADO_FISCAL_RULES: CoordinadoRule[] = [
       'SIR870615345', // Servicio Industrial Regiomontano (cabeza)
       'SIP990527FA0', // Servicio Industrial Potosino
       'SSI0502091T6', // Senda Servicio Industrial
-      // TICH, Servicios Industriales Senda y Zacatecano: RFC pendiente de
-      // confirmar contra el escrito (OCR ilegible); se cubren por nombre.
+      'TIC0510111G4', // Transportes Industriales Chihuahuenses (TICH) — cía 00042
+      'TIJ051011HF9', // Servicios Industriales Senda
+      'SIZ1309177E6', // Servicio Industrial Zacatecano
     ],
     namePatterns: [
       /regiomontano/i,

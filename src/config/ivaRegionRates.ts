@@ -19,6 +19,19 @@
  * cálculo por depósito: cuando la factura SÍ trae su IVA, ese IVA manda (se
  * cotejó contra la factura).
  *
+ * ── EVIDENCIA (Excel de Fiscal, recibidos 2026-07-09) → se queda VACÍO ─────
+ * Las hojas `Ingresos TT`/`Ingresos SIR` traen la tasa POR FACTURA (`tasa iva`
+ * = IVA16/IVA08/IVA0/EXTO), y el 8% NO es un atributo por empresa:
+ *   · TT:  100% FEDERAL (transporte de pasaje exento) → IVA de ingresos = $0.
+ *   · SIR: mayoría 16% ($28.97M de IVA) con una MINORÍA 8% ($2.9M, 82 de ~1,282
+ *          facturas gravadas) — el 8% es por factura/servicio en la franja, no
+ *          por cía. Marcar SIR como 8% blanket sobre-gravaría su 16%.
+ * Como `accumulateCobranzaPaymentIva` usa la tasa de la factura cuando existe y
+ * sólo cae a este catálogo para cobros-depósito SIN IVA de factura, dejar la
+ * regla 8% vacía es lo correcto: el default 16% coincide con la mayoría real y
+ * la factura gobierna el 8% donde aplica. Llenar `cias`/`rfcs` sólo si Fiscal
+ * confirma una cía que sea fronteriza de forma uniforme.
+ *
  * Estructura — análoga a `coordinadoFiscalCatalog.ts`: catálogo declarativo en
  * código (NO secreto) + resolver. Primer match gana; sin match ⇒ 16%.
  */

@@ -8,6 +8,19 @@
  * reembolsos y reposiciones son movimientos internos sin IVA acreditable; OCSI
  * y la Asociación Protacio/Protasio son partes relacionadas fuera del cómputo).
  *
+ * ── VALIDACIÓN con los Excel de Fiscal (recibidos 2026-07-09) ──────────────
+ * Las hojas `Gastos TT`/`Gastos SIR` CONFIRMAN que JDE sí reporta IVA
+ * acreditable sobre estos conceptos (por eso hay que quitarlo). Acreditable MXP
+ * que caería sin estas exclusiones (columnas `IVA ACREDTABLE …8/…16`):
+ *   · OCSI:      TT $181,585 · SIR $745,164   (el mayor)
+ *   · Pensiones: TT $214,907 · SIR $18,546
+ *   · Empleados: SIR $33,104 · Vales/Reembolsos/Reposiciones: unos miles c/u.
+ * Los patrones de abajo (con `\b`) empatan estas líneas sin falsos positivos.
+ * PENDIENTE (confirmar con Fiscal, NO incluido — sin instrucción explícita):
+ * la clasificación de proveedor **"Recursos Humanos"** (SIR ~$155,874
+ * acreditable) y **"Nominas / Reembolsos / Vales"** (SIR ~$1,678) — ¿también se
+ * excluyen? Hoy sólo se excluye lo que cae por los 8 conceptos de abajo.
+ *
  * Estructura — análoga a `glAccountFlowCatalog.ts` / `coordinadoFiscalCatalog.ts`:
  * catálogo declarativo en código (NO secreto) + predicado. Editar aquí NO toca
  * montos históricos ni el motor: sólo decide qué líneas NO cuentan como

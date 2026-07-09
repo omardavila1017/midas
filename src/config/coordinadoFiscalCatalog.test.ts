@@ -35,6 +35,14 @@ describe('coordinadoFiscalCatalog', () => {
       expect(resolveCoordinadoForCia('90002', '', 'SIP990527FA0')).toBe('SIR');
     });
 
+    it('resuelve por RFC los integrantes SIR confirmados con el escrito (2026-07-09)', () => {
+      // RFC ilegibles por OCR en la primera pasada, confirmados al recibir los
+      // escritos CANAPAT — el nombre truncado ya no es la única señal.
+      expect(resolveCoordinadoForCia('90050', 'Nombre Truncado', 'TIC0510111G4')).toBe('SIR'); // TICH
+      expect(resolveCoordinadoForCia('90051', 'Nombre Truncado', 'TIJ051011HF9')).toBe('SIR'); // Servicios Industriales Senda
+      expect(resolveCoordinadoForCia('90052', 'Nombre Truncado', 'SIZ1309177E6')).toBe('SIR'); // Zacatecano
+    });
+
     it('normaliza el RFC (espacios/guiones/minúsculas) antes de empatar', () => {
       expect(resolveCoordinadoForCia('90003', '', 'ses051125tr5')).toBe('TT');
       expect(resolveCoordinadoForCia('90003', '', 'SES-051125-TR5')).toBe('TT');
