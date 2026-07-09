@@ -17,7 +17,8 @@ import type { BankAccountStatement } from '../../../services/jde';
 import type { AuxiliarContableRecord, CobranzaPayment, CobranzaRecord, Company } from '../../../services/jdeTypes';
 import type { AuxiliarReconResult } from '../../../domain/auxiliarReconciliationEngine';
 import type { CxpPaymentCoverage, PaymentMatch } from '../../../domain/paymentReconciliationEngine';
-import { fmtCompact, fmtCurrency, fmtDate, todayISO } from '../../../formatters';
+import { fmtCompact, fmtCurrency, fmtDate, fmtYearMonthLong, todayISO } from '../../../formatters';
+import { COORDINADO_LABEL, SIN_COORDINADO, resolveCoordinadoForCia } from '../../../config/coordinadoFiscalCatalog';
 import KpiCard from '../../../components/ui/KpiCard';
 import PageHeader from '../../../components/ui/PageHeader';
 import CompanyMultiSelect from '../../../components/ui/CompanyMultiSelect';
@@ -25,7 +26,6 @@ import EmptyState from '../../shared-finance/components/EmptyState';
 import { useNavigateToTab } from '../../shared-finance/components/NavigationContext';
 import {
   toneByOutstanding,
-  toneByRequirement,
   TONE_SUCCESS,
   TONE_NEUTRAL,
 } from '../../shared-finance/components/tone';
@@ -53,11 +53,12 @@ import {
   updateTaxPaymentPlanItem,
   upsertTaxRateOverride,
   upsertTaxObligation,
+  buildTaxByCoordinado,
   type IvaPeriodDetail,
-  type TaxSettings,
   type TaxDashboardView,
   type TaxPeriodSummary,
   type TaxCompanyBreakdown,
+  type TaxCoordinadoBreakdown,
   type TaxRateTarget,
   type TaxSourceLine,
   type TaxStore,
@@ -90,22 +91,18 @@ interface Props {
   startingBalance?: number;
 }
 
-type RangePreset = '90d' | 'eoy';
-type DetailTab = 'summary' | 'iva' | 'isr' | 'isn' | 'imss' | 'payments';
+type DetailTab = 'summary' | 'iva' | 'isn' | 'imss' | 'payments';
 type IvaLineMode = 'caused' | 'creditable' | 'paid';
-
-const RANGE_PRESETS: Array<{ id: RangePreset; label: string }> = [
-  { id: '90d', label: '90 días' },
-  { id: 'eoy', label: 'Fin de año' },
-];
 
 export default function TaxDashboard(props: Props) {
   const today = useMemo(() => todayISO(), []);
   const fiscalYearStart = useMemo(() => `${Number(today.slice(0, 4))}-01-01`, [today]);
   const yearEnd = useMemo(() => `${Number(today.slice(0, 4))}-12-31`, [today]);
 
-  const [preset, setPreset] = useState<RangePreset>('eoy');
-  const endDate = useMemo(() => preset === 'eoy' ? yearEnd : addDays(today, 90), [preset, today, yearEnd]);
+  // El motor construye el AÑO COMPLETO (para poblar el selector de mes y la
+  // trayectoria); el filtro mensual es de DISPLAY (recalcula el headline al mes
+  // seleccionado). La obligación de IVA es mensual, así que el mes manda la vista.
+  const endDate = yearEnd;
 
   const [taxStore, setTaxStore] = useState<TaxStore>(() => {
     const loaded = loadTaxStore(defaultTaxStore());
@@ -178,21 +175,37 @@ export default function TaxDashboard(props: Props) {
   );
 
   const view = useMemo(() => buildTaxDashboardView(taxParams), [taxParams]);
-  // Desglose por empresa interna (cia). Reusa el mismo motor por compañía.
-  const companyBreakdown = useMemo(
-    () => buildTaxByCompany(taxParams, props.companies ?? []),
-    [taxParams, props.companies],
-  );
-  const paymentSchedule = useMemo(() => buildTaxPaymentSchedule(view.obligations), [view.obligations]);
 
+  // Mantén el mes seleccionado dentro de los periodos con dato: prefiere el mes
+  // en curso si existe, si no el MÁS RECIENTE (la obligación es mensual).
   useEffect(() => {
     if (view.periods.length === 0) return;
-    setSelectedPeriod((current) => view.periods.some((period) => period.period === current)
-      ? current
-      : view.periods[0].period);
+    setSelectedPeriod((current) => {
+      if (view.periods.some((period) => period.period === current)) return current;
+      return view.periods[view.periods.length - 1].period;
+    });
   }, [view.periods]);
 
   const selected = view.periods.find((period) => period.period === selectedPeriod) ?? view.periods[0];
+
+  // Desglose por empresa/coordinado ACOTADO al mes seleccionado (obligación
+  // mensual). Reusa el mismo motor por compañía con la ventana del mes.
+  const monthParams = useMemo(
+    () => ({ ...taxParams, startDate: `${selectedPeriod}-01`, endDate: endOfMonthISO(selectedPeriod) }),
+    [taxParams, selectedPeriod],
+  );
+  const companyBreakdown = useMemo(
+    () => buildTaxByCompany(monthParams, props.companies ?? []),
+    [monthParams, props.companies],
+  );
+  const coordinadoBreakdown = useMemo(
+    () => buildTaxByCoordinado(companyBreakdown, (cia, nombre) => {
+      const c = resolveCoordinadoForCia(cia, nombre);
+      return c ? COORDINADO_LABEL[c] : SIN_COORDINADO;
+    }),
+    [companyBreakdown],
+  );
+  const paymentSchedule = useMemo(() => buildTaxPaymentSchedule(view.obligations), [view.obligations]);
   const hasFiscalData = props.clients.length > 0
     || props.cxpRecords.length > 0
     || props.bankStatements.some((statement) => statement.movimientos.length > 0)
@@ -261,13 +274,7 @@ export default function TaxDashboard(props: Props) {
     setStatusMessage(`Tasa IVA actualizada a ${rate}%.`);
   };
 
-  const handleUpdateTaxSettings = (settings: TaxSettings) => {
-    setTaxStore((current) => ({ ...current, settings }));
-    setStatusMessage('Configuracion fiscal actualizada.');
-  };
-
   const resetView = () => {
-    setPreset('eoy');
     setSelectedPeriod(today.slice(0, 7));
     setDetailTab('summary');
     setShowAddForm(false);
@@ -327,18 +334,20 @@ export default function TaxDashboard(props: Props) {
 
       <section className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white px-4 py-3">
         <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
-          <SegmentedControl label="Rango" value={preset} options={RANGE_PRESETS} onChange={setPreset} />
+          <MonthSelector
+            periods={view.periods.map((p) => p.period)}
+            value={selectedPeriod}
+            onChange={setSelectedPeriod}
+          />
           <div className="ml-auto text-[12px] text-[var(--gray-500)]">
-            IVA por cobrado/pagado · ISR provisional configurable · vencimiento día 17
+            IVA por cobrado/pagado (causado − acreditable) · obligación mensual · vencimiento día 17
           </div>
         </div>
       </section>
 
-      <TaxSettingsPanel settings={taxStore.settings} onChange={handleUpdateTaxSettings} />
+      <TaxOperationalOverview period={selected} today={today} />
 
-      <TaxOperationalOverview view={view} today={today} />
-
-      <TaxByCompanyPanel breakdown={companyBreakdown} />
+      <TaxByCompanyPanel breakdown={companyBreakdown} coordinado={coordinadoBreakdown} monthLabel={fmtYearMonthLong(selectedPeriod)} />
 
       <TaxCashPlanningPanel
         obligations={view.obligations}
@@ -349,7 +358,9 @@ export default function TaxDashboard(props: Props) {
         }}
       />
 
-      {/* Overdue balance tracker */}
+      {/* Overdue balance tracker — saldo vencido acumulado (NO por-periodo), se
+          muestra aparte del headline mensual. `newPeriodTotal` usa el total del
+          AÑO como referencia del benchmark, no el mes. */}
       <section className="grid grid-cols-1 gap-5 xl:grid-cols-2">
         <OverdueBalanceSection
           balance={taxStore.overdueBalance}
@@ -394,13 +405,58 @@ export default function TaxDashboard(props: Props) {
   );
 }
 
-function TaxByCompanyPanel({ breakdown }: { breakdown: TaxCompanyBreakdown[] }) {
+interface CompanyDisplayTotals {
+  grossIncome: number;
+  ivaCaused: number;
+  ivaCreditable: number;
+  ivaNet: number;
+  isn: number;
+  imss: number;
+  total: number;
+}
+
+function pickCompanyCols(t: TaxCompanyBreakdown['totals']): CompanyDisplayTotals {
+  return {
+    grossIncome: t.grossIncome,
+    ivaCaused: t.ivaCaused,
+    ivaCreditable: t.ivaCreditable,
+    ivaNet: t.ivaNet,
+    isn: t.isn,
+    imss: t.imss,
+    total: t.total,
+  };
+}
+
+function sumCompanyCols(rows: TaxCompanyBreakdown[]): CompanyDisplayTotals {
+  return rows.reduce<CompanyDisplayTotals>((sum, row) => {
+    const c = pickCompanyCols(row.totals);
+    return {
+      grossIncome: sum.grossIncome + c.grossIncome,
+      ivaCaused: sum.ivaCaused + c.ivaCaused,
+      ivaCreditable: sum.ivaCreditable + c.ivaCreditable,
+      ivaNet: sum.ivaNet + c.ivaNet,
+      isn: sum.isn + c.isn,
+      imss: sum.imss + c.imss,
+      total: sum.total + c.total,
+    };
+  }, { grossIncome: 0, ivaCaused: 0, ivaCreditable: 0, ivaNet: 0, isn: 0, imss: 0, total: 0 });
+}
+
+function TaxByCompanyPanel({
+  breakdown,
+  coordinado,
+  monthLabel,
+}: {
+  breakdown: TaxCompanyBreakdown[];
+  coordinado: TaxCoordinadoBreakdown[];
+  monthLabel: string;
+}) {
   // Filtro multi-empresa (capa de display). El motor `buildTaxByCompany` ya
   // devuelve TODAS las empresas con movimiento; aquí sólo elegimos cuáles
   // mostrar. Set vacío = todas.
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
 
-  // Si el desglose cambia (otra carga / rango), descarta cias seleccionadas que
+  // Si el desglose cambia (otro mes / carga), descarta cias seleccionadas que
   // ya no tienen movimiento para no dejar un filtro "fantasma".
   useEffect(() => {
     setSelected((current) => {
@@ -412,58 +468,58 @@ function TaxByCompanyPanel({ breakdown }: { breakdown: TaxCompanyBreakdown[] }) 
   }, [breakdown]);
 
   const filtered = selected.size > 0;
-  const visibleRows = useMemo(
-    () => (filtered ? breakdown.filter((row) => selected.has(row.cia)) : breakdown),
-    [breakdown, filtered, selected],
+  // Grupos por coordinado con las cias visibles (según el filtro), recomputando
+  // el subtotal del grupo sobre lo visible y descartando grupos vacíos.
+  const groups = useMemo(
+    () => coordinado
+      .map((group) => {
+        const companies = filtered ? group.companies.filter((row) => selected.has(row.cia)) : group.companies;
+        return { coordinado: group.coordinado, companies, totals: sumCompanyCols(companies) };
+      })
+      .filter((group) => group.companies.length > 0),
+    [coordinado, filtered, selected],
   );
-
-  const totals = useMemo(() => visibleRows.reduce(
-    (sum, row) => ({
-      grossIncome: sum.grossIncome + row.totals.grossIncome,
-      ivaNet: sum.ivaNet + row.totals.ivaNet,
-      isr: sum.isr + row.totals.isr,
-      isn: sum.isn + row.totals.isn,
-      imss: sum.imss + row.totals.imss,
-      total: sum.total + row.totals.total,
-    }),
-    { grossIncome: 0, ivaNet: 0, isr: 0, isn: 0, imss: 0, total: 0 },
-  ), [visibleRows]);
+  const visibleRows = useMemo(() => groups.flatMap((group) => group.companies), [groups]);
+  const grandTotals = useMemo(() => sumCompanyCols(visibleRows), [visibleRows]);
 
   if (breakdown.length === 0) return null;
 
   const handleExport = () => {
-    const header = ['Cia', 'Empresa', 'Ingreso gravable', 'IVA neto', 'ISR', 'ISN', 'IMSS', 'Total'];
-    const rows = visibleRows.map((row) => [
+    const header = ['Coordinado', 'Cia', 'Empresa', 'Ingreso gravable', 'IVA causado', 'IVA acreditable', 'IVA neto', 'ISN', 'IMSS', 'Total'];
+    const rows = groups.flatMap((group) => group.companies.map((row) => [
+      group.coordinado,
       row.cia,
       row.nombre,
       row.totals.grossIncome.toFixed(2),
+      row.totals.ivaCaused.toFixed(2),
+      row.totals.ivaCreditable.toFixed(2),
       row.totals.ivaNet.toFixed(2),
-      row.totals.isr.toFixed(2),
       row.totals.isn.toFixed(2),
       row.totals.imss.toFixed(2),
       row.totals.total.toFixed(2),
-    ]);
+    ]));
     const escape = (value: string) => /[",\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
     const csv = [header, ...rows].map((cols) => cols.map((c) => escape(String(c))).join(',')).join('\n');
     const blob = new Blob([`﻿${csv}`], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `impuestos-por-empresa-${filtered ? 'seleccion-' : ''}${todayISO()}.csv`;
+    a.download = `impuestos-por-coordinado-${filtered ? 'seleccion-' : ''}${todayISO()}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };
 
+  const numCell = 'px-3 py-2 text-right tabular-nums';
   return (
     <section className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--gray-200)] px-4 py-3">
         <div className="flex items-center gap-2">
           <Building2 className="h-4 w-4 text-[var(--gray-500)]" strokeWidth={1.5} />
-          <h3 className="text-[14px] font-bold text-[var(--gray-950)]">Impuestos por empresa interna</h3>
+          <h3 className="text-[14px] font-bold text-[var(--gray-950)]">IVA por coordinado fiscal · {monthLabel}</h3>
           <span className="text-[11px] text-[var(--gray-400)]">
             {filtered
               ? `Mostrando ${visibleRows.length} de ${breakdown.length} empresas`
-              : `${breakdown.length} empresas con movimiento`}
+              : `${breakdown.length} empresas · ${groups.length} coordinados`}
           </span>
         </div>
         <div className="flex items-center gap-2">
@@ -483,50 +539,65 @@ function TaxByCompanyPanel({ breakdown }: { breakdown: TaxCompanyBreakdown[] }) 
         </div>
       </div>
       <div className="overflow-x-auto px-1 pb-1">
-        <table className="w-full min-w-[680px] border-collapse text-[12px]">
+        <table className="w-full min-w-[820px] border-collapse text-[12px]">
           <thead>
             <tr className="text-[10px] font-medium uppercase tracking-[0.06em] text-[var(--gray-400)]">
               <th className="px-3 py-2 text-left">Empresa</th>
               <th className="px-3 py-2 text-right">Ingreso gravable</th>
+              <th className="px-3 py-2 text-right">IVA causado</th>
+              <th className="px-3 py-2 text-right">IVA acreditable</th>
               <th className="px-3 py-2 text-right">IVA neto</th>
-              <th className="px-3 py-2 text-right">ISR</th>
               <th className="px-3 py-2 text-right">ISN</th>
               <th className="px-3 py-2 text-right">IMSS</th>
               <th className="px-3 py-2 text-right">Total</th>
             </tr>
           </thead>
-          <tbody>
-            {visibleRows.map((row) => (
-              <tr key={row.cia} className="border-t border-[var(--gray-100)] hover:bg-[var(--gray-50)]">
-                <td className="px-3 py-2">
-                  <div className="font-medium text-[var(--gray-900)]">{row.nombre}</div>
-                  <div className="text-[10px] text-[var(--gray-400)]">{row.cia}</div>
-                </td>
-                <td className="px-3 py-2 text-right tabular-nums text-[var(--gray-600)]">{fmtCurrency(row.totals.grossIncome)}</td>
-                <td className="px-3 py-2 text-right tabular-nums text-[var(--gray-900)]">{fmtCurrency(row.totals.ivaNet)}</td>
-                <td className="px-3 py-2 text-right tabular-nums text-[var(--gray-900)]">{fmtCurrency(row.totals.isr)}</td>
-                <td className="px-3 py-2 text-right tabular-nums text-[var(--gray-900)]">{fmtCurrency(row.totals.isn)}</td>
-                <td className="px-3 py-2 text-right tabular-nums text-[var(--gray-900)]">{fmtCurrency(row.totals.imss)}</td>
-                <td className="px-3 py-2 text-right font-bold tabular-nums text-[var(--gray-950)]">{fmtCurrency(row.totals.total)}</td>
+          {groups.map((group) => (
+            <tbody key={group.coordinado}>
+              <tr className="bg-[var(--gray-50)] text-[var(--gray-700)]">
+                <td className="px-3 py-1.5 text-left text-[11px] font-bold uppercase tracking-[0.04em]">{group.coordinado}</td>
+                <td className={`${numCell} text-[var(--gray-500)]`}>{fmtCurrency(group.totals.grossIncome)}</td>
+                <td className={`${numCell} font-semibold`}>{fmtCurrency(group.totals.ivaCaused)}</td>
+                <td className={`${numCell} font-semibold`}>{fmtCurrency(group.totals.ivaCreditable)}</td>
+                <td className={`${numCell} font-semibold`}>{fmtCurrency(group.totals.ivaNet)}</td>
+                <td className={`${numCell} font-semibold`}>{fmtCurrency(group.totals.isn)}</td>
+                <td className={`${numCell} font-semibold`}>{fmtCurrency(group.totals.imss)}</td>
+                <td className={`${numCell} font-bold text-[var(--gray-950)]`}>{fmtCurrency(group.totals.total)}</td>
               </tr>
-            ))}
-          </tbody>
+              {group.companies.map((row) => (
+                <tr key={row.cia} className="border-t border-[var(--gray-100)] hover:bg-[var(--gray-50)]">
+                  <td className="px-3 py-2 pl-6">
+                    <div className="font-medium text-[var(--gray-900)]">{row.nombre}</div>
+                    <div className="text-[10px] text-[var(--gray-400)]">{row.cia}</div>
+                  </td>
+                  <td className={`${numCell} text-[var(--gray-600)]`}>{fmtCurrency(row.totals.grossIncome)}</td>
+                  <td className={`${numCell} text-[var(--gray-900)]`}>{fmtCurrency(row.totals.ivaCaused)}</td>
+                  <td className={`${numCell} text-[var(--gray-900)]`}>{fmtCurrency(row.totals.ivaCreditable)}</td>
+                  <td className={`${numCell} text-[var(--gray-900)]`}>{fmtCurrency(row.totals.ivaNet)}</td>
+                  <td className={`${numCell} text-[var(--gray-900)]`}>{fmtCurrency(row.totals.isn)}</td>
+                  <td className={`${numCell} text-[var(--gray-900)]`}>{fmtCurrency(row.totals.imss)}</td>
+                  <td className={`${numCell} font-bold text-[var(--gray-950)]`}>{fmtCurrency(row.totals.total)}</td>
+                </tr>
+              ))}
+            </tbody>
+          ))}
           <tfoot>
             <tr className="border-t-2 border-[var(--gray-200)] font-bold text-[var(--gray-950)]">
               <td className="px-3 py-2 text-left">{filtered ? `Selección (${visibleRows.length})` : 'Consolidado'}</td>
-              <td className="px-3 py-2 text-right tabular-nums">{fmtCurrency(totals.grossIncome)}</td>
-              <td className="px-3 py-2 text-right tabular-nums">{fmtCurrency(totals.ivaNet)}</td>
-              <td className="px-3 py-2 text-right tabular-nums">{fmtCurrency(totals.isr)}</td>
-              <td className="px-3 py-2 text-right tabular-nums">{fmtCurrency(totals.isn)}</td>
-              <td className="px-3 py-2 text-right tabular-nums">{fmtCurrency(totals.imss)}</td>
-              <td className="px-3 py-2 text-right tabular-nums">{fmtCurrency(totals.total)}</td>
+              <td className={numCell}>{fmtCurrency(grandTotals.grossIncome)}</td>
+              <td className={numCell}>{fmtCurrency(grandTotals.ivaCaused)}</td>
+              <td className={numCell}>{fmtCurrency(grandTotals.ivaCreditable)}</td>
+              <td className={numCell}>{fmtCurrency(grandTotals.ivaNet)}</td>
+              <td className={numCell}>{fmtCurrency(grandTotals.isn)}</td>
+              <td className={numCell}>{fmtCurrency(grandTotals.imss)}</td>
+              <td className={numCell}>{fmtCurrency(grandTotals.total)}</td>
             </tr>
           </tfoot>
         </table>
       </div>
       <p className="px-4 py-2 text-[10px] text-[var(--gray-400)]">
-        Impuesto derivado de los registros de cada cia (IVA causado por cobranza aplicada, acreditable del libro mayor / CXP, ISN e IMSS de nómina).
-        Usa el filtro para ver una o varias empresas; los ajustes manuales y el saldo vencido globales se mantienen en la vista consolidada.
+        IVA por coordinado fiscal del mes (causado por cobranza aplicada − acreditable del libro mayor / CXP), con ISN e IMSS de nómina.
+        El mapeo cia→coordinado es provisional (se afina con el catálogo). Los ajustes manuales y el saldo vencido globales se mantienen en la vista consolidada.
       </p>
     </section>
   );
@@ -562,35 +633,54 @@ function buildTaxPaymentSchedule(obligations: TaxObligation[]): TaxPaymentSchedu
     .sort((a, b) => a.date.localeCompare(b.date) || a.taxType.localeCompare(b.taxType));
 }
 
-function TaxOperationalOverview({ view, today }: { view: TaxDashboardView; today: string }) {
+function TaxOperationalOverview({ period, today }: { period: TaxPeriodSummary | undefined; today: string }) {
   const goTo = useNavigateToTab();
-  const scheduledCash = view.totals.cashImpact;
-  const unscheduled = view.obligations.reduce((sum, obligation) => {
+  if (!period) return null;
+
+  const monthLabel = fmtYearMonthLong(period.period);
+  // Lado de ingresos (causado) y egresos (acreditable) del IVA del MES, desde
+  // los campos ya computados por el motor. Neto a pagar = `period.ivaNet`.
+  const ivaCaused = period.iva.ivaCaused + period.iva.manualCaused;
+  const ivaCreditable = period.iva.ivaCreditable + period.iva.manualCreditable;
+  const ivaNet = period.ivaNet;
+  const scheduledCash = period.cashImpact;
+  const unscheduled = period.obligations.reduce((sum, obligation) => {
     const committed = obligation.paymentPlan
       .filter((payment) => payment.status === 'APPROVED' || payment.status === 'PAID')
       .reduce((paymentSum, payment) => paymentSum + payment.amount, 0);
     return sum + Math.max(0, obligation.totalAmount - committed);
   }, 0);
-  const soonLimit = addDays(today, 15);
-  const dueSoon = view.obligations
-    .filter((obligation) => obligation.pendingAmount > 0 && obligation.dueDate >= today && obligation.dueDate <= soonLimit)
-    .reduce((sum, obligation) => sum + obligation.pendingAmount, 0);
+  const dueLabel = period.dueDate < today ? 'Vencido' : `Vence ${fmtDate(period.dueDate)}`;
 
   return (
-    <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+    <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
       <KpiCard
-        label="Por pagar"
-        value={fmtCurrency(view.totals.totalWithOverdue)}
-        icon={<Wallet className="w-4 h-4" />}
-        color={toneByOutstanding(view.totals.totalWithOverdue)}
-        sublabel="Vencido + periodos visibles"
+        label="IVA causado"
+        value={fmtCurrency(ivaCaused)}
+        icon={<FileText className="w-4 h-4" />}
+        color={TONE_NEUTRAL}
+        sublabel={`Ingresos cobrados · ${monthLabel}`}
       />
       <KpiCard
-        label="Vence pronto"
-        value={fmtCurrency(dueSoon)}
+        label="IVA acreditable"
+        value={fmtCurrency(ivaCreditable)}
+        icon={<FileText className="w-4 h-4" />}
+        color={TONE_NEUTRAL}
+        sublabel={`Gastos pagados · ${monthLabel}`}
+      />
+      <KpiCard
+        label="IVA neto a pagar"
+        value={fmtCurrency(ivaNet)}
+        icon={<Wallet className="w-4 h-4" />}
+        color={toneByOutstanding(ivaNet)}
+        sublabel={`Causado − acreditable · ${dueLabel}`}
+      />
+      <KpiCard
+        label="Total del mes"
+        value={fmtCurrency(period.total)}
         icon={<CalendarDays className="w-4 h-4" />}
-        color={toneByRequirement(dueSoon)}
-        sublabel="Próximos 15 días"
+        color={toneByOutstanding(period.total)}
+        sublabel="IVA + ISN + IMSS"
       />
       <KpiCard
         label="Programado en caja"
@@ -609,6 +699,32 @@ function TaxOperationalOverview({ view, today }: { view: TaxDashboardView; today
         sublabel="Pendiente de calendarizar"
       />
     </section>
+  );
+}
+
+function MonthSelector({
+  periods,
+  value,
+  onChange,
+}: {
+  periods: string[];
+  value: string;
+  onChange: (period: string) => void;
+}) {
+  return (
+    <label className="flex items-center gap-2">
+      <span className="text-[11px] font-medium uppercase tracking-[0.06em] text-[var(--gray-500)]">Mes</span>
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="h-9 rounded-[var(--radius)] border border-[var(--gray-200)] bg-white px-3 text-[13px] font-medium text-[var(--gray-800)]"
+      >
+        {periods.length === 0 && <option value={value}>{fmtYearMonthLong(value)}</option>}
+        {periods.map((period) => (
+          <option key={period} value={period}>{fmtYearMonthLong(period)}</option>
+        ))}
+      </select>
+    </label>
   );
 }
 
@@ -709,75 +825,9 @@ const ADJUSTMENT_KIND_BY_TAX: Record<TaxType, Array<{ id: TaxManualAdjustment['k
     { id: 'IVA_PAID', label: 'IVA pagado' },
     { id: 'IVA_PAYABLE', label: 'IVA por pagar' },
   ],
-  ISR: [
-    { id: 'ISR_MANUAL', label: 'ISR provisional' },
-    { id: 'ISR_PAID', label: 'ISR pagado' },
-  ],
   ISN: [{ id: 'ISN_OVERRIDE', label: 'Override ISN' }],
   IMSS: [{ id: 'IMSS_MANUAL', label: 'IMSS manual' }],
 };
-
-function TaxSettingsPanel({
-  settings,
-  onChange,
-}: {
-  settings: TaxSettings;
-  onChange: (settings: TaxSettings) => void;
-}) {
-  const [coefficient, setCoefficient] = useState(String((settings.isrProvisionalCoefficient * 100).toFixed(2)));
-  const [rate, setRate] = useState(String((settings.isrRate * 100).toFixed(2)));
-
-  useEffect(() => {
-    setCoefficient(String((settings.isrProvisionalCoefficient * 100).toFixed(2)));
-    setRate(String((settings.isrRate * 100).toFixed(2)));
-  }, [settings.isrProvisionalCoefficient, settings.isrRate]);
-
-  const commit = () => {
-    const nextCoefficient = Number(coefficient) / 100;
-    const nextRate = Number(rate) / 100;
-    onChange({
-      isrProvisionalCoefficient: Number.isFinite(nextCoefficient) ? Math.max(0, Math.min(1, nextCoefficient)) : 0,
-      isrRate: Number.isFinite(nextRate) ? Math.max(0, Math.min(1, nextRate)) : 0.30,
-    });
-  };
-
-  return (
-    <section className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white px-4 py-3">
-      <div className="flex flex-wrap items-end gap-3">
-        <div className="min-w-[260px] flex-1">
-          <h2 className="text-[15px] font-bold tracking-tight text-[var(--gray-950)]">Configuracion ISR</h2>
-          <p className="mt-0.5 text-[12px] text-[var(--gray-400)]">
-            El pago provisional requiere coeficiente de utilidad fiscal. Si no existe, captura ISR manual.
-          </p>
-        </div>
-        <Field label="Coef. utilidad %">
-          <input
-            value={coefficient}
-            type="number"
-            min="0"
-            max="100"
-            step="0.01"
-            onChange={(event) => setCoefficient(event.target.value)}
-            onBlur={commit}
-            className={`${taxInputClass} text-right tabular-nums`}
-          />
-        </Field>
-        <Field label="Tasa ISR %">
-          <input
-            value={rate}
-            type="number"
-            min="0"
-            max="100"
-            step="0.01"
-            onChange={(event) => setRate(event.target.value)}
-            onBlur={commit}
-            className={`${taxInputClass} text-right tabular-nums`}
-          />
-        </Field>
-      </div>
-    </section>
-  );
-}
 
 function TaxForms({
   activePeriod,
@@ -868,7 +918,6 @@ function TaxForms({
             <Field label="Impuesto">
               <select value={taxType} onChange={(event) => setTaxType(event.target.value as TaxType)} className={taxInputClass}>
                 <option value="IVA">IVA</option>
-                <option value="ISR">ISR</option>
                 <option value="ISN">ISN</option>
                 <option value="IMSS">IMSS</option>
               </select>
@@ -897,7 +946,6 @@ function TaxForms({
             <Field label="Impuesto">
               <select value={obligationType} onChange={(event) => setObligationType(event.target.value as TaxType)} className={taxInputClass}>
                 <option value="IVA">IVA</option>
-                <option value="ISR">ISR</option>
                 <option value="ISN">ISN</option>
                 <option value="IMSS">IMSS</option>
               </select>
@@ -1012,7 +1060,7 @@ function OverdueBalanceSection({
             <span className="text-[18px] font-bold tabular-nums text-[var(--warning)]">{fmtCurrency(newPeriodTotal)}</span>
           </div>
           <div className="mt-0.5 flex items-center justify-between text-[11px] text-[var(--gray-400)]">
-            <span>Calculado (IVA+ISR+ISN+IMSS)</span>
+            <span>Calculado (IVA+ISN+IMSS)</span>
           </div>
         </div>
 
@@ -1065,10 +1113,10 @@ function TaxPeriodTable({
   onSelectPeriod: (period: string) => void;
   onInlineEdit: (period: string, taxType: TaxType, kind: TaxManualAdjustment['kind'], amount: number) => void;
 }) {
-  const [editingCell, setEditingCell] = useState<{ period: string; field: 'iva' | 'isr' | 'isn' | 'imss'; original: number } | null>(null);
+  const [editingCell, setEditingCell] = useState<{ period: string; field: 'iva' | 'isn' | 'imss'; original: number } | null>(null);
   const [editValue, setEditValue] = useState('');
 
-  const startEdit = (period: string, field: 'iva' | 'isr' | 'isn' | 'imss', currentValue: number) => {
+  const startEdit = (period: string, field: 'iva' | 'isn' | 'imss', currentValue: number) => {
     const rounded = Math.round(currentValue);
     setEditingCell({ period, field, original: rounded });
     setEditValue(String(rounded));
@@ -1088,12 +1136,11 @@ function TaxPeriodTable({
       return;
     }
     // `mode` distingue ajustes aditivos (delta) de overrides absolutos. Para los
-    // aditivos (IVA por pagar / ISR / IMSS) el ajuste es el DELTA contra el valor
+    // aditivos (IVA por pagar / IMSS) el ajuste es el DELTA contra el valor
     // mostrado, así la celda queda EXACTAMENTE en el monto tecleado en vez de
     // sumar el valor completo encima del calculado. ISN ya es un override.
     const kindMap: Record<string, { taxType: TaxType; kind: TaxManualAdjustment['kind']; mode: 'delta' | 'absolute' }> = {
       iva: { taxType: 'IVA', kind: 'IVA_PAYABLE', mode: 'delta' },
-      isr: { taxType: 'ISR', kind: 'ISR_MANUAL', mode: 'delta' },
       isn: { taxType: 'ISN', kind: 'ISN_OVERRIDE', mode: 'absolute' },
       imss: { taxType: 'IMSS', kind: 'IMSS_MANUAL', mode: 'delta' },
     };
@@ -1110,7 +1157,7 @@ function TaxPeriodTable({
       <div className="border-b border-[var(--gray-200)] px-4 py-3">
         <h2 className="text-[15px] font-bold tracking-tight text-[var(--gray-950)]">Obligaciones por periodo</h2>
         <p className="mt-0.5 text-[12px] text-[var(--gray-400)]">
-          Haz clic en un monto de IVA, ISR, ISN o IMSS para editarlo. Selecciona un periodo para ver su detalle.
+          Haz clic en un monto de IVA, ISN o IMSS para editarlo. Selecciona un periodo para ver su detalle.
         </p>
       </div>
       <div className="overflow-x-auto">
@@ -1118,8 +1165,9 @@ function TaxPeriodTable({
           <thead className="bg-[var(--gray-50)] text-left text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--gray-400)]">
             <tr>
               <th className="px-4 py-2.5">Periodo</th>
+              <th className="px-4 py-2.5 text-right">IVA causado</th>
+              <th className="px-4 py-2.5 text-right">IVA acreditable</th>
               <th className="px-4 py-2.5 text-right">IVA neto</th>
-              <th className="px-4 py-2.5 text-right">ISR</th>
               <th className="px-4 py-2.5 text-right">ISN</th>
               <th className="px-4 py-2.5 text-right">IMSS</th>
               <th className="px-4 py-2.5 text-right">Total</th>
@@ -1139,20 +1187,13 @@ function TaxPeriodTable({
                   style={{ background: active ? 'var(--gray-50)' : undefined }}
                 >
                   <td className="px-4 py-3 font-bold text-[var(--gray-950)]">{period.period}</td>
+                  <td className="px-4 py-3 text-right tabular-nums text-[var(--gray-600)]">{fmtCurrency(period.iva.ivaCaused + period.iva.manualCaused)}</td>
+                  <td className="px-4 py-3 text-right tabular-nums text-[var(--gray-600)]">{fmtCurrency(period.iva.ivaCreditable + period.iva.manualCreditable)}</td>
                   <EditableCell
                     value={period.ivaNet}
                     editing={editingCell?.period === period.period && editingCell.field === 'iva'}
                     editValue={editValue}
                     onStartEdit={(e) => { e.stopPropagation(); startEdit(period.period, 'iva', period.ivaNet); }}
-                    onEditChange={setEditValue}
-                    onCommit={commitEdit}
-                    onCancel={cancelEdit}
-                  />
-                  <EditableCell
-                    value={period.isr.payable}
-                    editing={editingCell?.period === period.period && editingCell.field === 'isr'}
-                    editValue={editValue}
-                    onStartEdit={(e) => { e.stopPropagation(); startEdit(period.period, 'isr', period.isr.payable); }}
                     onEditChange={setEditValue}
                     onCommit={commitEdit}
                     onCancel={cancelEdit}
@@ -1268,7 +1309,6 @@ function TaxPeriodDetail({
   const sourceCount = (tab: DetailTab) => {
     if (tab === 'summary') return period.obligations.length;
     if (tab === 'iva') return period.iva.incomeLines.length + period.iva.expenseLines.length + period.iva.paidLines.length;
-    if (tab === 'isr') return period.isr.incomeLines.length + period.isr.paidLines.length;
     if (tab === 'isn') return period.payrollLines.length;
     if (tab === 'imss') return period.imssLines.length;
     return period.obligations.length;
@@ -1283,10 +1323,10 @@ function TaxPeriodDetail({
 
       {/* Summary mini-stats */}
       <div className="grid grid-cols-2 gap-2 border-b border-[var(--gray-200)] px-4 py-3 sm:grid-cols-4">
+        <MiniStat label="IVA causado" value={fmtCurrency(period.iva.ivaCaused + period.iva.manualCaused)} />
+        <MiniStat label="IVA acreditable" value={fmtCurrency(period.iva.ivaCreditable + period.iva.manualCreditable)} />
         <MiniStat label="IVA neto" value={fmtCurrency(period.ivaNet)} />
-        <MiniStat label="ISR" value={fmtCurrency(period.isr.payable)} />
-        <MiniStat label="ISN (3%)" value={fmtCurrency(period.isn)} />
-        <MiniStat label="IMSS" value={fmtCurrency(period.imss)} />
+        <MiniStat label="ISN + IMSS" value={fmtCurrency(period.isn + period.imss)} />
       </div>
 
       <div className="border-b border-[var(--gray-200)] px-4 py-2">
@@ -1295,7 +1335,6 @@ function TaxPeriodDetail({
           options={[
             { id: 'summary' as const, label: 'Resumen' },
             { id: 'iva' as const, label: `IVA (${sourceCount('iva')})` },
-            { id: 'isr' as const, label: `ISR (${sourceCount('isr')})` },
             { id: 'isn' as const, label: `Nómina / ISN (${sourceCount('isn')})` },
             { id: 'imss' as const, label: `IMSS (${sourceCount('imss')})` },
             { id: 'payments' as const, label: `Pagos (${sourceCount('payments')})` },
@@ -1305,7 +1344,6 @@ function TaxPeriodDetail({
       </div>
       {detailTab === 'summary' && <PeriodOperationalSummary period={period} onApprovePayment={onApprovePayment} />}
       {detailTab === 'iva' && <IvaDetail iva={period.iva} onUpdateTaxRate={onUpdateTaxRate} />}
-      {detailTab === 'isr' && <IsrDetail period={period} />}
       {detailTab === 'isn' && <IsnDetail period={period} />}
       {detailTab === 'imss' && <ImssDetail period={period} />}
       {detailTab === 'payments' && (
@@ -1382,10 +1420,10 @@ function PeriodOperationalSummary({
         </div>
       </div>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <MiniStat label="IVA causado" value={fmtCurrency(period.iva.ivaCaused + period.iva.manualCaused)} />
+        <MiniStat label="IVA acreditable" value={fmtCurrency(period.iva.ivaCreditable + period.iva.manualCreditable)} />
         <MiniStat label="IVA neto" value={fmtCurrency(period.ivaNet)} />
-        <MiniStat label="ISR" value={fmtCurrency(period.isr.payable)} />
-        <MiniStat label="ISN" value={fmtCurrency(period.isn)} />
-        <MiniStat label="IMSS" value={fmtCurrency(period.imss)} />
+        <MiniStat label="ISN + IMSS" value={fmtCurrency(period.isn + period.imss)} />
       </div>
     </div>
   );
@@ -1519,41 +1557,6 @@ function IvaLinesTable({
           </table>
         )}
       </div>
-    </div>
-  );
-}
-
-function IsrDetail({ period }: { period: TaxPeriodSummary }) {
-  return (
-    <div className="space-y-3 p-4">
-      <div className="grid grid-cols-2 gap-2">
-        <MiniStat label="Ingresos nominales" value={fmtCurrency(period.isr.nominalIncome)} />
-        <MiniStat label="Coeficiente utilidad" value={`${(period.isr.coefficient * 100).toFixed(2)}%`} />
-        <MiniStat label="Tasa ISR" value={`${(period.isr.rate * 100).toFixed(2)}%`} />
-        <MiniStat label="ISR calculado" value={fmtCurrency(period.isr.calculated)} />
-        <MiniStat label="ISR manual" value={fmtCurrency(period.isr.manual)} />
-        <MiniStat label="ISR pagado" value={fmtCurrency(period.isr.paid)} />
-        <MiniStat label="Por pagar" value={fmtCurrency(period.isr.payable)} />
-      </div>
-      {period.isr.coefficient <= 0 && period.isr.manual <= 0 && (
-        <div className="rounded-[var(--radius)] border border-[var(--warning)]/20 bg-[var(--warning-muted)] px-3 py-2 text-[11px] text-[var(--warning)]">
-          ISR automatico en cero: captura el coeficiente de utilidad fiscal o agrega ISR manual.
-        </div>
-      )}
-      <CollapsibleSourceLines
-        title={`Ingresos base ISR · ${period.isr.incomeLines.length}`}
-        lines={period.isr.incomeLines}
-        empty="Sin ingresos cobrados en el periodo para estimar ISR."
-        expanded
-        onToggle={() => {}}
-      />
-      <CollapsibleSourceLines
-        title={`Pagos ISR · ${period.isr.paidLines.length}`}
-        lines={period.isr.paidLines}
-        empty="Sin pagos reales de ISR detectados en banco o movimientos."
-        expanded={period.isr.paidLines.length > 0}
-        onToggle={() => {}}
-      />
     </div>
   );
 }
@@ -1866,10 +1869,12 @@ function SegmentedControl<T extends string>({
   );
 }
 
-function addDays(date: string, days: number): string {
-  const parsed = new Date(`${date}T00:00:00.000Z`);
-  parsed.setUTCDate(parsed.getUTCDate() + days);
-  return parsed.toISOString().slice(0, 10);
+/** Último día (ISO) del mes `YYYY-MM`. */
+function endOfMonthISO(yearMonth: string): string {
+  const [y, m] = yearMonth.split('-').map(Number);
+  if (!Number.isFinite(y) || !Number.isFinite(m)) return `${yearMonth}-28`;
+  // Día 0 del mes siguiente = último día del mes.
+  return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
 }
 
 function summarizeObligationSources(obligations: TaxObligation[]): string {

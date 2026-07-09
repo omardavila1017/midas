@@ -108,12 +108,21 @@ describe('<TaxDashboard />', () => {
       />,
     );
 
-    // Period 2026-05 has IVA caused 160 from the default cobranza payment.
+    // Period 2026-05 has IVA caused 160 from the default cobranza payment. Con las
+    // columnas nuevas (causado/acreditable/neto), varias celdas muestran $160.00
+    // pero SÓLO la de "IVA neto" es editable — la buscamos abriendo la que produce
+    // un spinbutton.
     const row = screen.getByText('2026-05').closest('tr') as HTMLElement;
-    const ivaCell = within(row).getAllByText('$160.00')[0];
-    fireEvent.click(ivaCell);
+    const openEditable = (): HTMLInputElement => {
+      for (const cell of within(row).getAllByText('$160.00')) {
+        fireEvent.click(cell);
+        const sb = within(row).queryByRole('spinbutton') as HTMLInputElement | null;
+        if (sb) return sb;
+      }
+      throw new Error('no editable $160.00 cell found');
+    };
 
-    const input = within(row).getByRole('spinbutton') as HTMLInputElement;
+    const input = openEditable();
     expect(input.value).toBe('160');
     // Open + blur with no change must be a no-op — previously this appended an
     // additive IVA_PAYABLE equal to the full value and doubled the cell.
@@ -125,8 +134,7 @@ describe('<TaxDashboard />', () => {
 
     // An actual change applies the DELTA so the cell becomes exactly the typed
     // value (160 → 500 stores +340), not 160 stacked on top of 160.
-    fireEvent.click(within(row).getAllByText('$160.00')[0]);
-    const input2 = within(row).getByRole('spinbutton') as HTMLInputElement;
+    const input2 = openEditable();
     fireEvent.change(input2, { target: { value: '500' } });
     fireEvent.blur(input2);
 
@@ -350,7 +358,7 @@ describe('<TaxDashboard />', () => {
       />,
     );
 
-    const panel = screen.getByText('Impuestos por empresa interna').closest('section') as HTMLElement;
+    const panel = screen.getByRole('heading', { name: /IVA por coordinado fiscal/i }).closest('section') as HTMLElement;
     const table = within(panel).getByRole('table');
     // Both companies show in the per-company breakdown, consolidated footer.
     expect(within(table).getByText('Empresa Norte')).toBeTruthy();

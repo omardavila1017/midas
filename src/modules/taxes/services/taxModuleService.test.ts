@@ -12,11 +12,13 @@ import {
   buildAutomaticTaxReserveMovements,
   buildApprovedTaxPaymentMovements,
   buildTaxByCompany,
+  buildTaxByCoordinado,
   buildTaxDashboardView,
   createManualTaxObligation,
   createTaxManualAdjustment,
   defaultTaxStore,
   upsertTaxObligation,
+  type TaxCompanyBreakdown,
 } from './taxModuleService';
 
 describe('taxModuleService', () => {
@@ -157,6 +159,9 @@ describe('taxModuleService', () => {
     expect(may.realIva.balanceInFavor).toBeCloseTo(1440);
     expect(may.realIva.expenseLines[0].concept).toContain('libro mayor');
     expect(may.realIva.incomeLines[0].concept).toContain('Cobro PAY-X');
+    // El lado de egresos/ingresos se surface a los totales del rango (Taller 8-jul).
+    expect(view.totals.ivaCaused).toBeCloseTo(160);
+    expect(view.totals.ivaCreditable).toBeCloseTo(1600);
   });
 
   it('takes caused IVA from real cobranza while reading creditable from the ledger', () => {
@@ -1183,90 +1188,8 @@ describe('taxModuleService', () => {
     expect(view.periods[0].isn).toBe(45);
   });
 
-  it('calculates provisional ISR from collected income when fiscal coefficient is configured', () => {
-    const view = buildTaxDashboardView({
-      cobranzaPayments: [
-        cobranzaPayment({
-          idPago: 'PAY-ISR',
-          fechaCobro: '2026-05-10',
-          importeRecibo: 1160,
-          applications: [{
-            noFactura: 'RI-ISR',
-            importeCobrado: 1160,
-            importeOriginalFactura: 1160,
-            importeIvaFacturaOriginal: 160,
-            tasaIva: '16',
-          }],
-        }),
-      ],
-      companyCode: 'all',
-      startDate: '2026-05-01',
-      endDate: '2026-05-31',
-      store: {
-        ...defaultTaxStore(),
-        settings: {
-          isrProvisionalCoefficient: 0.10,
-          isrRate: 0.30,
-        },
-      },
-      today: '2026-05-01',
-      ivaMode: 'REAL',
-    });
-
-    const may = view.periods.find((period) => period.period === '2026-05')!;
-    expect(may.isr.nominalIncome).toBeCloseTo(1000);
-    expect(may.isr.estimatedTaxableProfit).toBeCloseTo(100);
-    expect(may.isr.calculated).toBeCloseTo(30);
-    expect(may.isr.payable).toBeCloseTo(30);
-    expect(may.total).toBeCloseTo(190);
-    expect(may.obligations.some((obligation) => obligation.taxType === 'ISR')).toBe(true);
-  });
-
-  it('detects real ISR paid from bank statements and reduces provisional ISR payable', () => {
-    const view = buildTaxDashboardView({
-      cobranzaPayments: [
-        cobranzaPayment({
-          idPago: 'PAY-ISR-BANK',
-          fechaCobro: '2026-05-10',
-          importeRecibo: 1160,
-          applications: [{
-            noFactura: 'RI-ISR-BANK',
-            importeCobrado: 1160,
-            importeOriginalFactura: 1160,
-            importeIvaFacturaOriginal: 160,
-            tasaIva: '16',
-          }],
-        }),
-      ],
-      bankStatements: [bank([bankLine({
-        fechaOperacion: '2026-05-17',
-        concepto: 'PAGO ISR MAYO',
-        importe: 10,
-      })])],
-      companyCode: 'all',
-      startDate: '2026-05-01',
-      endDate: '2026-05-31',
-      store: {
-        ...defaultTaxStore(),
-        settings: {
-          isrProvisionalCoefficient: 0.10,
-          isrRate: 0.30,
-        },
-      },
-      today: '2026-05-01',
-      ivaMode: 'REAL',
-    });
-
-    const may = view.periods.find((period) => period.period === '2026-05')!;
-    expect(may.isr.calculated).toBeCloseTo(30);
-    expect(may.isr.paid).toBeCloseTo(10);
-    expect(may.isr.payable).toBeCloseTo(20);
-    expect(may.isr.paidLines[0]).toMatchObject({
-      concept: 'Pago ISR · PAGO ISR MAYO',
-      sourceSystem: 'BANK',
-      taxAmount: 10,
-    });
-  });
+  // ISR se retiró del módulo (Taller 8-jul-2026): los tests de ISR provisional
+  // y ISR pagado desde banco se eliminaron. IVA/IMSS/ISN siguen cubiertos.
 
   it('detects IMSS from JDE-like movements and includes manual pending obligations', () => {
     const projection = projectionFor([
@@ -1423,6 +1346,49 @@ describe('taxModuleService', () => {
     // cobranzaPayment defaults cia '00011'; no catalog entry → name falls back to cia.
     expect(breakdown[0].cia).toBe('00011');
     expect(breakdown[0].nombre).toBe('00011');
+  });
+
+  it('rolls up the per-company breakdown by coordinado fiscal (buildTaxByCoordinado)', () => {
+    const row = (cia: string, nombre: string, ivaNet: number): TaxCompanyBreakdown => ({
+      cia,
+      nombre,
+      totals: {
+        ivaCaused: ivaNet + 10,
+        ivaCreditable: 10,
+        ivaNet,
+        isn: 0,
+        imss: 0,
+        total: ivaNet,
+        totalWithOverdue: ivaNet,
+        cashImpact: 0,
+        unclassified: 0,
+        grossIncome: ivaNet * 6,
+      },
+    });
+    const breakdown = [
+      row('00001', 'Transportes CIR', 100),
+      row('00002', 'Servicio Industrial Potosino', 50),
+      row('00010', 'Transportes Tamaulipas', 200),
+      row('00099', 'Empresa Genérica', 30),
+    ];
+
+    const resolver = (_cia: string, nombre: string) => {
+      if (/CIR|potosin/i.test(nombre)) return 'SIRES';
+      if (/tamaulipas/i.test(nombre)) return 'Federal';
+      return 'Sin coordinado';
+    };
+    const groups = buildTaxByCoordinado(breakdown, resolver);
+
+    // Tres grupos, ordenados por total desc: Federal (200) > SIRES (150) > Sin coordinado (30).
+    expect(groups.map((g) => g.coordinado)).toEqual(['Federal', 'SIRES', 'Sin coordinado']);
+    const sires = groups.find((g) => g.coordinado === 'SIRES')!;
+    expect(sires.companies.map((c) => c.cia)).toEqual(['00001', '00002']);
+    expect(sires.totals.ivaNet).toBe(150);
+    expect(sires.totals.ivaCaused).toBe(170); // (100+10) + (50+10)
+    expect(sires.totals.ivaCreditable).toBe(20);
+    // El consolidado de los grupos reconcilia con la suma de todas las cias.
+    const grand = groups.reduce((sum, g) => sum + g.totals.ivaNet, 0);
+    expect(grand).toBe(380);
   });
 });
 

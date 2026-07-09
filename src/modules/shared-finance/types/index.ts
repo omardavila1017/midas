@@ -31,7 +31,9 @@ export type FinancialDataStatus = 'REAL' | 'PROJECTED_BASE' | 'ADJUSTED' | 'APPR
 export type LockState = 'UNLOCKED' | 'RESTRICTED' | 'LOCKED';
 export type FinancialTaxRate = 0 | 8 | 16;
 export type FinancialTaxTreatment = 'IVA_CAUSED' | 'IVA_CREDITABLE' | 'IVA_EXEMPT' | 'UNCLASSIFIED';
-export type TaxType = 'IVA' | 'ISR' | 'ISN' | 'IMSS';
+// ISR se retiró del módulo de impuestos (Grupo Senda paga sobre flujo, no es
+// pagador de ISR) — Taller 8-jul-2026. Quedan IVA + los impuestos de nómina.
+export type TaxType = 'IVA' | 'ISN' | 'IMSS';
 export type TaxStatus = 'PROJECTED' | 'CONFIRMED' | 'PAID' | 'PENDING';
 export type TaxSource = 'CALCULATED' | 'JDE' | 'MANUAL' | 'SCENARIO';
 export type TaxPaymentPlanStatus = 'DRAFT' | 'APPROVED' | 'PAID';
@@ -541,8 +543,6 @@ export interface TaxManualAdjustment {
     | 'IVA_CREDITABLE'
     | 'IVA_PAID'
     | 'IVA_PAYABLE'
-    | 'ISR_MANUAL'
-    | 'ISR_PAID'
     | 'ISN_OVERRIDE'
     | 'IMSS_MANUAL';
   amount: number;

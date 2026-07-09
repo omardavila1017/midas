@@ -38,8 +38,6 @@ export const TAX_STORE_CHANGED_EVENT = 'midas:taxes:changed';
 const LEGACY_IVA_ADJUSTMENTS_KEY = 'midas.financialProjection.taxAdjustments.v1';
 const LEGACY_OPERATING_SCENARIOS_KEY = 'midas.operating.scenarios.v1';
 const ISN_RATE = 0.03;
-const ISR_CORPORATE_RATE = 0.30;
-const DEFAULT_ISR_PROVISIONAL_COEFFICIENT = 0;
 const REGIMEN_601_IVA_RATE = 16;
 
 export type IvaMode = 'REAL' | 'FORECAST' | 'BOTH';
@@ -98,15 +96,14 @@ export interface TaxStore {
   migratedAt?: string;
 }
 
-export interface TaxSettings {
-  /**
-   * Coeficiente de utilidad del ultimo ejercicio fiscal. El ISR provisional de
-   * persona moral no se puede inferir de facturas; sin este dato queda en cero
-   * y se captura manualmente.
-   */
-  isrProvisionalCoefficient: number;
-  isrRate: number;
-}
+/**
+ * Config del módulo de impuestos. Sus únicos campos eran de ISR
+ * (`isrProvisionalCoefficient`/`isrRate`); al retirar ISR (Taller 8-jul-2026)
+ * queda vacío. Se conserva la llave `TaxStore.settings` (objeto vacío) para NO
+ * forzar una migración de persistencia; si a futuro IVA/IMSS/ISN necesitan
+ * config, se agrega aquí.
+ */
+export type TaxSettings = Record<string, never>;
 
 export type TaxRateOverrideTargetType = 'CLIENT' | 'PROVIDER' | 'CONCEPT';
 
@@ -166,23 +163,6 @@ export interface IvaPeriodDetail {
   unclassifiedLines: TaxSourceLine[];
 }
 
-export interface IsrPeriodDetail {
-  period: string;
-  dueDate: string;
-  nominalIncome: number;
-  coefficient: number;
-  rate: number;
-  estimatedTaxableProfit: number;
-  calculated: number;
-  manual: number;
-  paid: number;
-  payable: number;
-  status: TaxStatus;
-  paymentPlan: TaxPaymentPlanItem[];
-  incomeLines: TaxSourceLine[];
-  paidLines: TaxSourceLine[];
-}
-
 export interface TaxPeriodSummary {
   period: string;
   dueDate: string;
@@ -200,7 +180,6 @@ export interface TaxPeriodSummary {
   /** IVA proyectado/reserva: CXP abiertas, OCs, presupuesto y movimientos estimados. */
   forecastIva: IvaPeriodDetail;
   ivaMode: IvaMode;
-  isr: IsrPeriodDetail;
   payrollBase: number;
   payrollLines: TaxSourceLine[];
   imssLines: TaxSourceLine[];
@@ -212,9 +191,12 @@ export interface TaxDashboardView {
   /** Saldo vencido acumulado que se arrastra de periodos anteriores. */
   overdueBalance: number;
   totals: {
+    /** IVA causado (base-cobro) total del rango. */
+    ivaCaused: number;
+    /** IVA acreditable (gastos pagados / libro mayor) total del rango. */
+    ivaCreditable: number;
     ivaNet: number;
     isn: number;
-    isr: number;
     imss: number;
     total: number;
     /** Total incluyendo el saldo vencido arrastrado. */
@@ -237,31 +219,16 @@ export function defaultTaxStore(): TaxStore {
 }
 
 function defaultTaxSettings(): TaxSettings {
-  return {
-    isrProvisionalCoefficient: DEFAULT_ISR_PROVISIONAL_COEFFICIENT,
-    isrRate: ISR_CORPORATE_RATE,
-  };
+  return {};
 }
 
-function normalizeTaxSettings(value: unknown): TaxSettings {
-  if (!value || typeof value !== 'object') return defaultTaxSettings();
-  const raw = value as Record<string, unknown>;
-  const coefficient = readAmount(raw.isrProvisionalCoefficient);
-  const rate = readAmount(raw.isrRate);
-  return {
-    isrProvisionalCoefficient: Number.isFinite(coefficient)
-      ? Math.max(0, Math.min(1, coefficient))
-      : DEFAULT_ISR_PROVISIONAL_COEFFICIENT,
-    isrRate: Number.isFinite(rate)
-      ? Math.max(0, Math.min(1, rate))
-      : ISR_CORPORATE_RATE,
-  };
+function normalizeTaxSettings(_value: unknown): TaxSettings {
+  // Sin campos tras retirar ISR — cualquier config previa de ISR se descarta.
+  return {};
 }
 
-function isDefaultTaxSettings(settings: TaxSettings | undefined): boolean {
-  const normalized = normalizeTaxSettings(settings);
-  return normalized.isrProvisionalCoefficient === DEFAULT_ISR_PROVISIONAL_COEFFICIENT
-    && normalized.isrRate === ISR_CORPORATE_RATE;
+function isDefaultTaxSettings(_settings: TaxSettings | undefined): boolean {
+  return true;
 }
 
 export function loadTaxStore(fallback: TaxStore = defaultTaxStore()): TaxStore {
@@ -550,20 +517,6 @@ export function buildTaxDashboardView(params: {
       endDate,
       ensure: ensureReal,
     });
-    accumulateHistoricIsrPaidFromBankStatements({
-      bankStatements: params.bankStatements ?? [],
-      companyCode: params.companyCode,
-      startDate,
-      endDate,
-      ensure: ensureShared,
-    });
-    accumulateHistoricIsrPaidFromMovements({
-      movements,
-      hasDirectBankStatements: (params.bankStatements ?? []).length > 0,
-      startDate,
-      endDate,
-      ensure: ensureShared,
-    });
   }
 
   if (includeForecastIva) {
@@ -705,8 +658,6 @@ export function buildTaxDashboardView(params: {
     if (adjustment.kind === 'IVA_CREDITABLE') row.manualIvaCreditable += adjustment.amount;
     if (adjustment.kind === 'IVA_PAID') row.ivaPaid += adjustment.amount;
     if (adjustment.kind === 'IVA_PAYABLE') row.manualIvaPayable += adjustment.amount;
-    if (adjustment.kind === 'ISR_MANUAL') row.manualIsr += adjustment.amount;
-    if (adjustment.kind === 'ISR_PAID') row.isrPaid += adjustment.amount;
     if (adjustment.kind === 'ISN_OVERRIDE') row.isnOverride = adjustment.amount;
     if (adjustment.kind === 'IMSS_MANUAL') row.imssManual += adjustment.amount;
   }
@@ -749,9 +700,10 @@ export function buildTaxDashboardView(params: {
   const totalOverdue = overdueBalance + pastPendingObligations;
 
   const totals = periods.reduce<TaxDashboardView['totals']>((sum, period) => ({
+    ivaCaused: sum.ivaCaused + period.iva.ivaCaused + period.iva.manualCaused,
+    ivaCreditable: sum.ivaCreditable + period.iva.ivaCreditable + period.iva.manualCreditable,
     ivaNet: sum.ivaNet + period.ivaNet,
     isn: sum.isn + period.isn,
-    isr: sum.isr + period.isr.payable,
     imss: sum.imss + period.imss,
     total: sum.total + period.total,
     totalWithOverdue: sum.totalWithOverdue + period.total,
@@ -759,9 +711,10 @@ export function buildTaxDashboardView(params: {
     unclassified: sum.unclassified + period.iva.unclassifiedIncome + period.iva.unclassifiedExpense,
     grossIncome: sum.grossIncome + period.iva.incomeBase16 + period.iva.incomeBase8,
   }), {
+    ivaCaused: 0,
+    ivaCreditable: 0,
     ivaNet: 0,
     isn: 0,
-    isr: 0,
     imss: 0,
     total: 0,
     totalWithOverdue: totalOverdue,
@@ -796,7 +749,7 @@ export interface TaxCompanyBreakdown {
  * únicamente el impuesto derivado de SUS registros, y los montos globales /
  * manuales se quedan en la vista consolidada. `movements` se omite porque no
  * trae una cia confiable (su id la codifica para algunos, pero no todos) — el
- * IVA/ISR pagado por empresa proviene de los estados de cuenta cia-filtrados.
+ * IVA pagado por empresa proviene de los estados de cuenta cia-filtrados.
  */
 export function buildTaxByCompany(
   params: TaxDashboardViewParams,
@@ -815,8 +768,8 @@ export function buildTaxByCompany(
   for (const cost of params.payrollCosts ?? []) add(cost.cia);
 
   const nameByCia = new Map(companies.map((company) => [company.cia, company.nombre]));
-  // Store neutro: conserva settings (coeficiente/tasa ISR) pero descarta los
-  // ajustes/obligaciones manuales y el saldo vencido globales.
+  // Store neutro: descarta los ajustes/obligaciones manuales y el saldo vencido
+  // globales (no están etiquetados por cia). `settings` ya es vacío tras retirar ISR.
   const neutralStore: TaxStore = { ...defaultTaxStore(), settings: params.store.settings };
 
   const rows: TaxCompanyBreakdown[] = [];
@@ -830,7 +783,6 @@ export function buildTaxByCompany(
     });
     const totals = view.totals;
     const hasData = totals.ivaNet !== 0
-      || totals.isr !== 0
       || totals.isn !== 0
       || totals.imss !== 0
       || totals.grossIncome !== 0
@@ -841,6 +793,75 @@ export function buildTaxByCompany(
 
   rows.sort((a, b) => b.totals.total - a.totals.total || a.cia.localeCompare(b.cia));
   return rows;
+}
+
+/** Totales fiscales agrupados por coordinado fiscal (rollup sobre las cias). */
+export interface TaxCoordinadoBreakdown {
+  /** Etiqueta del coordinado ("SIRES" / "Federal" / "Sin coordinado"). */
+  coordinado: string;
+  /** Cias que componen el grupo, ya con sus totales por empresa. */
+  companies: TaxCompanyBreakdown[];
+  totals: TaxCompanyBreakdown['totals'];
+}
+
+function emptyTaxTotals(): TaxCompanyBreakdown['totals'] {
+  return {
+    ivaCaused: 0,
+    ivaCreditable: 0,
+    ivaNet: 0,
+    isn: 0,
+    imss: 0,
+    total: 0,
+    totalWithOverdue: 0,
+    cashImpact: 0,
+    unclassified: 0,
+    grossIncome: 0,
+  };
+}
+
+function addTaxTotals(
+  a: TaxCompanyBreakdown['totals'],
+  b: TaxCompanyBreakdown['totals'],
+): TaxCompanyBreakdown['totals'] {
+  return {
+    ivaCaused: a.ivaCaused + b.ivaCaused,
+    ivaCreditable: a.ivaCreditable + b.ivaCreditable,
+    ivaNet: a.ivaNet + b.ivaNet,
+    isn: a.isn + b.isn,
+    imss: a.imss + b.imss,
+    total: a.total + b.total,
+    totalWithOverdue: a.totalWithOverdue + b.totalWithOverdue,
+    cashImpact: a.cashImpact + b.cashImpact,
+    unclassified: a.unclassified + b.unclassified,
+    grossIncome: a.grossIncome + b.grossIncome,
+  };
+}
+
+/**
+ * Agrupa el desglose por empresa (`buildTaxByCompany`) por **coordinado fiscal**
+ * usando `resolveGroup(cia)` (por defecto el catálogo `coordinadoFiscalCatalog`).
+ * Rollup puro y aditivo: NO recomputa el motor, sólo suma los totales por-cia de
+ * cada grupo. Los grupos se ordenan por `total` desc; dentro de cada grupo las
+ * cias conservan el orden recibido.
+ */
+export function buildTaxByCoordinado(
+  breakdown: TaxCompanyBreakdown[],
+  resolveGroup: (cia: string, nombre: string) => string,
+): TaxCoordinadoBreakdown[] {
+  const groups = new Map<string, TaxCoordinadoBreakdown>();
+  for (const row of breakdown) {
+    const key = resolveGroup(row.cia, row.nombre);
+    const group = groups.get(key);
+    if (group) {
+      group.companies.push(row);
+      group.totals = addTaxTotals(group.totals, row.totals);
+    } else {
+      groups.set(key, { coordinado: key, companies: [row], totals: addTaxTotals(emptyTaxTotals(), row.totals) });
+    }
+  }
+  return Array.from(groups.values()).sort(
+    (a, b) => b.totals.total - a.totals.total || a.coordinado.localeCompare(b.coordinado),
+  );
 }
 
 export function buildApprovedTaxPaymentMovements(params: {
@@ -973,8 +994,6 @@ interface TaxPeriodAccumulator {
   imssDetected: number;
   imssManual: number;
   imssLines: TaxSourceLine[];
-  manualIsr: number;
-  isrPaid: number;
   manualObligations: TaxObligation[];
 }
 
@@ -1018,8 +1037,6 @@ function createEmptyAccumulator(period: string): TaxPeriodAccumulator {
     imssDetected: 0,
     imssManual: 0,
     imssLines: [],
-    manualIsr: 0,
-    isrPaid: 0,
     manualObligations: [],
   };
 }
@@ -1482,90 +1499,6 @@ function accumulateHistoricIvaPaidFromMovements({
       date,
       concept: `Pago IVA · ${movement.concept || movement.counterpartyName || 'Movimiento fiscal'}`,
       counterpartyName: movement.counterpartyName ?? 'SAT — IVA',
-      amount,
-      taxBase: 0,
-      taxAmount: amount,
-      sourceSystem: movement.sourceSystem,
-      estimated: false,
-    });
-  }
-}
-
-function accumulateHistoricIsrPaidFromBankStatements({
-  bankStatements,
-  companyCode,
-  startDate,
-  endDate,
-  ensure,
-}: {
-  bankStatements: BankAccountStatement[];
-  companyCode?: string;
-  startDate: string;
-  endDate: string;
-  ensure: (period: string) => TaxPeriodAccumulator;
-}): void {
-  for (const statement of bankStatements) {
-    if (companyCode && companyCode !== 'all' && statement.cia !== companyCode) continue;
-    for (const movement of statement.movimientos) {
-      if (movement.tipoMovimiento !== 'CARGO') continue;
-      const date = cleanIsoDate(movement.fechaOperacion);
-      if (!date || date < startDate || date > endDate) continue;
-      const classification = classifyBankConcept({
-        concepto: movement.concepto,
-        infAdi1: movement.infAdi1,
-        infAdi2: movement.infAdi2,
-        infAdi3: movement.infAdi3,
-      });
-      if (classification.category !== 'TAX' || classification.subcategory !== 'ISR') continue;
-      const amount = positiveNumber(movement.importe);
-      if (amount <= 0) continue;
-      const acc = ensure(date.slice(0, 7));
-      const concept = movement.concepto || movement.referencia || 'Movimiento bancario';
-      acc.isrPaid += amount;
-      acc.paidLines.push({
-        movementId: `bank-isr-paid:${movement.cia}:${movement.banco}:${movement.cuenta}:${movement.fechaOperacion}:${movement.referencia}:${movement.gsaid ?? ''}`,
-        date,
-        concept: `Pago ISR · ${concept}`,
-        counterpartyName: classification.counterpartyName,
-        amount,
-        taxBase: 0,
-        taxAmount: amount,
-        sourceSystem: 'BANK',
-        estimated: false,
-      });
-    }
-  }
-}
-
-function accumulateHistoricIsrPaidFromMovements({
-  movements,
-  hasDirectBankStatements,
-  startDate,
-  endDate,
-  ensure,
-}: {
-  movements: FinancialMovement[];
-  hasDirectBankStatements: boolean;
-  startDate: string;
-  endDate: string;
-  ensure: (period: string) => TaxPeriodAccumulator;
-}): void {
-  for (const movement of movements) {
-    if (movement.type !== 'OUTFLOW') continue;
-    if (movement.category !== 'TAX' || movement.subcategory !== 'ISR') continue;
-    if (hasDirectBankStatements && movement.sourceSystem === 'BANK') continue;
-    if (movement.status !== 'REAL' && movement.status !== 'EXECUTED') continue;
-    const date = cleanIsoDate(effectiveMovementDate(movement));
-    if (!date || date < startDate || date > endDate) continue;
-    const amount = positiveNumber(effectiveAmount(movement));
-    if (amount <= 0) continue;
-    const acc = ensure(date.slice(0, 7));
-    acc.isrPaid += amount;
-    acc.paidLines.push({
-      movementId: `movement-isr-paid:${movement.id}`,
-      date,
-      concept: `Pago ISR · ${movement.concept || movement.counterpartyName || 'Movimiento fiscal'}`,
-      counterpartyName: movement.counterpartyName ?? 'SAT — ISR',
       amount,
       taxBase: 0,
       taxAmount: amount,
@@ -2398,14 +2331,12 @@ function finalizeTaxPeriod({
   const activeIvaDetail = buildIvaDetail(activeIva, store, today);
   const realIvaDetail = buildIvaDetail(realIva, store, today);
   const forecastIvaDetail = buildIvaDetail(forecastIva, store, today);
-  const isrDetail = buildIsrDetail(activeIvaDetail, shared, store, today);
 
   const isn = shared.isnOverride ?? shared.payrollBase * ISN_RATE;
   const imss = shared.imssDetected + shared.imssManual;
 
   const calculated: TaxObligation[] = [
     calculatedObligation('IVA', period, activeIvaDetail.payable, taxDueDate(period), statusFromPaymentPlan(activeIvaDetail.payable, paymentPlanFor(store, 'IVA', period), today, taxDueDate(period)), paymentPlanFor(store, 'IVA', period), 'CALCULATED'),
-    calculatedObligation('ISR', period, isrDetail.payable, taxDueDate(period), isrDetail.status, isrDetail.paymentPlan, isrDetail.calculated > 0 ? 'CALCULATED' : isrDetail.manual > 0 ? 'MANUAL' : 'CALCULATED'),
     calculatedObligation('ISN', period, isn, taxDueDate(period), statusFromPaymentPlan(isn, paymentPlanFor(store, 'ISN', period), today, taxDueDate(period)), paymentPlanFor(store, 'ISN', period), shared.isnOverride != null ? 'MANUAL' : 'CALCULATED'),
     calculatedObligation('IMSS', period, imss, taxDueDate(period), statusFromPaymentPlan(imss, paymentPlanFor(store, 'IMSS', period), today, taxDueDate(period)), paymentPlanFor(store, 'IMSS', period), shared.imssDetected > 0 ? 'JDE' : shared.imssManual > 0 ? 'MANUAL' : 'CALCULATED'),
   ].filter((obligation) => obligation.totalAmount > 0 || obligation.paymentPlan.length > 0);
@@ -2423,7 +2354,7 @@ function finalizeTaxPeriod({
       .filter((payment) => payment.status === 'APPROVED' || payment.status === 'PAID')
       .reduce((paymentSum, payment) => paymentSum + payment.amount, 0),
   0);
-  const total = activeIvaDetail.payable + isrDetail.payable + isn + imss;
+  const total = activeIvaDetail.payable + isn + imss;
 
   return {
     period,
@@ -2439,43 +2370,9 @@ function finalizeTaxPeriod({
     realIva: realIvaDetail,
     forecastIva: forecastIvaDetail,
     ivaMode,
-    isr: isrDetail,
     payrollBase: shared.payrollBase,
     payrollLines: shared.payrollLines,
     imssLines: shared.imssLines,
-  };
-}
-
-function buildIsrDetail(
-  iva: IvaPeriodDetail,
-  shared: TaxPeriodAccumulator,
-  store: TaxStore,
-  today: string,
-): IsrPeriodDetail {
-  const settings = store.settings ?? defaultTaxSettings();
-  const coefficient = clampTaxRate(settings.isrProvisionalCoefficient);
-  const rate = clampTaxRate(settings.isrRate || ISR_CORPORATE_RATE);
-  const nominalIncome = iva.incomeBase16 + iva.incomeBase8;
-  const estimatedTaxableProfit = nominalIncome * coefficient;
-  const calculated = estimatedTaxableProfit * rate;
-  const grossPayable = calculated + shared.manualIsr - shared.isrPaid;
-  const payable = Math.max(0, grossPayable);
-  const plan = paymentPlanFor(store, 'ISR', shared.period);
-  return {
-    period: shared.period,
-    dueDate: shared.dueDate,
-    nominalIncome,
-    coefficient,
-    rate,
-    estimatedTaxableProfit,
-    calculated,
-    manual: shared.manualIsr,
-    paid: shared.isrPaid,
-    payable,
-    status: statusFromPaymentPlan(payable, plan, today, shared.dueDate),
-    paymentPlan: plan,
-    incomeLines: iva.incomeLines,
-    paidLines: shared.paidLines.filter((line) => normalizeText(line.concept).includes('ISR')),
   };
 }
 
@@ -2549,12 +2446,8 @@ function paidAmount(plan: TaxPaymentPlanItem[]): number {
 
 function taxRisk(taxType: TaxType): TaxObligation['risk'] {
   if (taxType === 'IMSS') return 'LEGAL';
-  if (taxType === 'IVA' || taxType === 'ISR') return 'HIGH';
+  if (taxType === 'IVA') return 'HIGH';
   return 'MEDIUM';
-}
-
-function clampTaxRate(value: number): number {
-  return Number.isFinite(value) && value > 0 ? Math.min(value, 1) : 0;
 }
 
 interface TaxRateContext {
@@ -3256,7 +3149,7 @@ function normalizePayment(value: unknown): TaxPaymentPlanItem | null {
 }
 
 function normalizeTaxType(value: unknown): TaxType | null {
-  return value === 'IVA' || value === 'ISR' || value === 'ISN' || value === 'IMSS' ? value : null;
+  return value === 'IVA' || value === 'ISN' || value === 'IMSS' ? value : null;
 }
 
 function normalizeSource(value: unknown): TaxSource | null {
@@ -3280,8 +3173,6 @@ function normalizeAdjustmentKind(value: unknown): TaxManualAdjustment['kind'] | 
     || value === 'IVA_CREDITABLE'
     || value === 'IVA_PAID'
     || value === 'IVA_PAYABLE'
-    || value === 'ISR_MANUAL'
-    || value === 'ISR_PAID'
     || value === 'ISN_OVERRIDE'
     || value === 'IMSS_MANUAL'
     ? value
