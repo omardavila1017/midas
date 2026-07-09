@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
 import MidasSplash, { type BootTask } from './MidasSplash';
 
 const tasksWith = (overrides: Partial<Record<string, Partial<BootTask>>> = {}): BootTask[] => {
@@ -78,5 +78,45 @@ describe('<MidasSplash /> task list', () => {
     });
     render(<MidasSplash visible tasks={tasks} startedAt={Date.now()} />);
     expect(screen.getByText(/Listo/)).toBeTruthy();
+  });
+});
+
+describe('<MidasSplash /> blocked state', () => {
+  it('shows the blocked message + failed labels and does not open the app', () => {
+    const tasks = tasksWith({ banks: { status: 'error' } });
+    render(
+      <MidasSplash
+        visible
+        tasks={tasks}
+        startedAt={Date.now()}
+        blocked
+        failedLabels={['Bancos · estado reciente']}
+      />,
+    );
+    expect(screen.getByText(/No se pudo completar la carga de datos/)).toBeTruthy();
+    expect(screen.getByText(/La app no se abrirá con datos incompletos/)).toBeTruthy();
+    expect(screen.getByText(/No se pudo cargar: Bancos · estado reciente/)).toBeTruthy();
+  });
+
+  it('fires onRetry when the retry button is clicked', () => {
+    const onRetry = vi.fn();
+    const tasks = tasksWith({ banks: { status: 'error' } });
+    render(
+      <MidasSplash
+        visible
+        tasks={tasks}
+        startedAt={Date.now()}
+        blocked
+        failedLabels={['Bancos · estado reciente']}
+        onRetry={onRetry}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Reintentar la carga de datos/ }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders no blocked panel when not blocked', () => {
+    render(<MidasSplash visible tasks={tasksWith()} startedAt={Date.now()} />);
+    expect(screen.queryByText(/La app no se abrirá con datos incompletos/)).toBeNull();
   });
 });

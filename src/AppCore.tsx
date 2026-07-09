@@ -293,17 +293,20 @@ const BANK_STORAGE_SAVE_DEBOUNCE_MS = 1200;
 // más UNA vez por carga de página (no por remount del componente raíz). Un
 // reload del navegador es un nuevo contexto JS → vuelve a false → re-limpia.
 let cacheEntryHandled = false;
-// Boot slots que RETIENEN el splash. ROL (día-por-día, "toma horas") y Auxiliar
-// Contable (~3,500 requests, "20-30 min" en frío) son los 2 datasets más pesados;
-// se dejan cargar EN SEGUNDO PLANO detrás del dashboard en vez de gatear el splash
-// (Fase 0 del plan de arranque <1min). Siguen apareciendo en la lista del splash y
-// alimentando el punto de "Salud de datos" — su `bootStatus`/`datasetStatus` se
-// sigue actualizando — sólo que `isBooted` no los espera. `auxiliarIva` ya no
-// gateaba. En modo snapshot (ver clear-on-entry selector) TODOS los slots cubiertos
-// se marcan 'done' tras la descarga, así que este subset sólo muerde el path
-// puro-local / sin snapshot.
+// Boot slots que RETIENEN el splash. Regla (petición de producto): el splash
+// dura hasta que la información esté 100% cargada; si no, la app NO abre. Por eso
+// TODOS los datasets gatean — incluidos ROL (día-por-día, "toma horas") y Auxiliar
+// Contable (~3,500 requests, "20-30 min" en frío), que antes cargaban detrás del
+// dashboard (Fase 0). "100%" es RELATIVO A LA VISIBILIDAD DEL USUARIO: los datasets
+// que un `user` no puede ver no son relevantes y NO gatean — el escape de
+// `allowedDatasets` (más abajo) los marca 'done' de inmediato, así que el gate sólo
+// espera por lo que ese usuario realmente carga. En modo snapshot (ver clear-on-entry
+// selector) los slots cubiertos se marcan 'done' tras la descarga. Nota de trade-off:
+// bajo clear-on-entry un cold boot puede sostener el splash 20-30+ min; es el costo
+// aceptado de "esperar al 100%". El release exige TODOS 'done' (un 'error' bloquea
+// la app en vez de abrirla degradada — ver el efecto de release).
 const GATING_BOOT_IDS = new Set<string>([
-  'catalog', 'companies', 'banks', 'cxp', 'cobranza', 'compras', 'pagos', 'nomina', 'projection',
+  'catalog', 'companies', 'banks', 'cxp', 'cobranza', 'compras', 'pagos', 'nomina', 'rol', 'auxiliar', 'projection',
 ]);
 // Slots que el snapshot compartido cubre. En modo snapshot (ver el selector de
 // clear-on-entry) se marcan 'done' apenas termina la descarga y se CONGELAN ahí:
@@ -2703,15 +2706,28 @@ export default function App() {
       setBootSlot('projection', 'done');
     });
   }, [setBootSlot]);
+  // Slots del gate que fallaron (status 'error'). Un dataset no permitido al
+  // usuario nunca llega a 'error' (el escape de allowedDatasets lo fuerza a
+  // 'done' y su loader ni corre), así que esto sólo refleja fallos de datasets
+  // que el usuario SÍ carga. No-vacío ⇒ boot bloqueado: la app no abre.
+  const failedGatingTasks = useMemo(
+    () => bootTasks.filter(t => GATING_BOOT_IDS.has(t.id) && t.status === 'error'),
+    [bootTasks],
+  );
+  const bootBlocked = !isBooted && failedGatingTasks.length > 0;
+
   useEffect(() => {
     if (isBooted) return;
-    // Sólo los slots de GATING_BOOT_IDS retienen el splash. ROL/Auxiliar quedan
-    // fuera → cargan detrás del dashboard (Fase 0). Filtramos por id en vez de
-    // quitar entradas de `bootTasks` para que sigan visibles en el splash.
-    const allSettled = bootTasks
+    // Regla de producto: el splash dura hasta que la información esté 100%
+    // cargada. La app abre SÓLO cuando TODOS los slots del gate están 'done'.
+    // Un 'error' NO abre la app degradada — deja el splash arriba (estado
+    // bloqueado con "Reintentar"). GATING_BOOT_IDS ya excluye lo que el usuario
+    // no ve (esos slots quedan 'done' vía el escape de allowedDatasets), así que
+    // "100%" es relativo a la visibilidad del usuario.
+    const allDone = bootTasks
       .filter(t => GATING_BOOT_IDS.has(t.id))
-      .every(t => t.status === 'done' || t.status === 'error');
-    if (allSettled) {
+      .every(t => t.status === 'done');
+    if (allDone) {
       const t = setTimeout(() => {
         setIsBooted(true);
         // Boot terminó sin matar la pestaña: limpia el watchdog para que
@@ -2722,38 +2738,31 @@ export default function App() {
     }
   }, [bootTasks, isBooted]);
 
-  // Hard timeout — never trap the user behind the splash. El splash gatea
-  // sobre los fetches de boot (catalog/companies/banks/CXP/cobranza/
-  // compras/pagos/nómina/rol). Cold boot real con datasets
-  // completos tarda hasta ~30 min (10 cías × varios endpoints, hidratación
-  // IDB, primer build de source). 1800s = techo máximo: si algún fetch se
-  // cuelga indefinidamente, el splash se suelta y la app abre degradada.
-  // Warm boot (cache hidratada) sigue siendo 1-3s; el timeout sólo se activa
-  // en el peor caso patológico.
-  useEffect(() => {
-    if (isBooted) return;
-    const t = setTimeout(() => {
-      setIsBooted(true);
-      markBootComplete();
-    }, 1800000);
-    return () => clearTimeout(t);
-  }, [isBooted]);
+  // NO hay hard-timeout que fuerce la apertura de la app. Por diseño (petición
+  // de producto) el splash espera al 100%: si la información no está completa la
+  // app no carga. Un cold boot legítimo puede tardar 20-30+ min (ROL día-por-día
+  // "toma horas", Auxiliar ~3,500 requests) y debe esperarse. No puede quedar en
+  // un spinner infinito silencioso: cada fetch está acotado por el timeout de
+  // jdeClient (120s × reintentos), así que todo slot termina en 'done' o 'error';
+  // si algún dataset visible falla, `bootBlocked` muestra el estado con
+  // "Reintentar" (recarga) en vez de abrir la app a medias.
 
   // Projection slot escape — the `projection` boot slot only closes when
   // FinancialProjectionDashboard emits its first-paint signal
   // (subscribeProjectionFirstPaint). If that signal path stalls — worker
-  // convergence race, dashboard stuck on its warmup shell — every other slot
-  // can be `done` while `projection` keeps the splash up until the 30-min hard
-  // cap above. Release the slot after 60s so the app opens; the dashboard
-  // finishes computing behind its own loading shell. Independent of the global
-  // cap so a healthy projection isn't penalised for a slow JDE fetch elsewhere.
+  // convergence race, dashboard stuck on its warmup shell — `projection` could
+  // hold the splash forever (there is no hard-timeout force-open anymore). A
+  // stalled first-paint is a RENDER race, not missing data: by 60s the data
+  // slots that feed the projection are already loaded, so mark the slot 'done'
+  // (NOT 'error' — an error would trip `bootBlocked` and wrongly block the app);
+  // the dashboard finishes computing behind its own loading shell.
   useEffect(() => {
     if (isBooted) return;
     if (bootStatus.projection === 'done' || bootStatus.projection === 'error') return;
     const t = setTimeout(() => {
       // eslint-disable-next-line no-console
-      console.warn('[boot] projection slot timed out after 60s — releasing splash; dashboard settles behind its own shell');
-      setBootSlot('projection', 'error');
+      console.warn('[boot] projection first-paint stalled 60s — releasing the projection slot; dashboard settles behind its own shell');
+      setBootSlot('projection', 'done');
     }, 60000);
     return () => clearTimeout(t);
   }, [isBooted, bootStatus.projection, setBootSlot]);
@@ -5318,6 +5327,9 @@ export default function App() {
           visible={!isBooted}
           tasks={bootTasks}
           startedAt={bootStartedAtRef.current}
+          blocked={bootBlocked}
+          failedLabels={failedGatingTasks.map(t => t.label)}
+          onRetry={() => window.location.reload()}
         />
       )}
       <div

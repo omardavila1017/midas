@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Pause, Play } from 'lucide-react';
+import { AlertTriangle, Pause, Play, RefreshCw } from 'lucide-react';
 import { jdeFetchPauseGate } from '../services/pauseGate';
 
 export type BootTaskStatus = 'pending' | 'loading' | 'done' | 'error';
@@ -15,6 +15,12 @@ interface MidasSplashProps {
   visible: boolean;
   tasks: BootTask[];
   startedAt: number;
+  // Boot bloqueado: uno o más datasets que el usuario SÍ carga fallaron, así que
+  // la app no abre (regla "esperar al 100% o no cargar"). Muestra el detalle +
+  // "Reintentar" en vez de dejar un spinner que nunca resuelve.
+  blocked?: boolean;
+  failedLabels?: string[];
+  onRetry?: () => void;
 }
 
 // Variantes formales de heartbeat — 3 sets × 3 frases por slot. Una variante
@@ -124,7 +130,14 @@ function heartbeatFor(taskId: string, tick: number, variantIndex: number): strin
   return lines[tick % lines.length];
 }
 
-export default function MidasSplash({ visible, tasks, startedAt }: MidasSplashProps) {
+export default function MidasSplash({
+  visible,
+  tasks,
+  startedAt,
+  blocked = false,
+  failedLabels = [],
+  onRetry,
+}: MidasSplashProps) {
   const [leaving, setLeaving] = useState(false);
   const [heartbeatTick, setHeartbeatTick] = useState(0);
   const [elapsedSec, setElapsedSec] = useState(() => Math.max(0, Math.floor((Date.now() - startedAt) / 1000)));
@@ -186,11 +199,13 @@ export default function MidasSplash({ visible, tasks, startedAt }: MidasSplashPr
       ? `${activeTask.progress.done} de ${activeTask.progress.total}`
       : heartbeatFor(activeTask.id, heartbeatTick, variantIndex)
     : '';
-  const subtextLabel = allSettled
-    ? 'Listo'
-    : activeTask
-      ? activeTask.label
-      : NEAR_DONE_TEXTS[variantIndex] ?? NEAR_DONE_TEXTS[0];
+  const subtextLabel = blocked
+    ? 'No se pudo completar la carga de datos'
+    : allSettled
+      ? 'Listo'
+      : activeTask
+        ? activeTask.label
+        : NEAR_DONE_TEXTS[variantIndex] ?? NEAR_DONE_TEXTS[0];
 
   // mm:ss format once we cross the minute mark — easier to scan than "1m 5s"
   // and matches the test's regex.
@@ -243,7 +258,11 @@ export default function MidasSplash({ visible, tasks, startedAt }: MidasSplashPr
           </span>
         </div>
 
-        {fetchPaused ? (
+        {blocked ? (
+          <div className="splash-pause-glyph" role="img" aria-label="Carga incompleta">
+            <AlertTriangle width={30} height={30} strokeWidth={2} style={{ color: '#d97706' }} aria-hidden />
+          </div>
+        ) : fetchPaused ? (
           <div className="splash-pause-glyph" role="img" aria-label="Descargas pausadas">
             <svg viewBox="0 0 24 24" width="30" height="30" aria-hidden>
               <path d="M8 5h3v14H8zM13 5h3v14h-3z" />
@@ -275,7 +294,7 @@ export default function MidasSplash({ visible, tasks, startedAt }: MidasSplashPr
             }}
           >
             <span>{subtextLabel}</span>
-            {heartbeatLine && !allSettled && (
+            {heartbeatLine && !allSettled && !blocked && (
               <>
                 {' — '}
                 <span style={{ opacity: 0.85 }}>{heartbeatLine}</span>
@@ -312,12 +331,66 @@ export default function MidasSplash({ visible, tasks, startedAt }: MidasSplashPr
               style={{
                 width: totalCount > 0 ? `${(doneCount / totalCount) * 100}%` : '0%',
                 height: '100%',
-                background: 'var(--skeuo-brass)',
+                background: blocked ? '#d97706' : 'var(--skeuo-brass)',
                 transition: 'width 240ms ease-out',
               }}
             />
           </div>
         </div>
+
+        {blocked && (
+          <div
+            role="alert"
+            aria-live="assertive"
+            style={{
+              marginTop: 12,
+              maxWidth: 420,
+              padding: '12px 16px',
+              borderRadius: 8,
+              background: 'rgba(217, 119, 6, 0.08)',
+              border: '1px solid rgba(217, 119, 6, 0.35)',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: 10,
+              textAlign: 'center',
+            }}
+          >
+            <div style={{ fontSize: 12, lineHeight: 1.45, color: 'var(--skeuo-ink)' }}>
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>
+                La app no se abrirá con datos incompletos.
+              </div>
+              <div style={{ opacity: 0.85 }}>
+                {failedLabels.length > 0
+                  ? `No se pudo cargar: ${failedLabels.join(', ')}.`
+                  : 'No se pudo cargar toda la información requerida.'}
+                {' '}Reintenta para volver a descargar.
+              </div>
+            </div>
+            {onRetry && (
+              <button
+                type="button"
+                onClick={onRetry}
+                aria-label="Reintentar la carga de datos"
+                style={{
+                  background: 'var(--skeuo-brass-deep)',
+                  border: 'none',
+                  color: 'var(--skeuo-paper)',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '6px 14px',
+                  borderRadius: 999,
+                }}
+              >
+                <RefreshCw className="w-3 h-3" strokeWidth={2} /> Reintentar
+              </button>
+            )}
+          </div>
+        )}
 
         {lastError && (
           <div
