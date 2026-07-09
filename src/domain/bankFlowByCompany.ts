@@ -13,7 +13,17 @@ export interface CompanyFlowTotal {
   net: number;
 }
 
-const UNKNOWN_CIA = '—';
+export const UNKNOWN_CIA = '—';
+
+/**
+ * Número de compañía legible: quita el padding de 5 dígitos que usa el
+ * dominio (`00033` → `33`) para mostrarlo junto al nombre. Los códigos no
+ * numéricos se devuelven tal cual; la cía desconocida se muestra como `—`.
+ */
+export function displayCia(cia: string): string {
+  if (!cia || cia === UNKNOWN_CIA) return UNKNOWN_CIA;
+  return /^\d+$/.test(cia) ? String(Number(cia)) : cia;
+}
 
 /** ¿La fecha `YYYY-MM-DD` cae en el mes filtrado (índice 0-11) o es 'all'? */
 function dateInMonth(date: string, month: number | 'all'): boolean {

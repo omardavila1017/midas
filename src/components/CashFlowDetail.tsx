@@ -7,7 +7,7 @@ import {
   EnrichedBankMovement,
   INTERNAL_REASON_LABELS,
 } from '../domain/netCashFlowEngine';
-import { sumBankFlowByCompany } from '../domain/bankFlowByCompany';
+import { sumBankFlowByCompany, displayCia, UNKNOWN_CIA } from '../domain/bankFlowByCompany';
 import type { BankAccountStatement } from '../services/jde';
 import {
   ChevronDown,
@@ -101,7 +101,11 @@ export default function CashFlowDetail({
     const set = new Set<string>();
     for (const s of bankStatements) if (s.cia) set.add(s.cia);
     return Array.from(set)
-      .map(cia => ({ cia, nombre: ciaName.get(cia) ?? `Cia ${cia}` }))
+      .map(cia => {
+        const name = (ciaName.get(cia) ?? '').trim();
+        // Siempre número + nombre; sin nombre en catálogo → "Cia 33".
+        return { cia, nombre: name ? `${displayCia(cia)} · ${name}` : `Cia ${displayCia(cia)}` };
+      })
       .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es-MX'));
   }, [bankStatements, ciaName]);
 
@@ -133,7 +137,17 @@ export default function CashFlowDetail({
   // display-only — no toca el cómputo del flujo principal.
   const perCompany = useMemo(
     () => sumBankFlowByCompany(abonosByDate, cargosByDate, { month: monthFilter })
-      .map(r => ({ ...r, nombre: ciaName.get(r.cia) ?? `Cia ${r.cia}` })),
+      .map(r => {
+        const isUnknown = !r.cia || r.cia === UNKNOWN_CIA;
+        const rawName = (ciaName.get(r.cia) ?? '').trim();
+        return {
+          ...r,
+          // Número de la cía (sin padding) para la columna Empresa.
+          ciaDisplay: isUnknown ? UNKNOWN_CIA : displayCia(r.cia),
+          // Nombre del catálogo; vacío → placeholder según sea desconocida o solo sin nombre.
+          nombre: isUnknown ? 'Sin empresa' : rawName,
+        };
+      }),
     [abonosByDate, cargosByDate, monthFilter, ciaName],
   );
 
@@ -281,7 +295,12 @@ export default function CashFlowDetail({
               <tbody>
                 {perCompany.map(row => (
                   <tr key={row.cia} className={`border-b ${T.border} last:border-0`}>
-                    <td className={`py-1.5 pr-3 ${T.text}`}>{row.nombre}</td>
+                    <td className={`py-1.5 pr-3 ${T.text}`}>
+                      <span className={`font-mono text-xs tabular-nums ${T.textMuted} mr-2`}>{row.ciaDisplay}</span>
+                      {row.nombre
+                        ? row.nombre
+                        : <span className={T.textSubtle}>Sin nombre</span>}
+                    </td>
                     <td className="py-1.5 px-3 text-right tabular-nums text-[var(--success)]">{fmtCurrency(row.inflows)}</td>
                     <td className="py-1.5 px-3 text-right tabular-nums text-[var(--danger)]">{fmtCurrency(row.outflows)}</td>
                     <td className={`py-1.5 pl-3 text-right tabular-nums font-medium ${row.net < 0 ? 'text-[var(--danger)]' : T.text}`}>

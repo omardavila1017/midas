@@ -1120,8 +1120,13 @@ function mapCompany(raw: RawRecord): Company {
   return {
     // normalizeCia: Company.cia siembra cada request per-cía y las llaves de
     // *LoadedCias — un código sin padding rompería todos los joins `cia::…`.
-    cia:        normalizeCia(pick(raw, ['cia', 'codigo', 'code', 'compania'])),
-    nombre:     toStr(pick(raw, ['nombre', 'razonSocial', 'razon_social', 'name'])),
+    cia:        normalizeCia(pick(raw, ['cia', 'No_Cia', 'no_cia', 'noCia', 'codigo', 'code', 'compania'])),
+    nombre:     toStr(pick(raw, [
+                  'nombre', 'Nombre_Cia', 'nombre_cia', 'nombreCia', 'Nombre_Compania', 'nombre_compania',
+                  'Nombre_Empresa', 'nombre_empresa', 'nombreEmpresa',
+                  'razonSocial', 'razon_social', 'Razon_Social', 'RazonSocial',
+                  'descripcion', 'Descripcion', 'name',
+                ])),
     rfc:        toStr(pick(raw, ['rfc', 'taxId', 'tax_id'])) || undefined,
     monedaBase: toStr(pick(raw, ['monedaBase', 'moneda_base', 'moneda', 'currency'])) || undefined,
     activa:     activaRaw === undefined ? undefined

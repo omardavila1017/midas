@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { sumBankFlowByCompany } from './bankFlowByCompany';
+import { sumBankFlowByCompany, displayCia } from './bankFlowByCompany';
 import type { EnrichedBankMovement } from './netCashFlowEngine';
 
 function mov(cia: string, amount: number): EnrichedBankMovement {
@@ -39,5 +39,19 @@ describe('sumBankFlowByCompany (B2.5)', () => {
     );
     expect(rows[0].cia).toBe('—');
     expect(rows[0].inflows).toBe(100);
+  });
+});
+
+describe('displayCia', () => {
+  it('strips the 5-digit padding for display', () => {
+    expect(displayCia('00033')).toBe('33');
+    expect(displayCia('00001')).toBe('1');
+    expect(displayCia('11')).toBe('11');
+  });
+
+  it('keeps non-numeric codes as-is and maps unknown/empty to "—"', () => {
+    expect(displayCia('—')).toBe('—');
+    expect(displayCia('')).toBe('—');
+    expect(displayCia('MULTI')).toBe('MULTI');
   });
 });
