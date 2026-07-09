@@ -154,6 +154,12 @@ import {
   type MatcherOutput,
   type OrphanNoCliente,
 } from './domain/clientCobranzaMatcher';
+import {
+  planCobranzaRefresh,
+  mergeCobranzaRevalidationWindow,
+  COBRANZA_LOOKBACK_DAYS,
+  COBRANZA_REVALIDATE_DAYS,
+} from './domain/cobranzaRefreshWindow';
 import { useToast } from './components/Toast';
 import { useAuth } from './contexts/AuthContext';
 import {
@@ -3512,28 +3518,32 @@ export default function App() {
       // timestamp propio es nueva (nunca consultada) y debe cargarse — marcarla
       // fresca con el global la dejaba vacía para siempre (divergencia entre
       // navegadores). Las cías que regresaron vacío ya tienen su stamp.
-      const ciasToFetch = force || !heavyHydrated
-        ? activeCias
-        : activeCias.filter(cia =>
-          !isFreshTimestamp(cobranzaLoadedCias[cia], COBRANZA_AUTO_REFRESH_TTL_MS)
-          || !isFreshTimestamp(cobranzaPaymentsLoadedCias[cia], COBRANZA_AUTO_REFRESH_TTL_MS)
-        );
+      // Plan por cía: `full` (histórico completo, REPLACE + re-estampa) vs
+      // `revalidate` (sólo la ventana reciente, merge date-particionado, NO
+      // re-estampa). Cierra el hueco "faltan facturas recién dadas de alta en
+      // una cía fresca" (caso 6-jul) espejando la revalidación de días
+      // recientes de Pagos/Bancos. En el default (`clear-on-entry`) el
+      // heavy-store arranca vacío → todas salen `full` (comportamiento igual).
+      const plans = planCobranzaRefresh({
+        activeCias,
+        force,
+        heavyHydrated,
+        recordsLoadedCias: cobranzaLoadedCias,
+        paymentsLoadedCias: cobranzaPaymentsLoadedCias,
+        nowMs: Date.now(),
+        ttlMs: COBRANZA_AUTO_REFRESH_TTL_MS,
+        lookbackDays: COBRANZA_LOOKBACK_DAYS,
+        revalidateDays: COBRANZA_REVALIDATE_DAYS,
+      });
+      const fullCiasCount = plans.filter(p => p.mode === 'full').length;
       // eslint-disable-next-line no-console
-      console.info(`[cobranza] sync · ${ciasToFetch.length}/${activeCias.length} cías necesitan refresh (force=${force}, TTL ${Math.round(COBRANZA_AUTO_REFRESH_TTL_MS / 3600000)}h) · hydratedRecords=${cobranzaRecords.length}`);
-      if (ciasToFetch.length === 0) return;
+      console.info(`[cobranza] sync · ${plans.length}/${activeCias.length} cías (${fullCiasCount} full · ${plans.length - fullCiasCount} revalida ${COBRANZA_REVALIDATE_DAYS}d) · force=${force} · TTL ${Math.round(COBRANZA_AUTO_REFRESH_TTL_MS / 3600000)}h · hydratedRecords=${cobranzaRecords.length}`);
+      if (plans.length === 0) return;
       setCobranzaRefreshing(true);
       setCobranzaError(null);
       if (progressSlot === 'cobranza') {
-        setCobranzaBootProgress({ done: 0, total: ciasToFetch.length });
+        setCobranzaBootProgress({ done: 0, total: plans.length });
       }
-
-      const today = new Date();
-      const fechaFinal = today.toISOString().slice(0, 10);
-      // 2 años de historia para alimentar modelos predictivos estacionales
-      // (Holt-Winters requiere ≥24 meses para detectar pauta anual).
-      const twoYearsAgo = new Date(today);
-      twoYearsAgo.setUTCDate(twoYearsAgo.getUTCDate() - 730);
-      const fechaInicial = twoYearsAgo.toISOString().slice(0, 10);
 
       const errors: string[] = [];
       let totalRecords = 0;
@@ -3575,27 +3585,38 @@ export default function App() {
       };
       let completed = 0;
       let cursor = 0;
-      const concurrency = Math.min(10, ciasToFetch.length);
+      const concurrency = Math.min(10, plans.length);
       const worker = async () => {
         while (true) {
           const idx = cursor++;
-          if (idx >= ciasToFetch.length) return;
-          const cia = ciasToFetch[idx];
+          if (idx >= plans.length) return;
+          const { cia, mode, from, to } = plans[idx];
           const [recordsResult, paymentsResult] = await Promise.allSettled([
-            fetchCobranzaRange(cia, fechaInicial, fechaFinal, { concurrency: 10 }),
-            fetchIndicadoresCobranzaRange(cia, fechaInicial, fechaFinal, { concurrency: 10 }),
+            fetchCobranzaRange(cia, from, to, { concurrency: 10 }),
+            fetchIndicadoresCobranzaRange(cia, from, to, { concurrency: 10 }),
           ]);
           if (recordsResult.status === 'fulfilled') {
             const stamped = recordsResult.value.map(r => ({ ...r, cia: r.cia || cia }));
             totalRecords += stamped.length;
-            const ts = new Date().toISOString();
-            recordsByCia.set(cia, stamped);
+            // `full` REEMPLAZA el histórico de la cía; `revalidate` hace un
+            // merge date-particionado de la ventana sobre lo ya hidratado.
+            const next = mode === 'revalidate'
+              ? mergeCobranzaRevalidationWindow(recordsByCia.get(cia) ?? [], stamped, from)
+              : stamped;
+            recordsByCia.set(cia, next);
             const snapshot = flattenRecords();
             // Commit this cia's records immediately; React 18 batches the
             // setState calls across the concurrency pool, so 30 calls don't
             // turn into 30 renders.
             setCobranzaRecords(snapshot);
-            setCobranzaLoadedCias(prev => ({ ...prev, [cia]: ts }));
+            // Sólo `full` re-estampa el watermark: si `revalidate` lo tocara,
+            // la cía quedaría "fresca" para siempre y el REPLACE correctivo
+            // (que sanea cancelaciones/pagos de facturas viejas fuera de la
+            // ventana) nunca correría → facturas fantasma.
+            if (mode === 'full') {
+              const ts = new Date().toISOString();
+              setCobranzaLoadedCias(prev => ({ ...prev, [cia]: ts }));
+            }
             void saveHeavyRecords('cobranzaRecords', snapshot);
           } else {
             const msg = recordsResult.reason instanceof Error ? recordsResult.reason.message : String(recordsResult.reason);
@@ -3603,7 +3624,6 @@ export default function App() {
           }
           if (paymentsResult.status === 'fulfilled') {
             const payments = paymentsResult.value;
-            const ts = new Date().toISOString();
             // Merge por idPago (lo fetcheado gana) en vez de replace:
             // fetchIndicadoresCobranzaRange tolera ventanas mensuales fallidas
             // y regresa un set PARCIAL — un replace destruía (y persistía vía
@@ -3615,7 +3635,12 @@ export default function App() {
             paymentsByCia.set(cia, Array.from(mergedPayments.values()));
             const snapshot = flattenPayments();
             setCobranzaPayments(snapshot);
-            setCobranzaPaymentsLoadedCias(prev => ({ ...prev, [cia]: ts }));
+            // Mismo criterio que records: sólo `full` re-estampa (el merge de
+            // pagos es aditivo por idPago y se refresca al expirar el TTL).
+            if (mode === 'full') {
+              const ts = new Date().toISOString();
+              setCobranzaPaymentsLoadedCias(prev => ({ ...prev, [cia]: ts }));
+            }
             void saveHeavyRecords('cobranzaPayments', snapshot);
           } else {
             const msg = paymentsResult.reason instanceof Error ? paymentsResult.reason.message : String(paymentsResult.reason);
@@ -3623,7 +3648,7 @@ export default function App() {
           }
           completed += 1;
           if (progressSlot === 'cobranza') {
-            setCobranzaBootProgress({ done: completed, total: ciasToFetch.length });
+            setCobranzaBootProgress({ done: completed, total: plans.length });
           }
         }
       };
@@ -3632,14 +3657,17 @@ export default function App() {
         await Promise.all(Array.from({ length: concurrency }, worker));
 
         if (errors.length > 0) {
-          setCobranzaError(`Errores en ${errors.length}/${ciasToFetch.length} cías: ${errors.slice(0, 2).join('; ')}${errors.length > 2 ? '…' : ''}`);
-        } else if (totalRecords === 0) {
-          setCobranzaError(`Todas las ${ciasToFetch.length} cías consultadas respondieron VACÍO. Revisa el token productivo y permisos JDE para /cobranza. (Detalles en consola con prefix [cobranza].)`);
+          setCobranzaError(`Errores en ${errors.length}/${plans.length} cías: ${errors.slice(0, 2).join('; ')}${errors.length > 2 ? '…' : ''}`);
+        } else if (fullCiasCount > 0 && totalRecords === 0) {
+          // Sólo alarma cuando hubo refetch `full` y NADA (ni full ni ventanas
+          // revalidate) devolvió registros → token/permisos. Un boot 100%
+          // revalidate con ventanas vacías es normal y no dispara el error.
+          setCobranzaError(`Las cías consultadas respondieron VACÍO (incluye ${fullCiasCount} en modo full). Revisa el token productivo y permisos JDE para /cobranza. (Detalles en consola con prefix [cobranza].)`);
         }
         return {
           totalRecords,
           failedCias: errors.length,
-          totalCias: ciasToFetch.length,
+          totalCias: plans.length,
         };
       } finally {
         setCobranzaRefreshing(false);
