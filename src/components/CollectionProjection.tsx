@@ -22,6 +22,7 @@ import {
   type CollectionCalendarEventSource,
 } from '../domain/collectionCalendarEngine';
 import { buildRolProjectedInflows } from '../domain/rolProjectionEngine';
+import { segmentOf, listSegments, buildSegmentBreakdown, SEGMENT_UNCLASSIFIED } from '../domain/cobranzaSegment';
 import {
   buildCobranzaBankCuadre,
   type CuadreStatus,
@@ -32,7 +33,7 @@ import type { RolRecord } from '../services/jdeTypes';
 import RolCobranzaPanel from './RolCobranzaPanel';
 import { MONTHS } from '../types';
 import { Search, Settings2, ChevronDown, ChevronLeft, ChevronRight, Check, Download, Landmark, ArrowRightLeft, CheckCircle2, AlertTriangle, HelpCircle, Banknote, CalendarRange, Inbox, SlidersHorizontal, Database } from 'lucide-react';
-import { toCSV, downloadFile } from '../utils/export';
+import { toCSV, downloadFile, csvDate } from '../utils/export';
 import { hex } from '../theme';
 import { fmtCurrency, fmtCompact, todayISO } from '../formatters';
 import AnimatedNumber from './ui/AnimatedNumber';
@@ -604,15 +605,15 @@ function CalendarView({ events, clients, year, month, onMonthChange, confirmedPa
       const recon = reconMap.get(key);
       return {
         Cliente: c?.name ?? e.clientId,
-        'Fecha Cobro': e.realDate,
-        'Fecha Factura': e.invoiceDate,
+        'Fecha Cobro': csvDate(e.realDate),
+        'Fecha Factura': csvDate(e.invoiceDate),
         Monto: e.amount,
         'Días Lag': e.lagDays,
         'Regla Pago': c?.paymentDayRaw ?? '',
         Confirmado: confirmedSet.has(key) ? 'Sí' : 'No',
         'Estado Banco': recon?.status === 'matched' ? 'Cruzado' : recon?.status === 'likely' ? 'Probable' : 'Sin cruzar',
         'Monto Banco': recon?.actualAmount ?? '',
-        'Fecha Banco': recon?.actualDate ?? '',
+        'Fecha Banco': csvDate(recon?.actualDate ?? ''),
         'Ref Bancaria': recon?.bankReference ?? '',
         'Confianza': recon?.confidence ? `${(recon.confidence * 100).toFixed(0)}%` : '',
       };
@@ -1949,7 +1950,7 @@ function CobranzaBankCuadrePanel({
       NoCliente: p.noCliente,
       IdPago: p.idPago,
       NoRecibo: p.noRecibo,
-      FechaCobro: (p.fechaCobro || '').slice(0, 10),
+      FechaCobro: csvDate((p.fechaCobro || '').slice(0, 10)),
       Banco: p.banco,
       Cuenta: p.cuentaBancaria,
       ImporteEdwards: p.importeEdwards,
@@ -2125,6 +2126,7 @@ function CobranzaRealView({
     else if (defaultCia === 'all') setCiaFilter(new Set());
   }, [defaultCia]);
   const [estatusFilter, setEstatusFilter] = useState<string>('all');
+  const [segmentoFilter, setSegmentoFilter] = useState<string>('all');
   const [query, setQuery] = useState('');
   const [crossFilter, setCrossFilter] = useState<'all' | 'matched' | 'review' | 'pending'>('all');
 
@@ -2239,10 +2241,17 @@ function CobranzaRealView({
     return Array.from(set).sort();
   }, [records]);
 
+  // Segmento / tipo de servicio (B2.3). El filtro y el desglose sólo aparecen
+  // cuando el API realmente trae al menos un segmento clasificado — así el
+  // mecanismo queda listo sin ensuciar la UI mientras el dato no fluya.
+  const allSegments = useMemo(() => listSegments(records), [records]);
+  const hasSegments = useMemo(() => allSegments.some(s => s !== SEGMENT_UNCLASSIFIED), [allSegments]);
+
   const filtered = useMemo(() => {
     return records.filter(r => {
       if (ciaFilter.size > 0 && !(r.cia && ciaFilter.has(r.cia))) return false;
       if (estatusFilter !== 'all' && r.estatus !== estatusFilter) return false;
+      if (segmentoFilter !== 'all' && segmentOf(r) !== segmentoFilter) return false;
       if (crossFilter !== 'all') {
         const m = matchByFactura.get(`${r.cia}::${r.noFactura}`);
         const matched = m?.status === 'cobrada-banco';
@@ -2261,7 +2270,9 @@ function CobranzaRealView({
       }
       return true;
     });
-  }, [records, ciaFilter, estatusFilter, crossFilter, query, matchByFactura]);
+  }, [records, ciaFilter, estatusFilter, segmentoFilter, crossFilter, query, matchByFactura]);
+
+  const segmentBreakdown = useMemo(() => buildSegmentBreakdown(filtered), [filtered]);
 
   if (records.length === 0 && payments.length === 0) {
     return (
@@ -2326,6 +2337,20 @@ function CobranzaRealView({
           ))}
         </select>
 
+        {hasSegments && (
+          <select
+            value={segmentoFilter}
+            onChange={e => setSegmentoFilter(e.target.value)}
+            className="input text-[12px] h-8"
+            title="Segmento / tipo de servicio"
+          >
+            <option value="all">Todos los segmentos</option>
+            {allSegments.map(s => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+        )}
+
         {bankStatements.length > 0 && (
           <select
             value={crossFilter}
@@ -2339,9 +2364,9 @@ function CobranzaRealView({
           </select>
         )}
 
-        {(query || ciaFilter.size > 0 || estatusFilter !== 'all' || crossFilter !== 'all') && (
+        {(query || ciaFilter.size > 0 || estatusFilter !== 'all' || segmentoFilter !== 'all' || crossFilter !== 'all') && (
           <button
-            onClick={() => { setQuery(''); setCiaFilter(new Set()); setEstatusFilter('all'); setCrossFilter('all'); }}
+            onClick={() => { setQuery(''); setCiaFilter(new Set()); setEstatusFilter('all'); setSegmentoFilter('all'); setCrossFilter('all'); }}
             className="text-[12px] text-[var(--primary)] hover:underline px-2"
           >
             Limpiar
@@ -2398,16 +2423,16 @@ function CobranzaRealView({
                 Cliente: r.nombreCliente,
                 NoCliente: r.noCliente,
                 Factura: r.noFactura,
-                FechaFactura: (r.fechaFactura || '').slice(0, 10),
-                FechaVence: (r.fechaVence || '').slice(0, 10),
-                FechaCobroJDE: (r.fechaCobro || '').slice(0, 10),
+                FechaFactura: csvDate((r.fechaFactura || '').slice(0, 10)),
+                FechaVence: csvDate((r.fechaVence || '').slice(0, 10)),
+                FechaCobroJDE: csvDate((r.fechaCobro || '').slice(0, 10)),
                 DiasVencida: r.diasVencida,
                 BrutoMXN: r.importeBrutoPesos,
                 PendienteMXN: r.importePendientePesos,
                 Moneda: r.moneda,
                 EstatusJDE: r.estatus,
                 FuenteDato: calendarEvent ? COLLECTION_CALENDAR_SOURCE_LABELS[calendarEvent.source] : '',
-                FechaCalendario: calendarEvent?.date ?? '',
+                FechaCalendario: csvDate(calendarEvent?.date ?? ''),
                 EstadoCalendario: calendarEvent?.statusLabel ?? '',
                 ReglaAplicada: calendarEvent?.ruleApplied ?? '',
                 MotivoFecha: calendarEvent?.dateReason ?? '',
@@ -2418,7 +2443,7 @@ function CobranzaRealView({
                 ConfianzaCruce: (m?.confidence ?? calendarEvent?.confidence)
                   ? `${((m?.confidence ?? calendarEvent?.confidence ?? 0) * 100).toFixed(0)}%`
                   : '',
-                FechaBanco: m?.bankDate ?? '',
+                FechaBanco: csvDate(m?.bankDate ?? ''),
                 RefBanco: m?.bankRef ?? '',
                 MontoBanco: m?.bankAmount ?? '',
                 CuentaBanco: m?.bankAccount ?? '',
@@ -2448,6 +2473,44 @@ function CobranzaRealView({
         ciaFilter={ciaFilter}
         glConfirmedInvoiceKeys={glConfirmedInvoiceKeys}
       />
+
+      {/* Desglose por segmento / tipo de servicio (B2.3). Sólo aparece cuando
+          el API trae al menos un segmento clasificado; respeta los filtros
+          activos (opera sobre `filtered`). Display-only. */}
+      {hasSegments && (
+        <div className="bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)] p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-[13px] font-semibold text-[var(--gray-950)]">Desglose por segmento</h3>
+            <span className="text-[11px] text-[var(--gray-400)]">tipo de servicio · sobre lo filtrado</span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-[12px]">
+              <thead className="text-[var(--gray-400)] text-left border-b border-[var(--gray-200)]/60">
+                <tr>
+                  <th className="py-1.5 pr-3 font-medium">Segmento</th>
+                  <th className="py-1.5 px-3 font-medium text-right">Facturas</th>
+                  <th className="py-1.5 px-3 font-medium text-right">Bruto</th>
+                  <th className="py-1.5 pl-3 font-medium text-right">Pendiente</th>
+                </tr>
+              </thead>
+              <tbody>
+                {segmentBreakdown.map(row => (
+                  <tr key={row.segment} className="border-b border-[var(--gray-200)]/30 last:border-0">
+                    <td className="py-1.5 pr-3 text-[var(--gray-950)]">
+                      {row.segment === SEGMENT_UNCLASSIFIED
+                        ? <span className="text-[var(--gray-400)]">{row.segment}</span>
+                        : row.segment}
+                    </td>
+                    <td className="py-1.5 px-3 text-right tabular-nums">{row.invoiceCount}</td>
+                    <td className="py-1.5 px-3 text-right tabular-nums font-medium">{fmtCurrency(row.bruto)}</td>
+                    <td className="py-1.5 pl-3 text-right tabular-nums text-[var(--warning)]">{fmtCurrency(row.pendiente)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* Calendario real — ABONOs bancarios cruzados con cobranza JDE.
           Esta es la vista principal: ver de un vistazo qué entró cada día,

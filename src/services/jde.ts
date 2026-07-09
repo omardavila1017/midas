@@ -1225,6 +1225,10 @@ const KEPT_COBRANZA_FIELDS = new Set<string>([
   'frecuenciafacturacionclave', 'clavefrecuenciafacturacioncc17', 'clave_frecuencia_facturacion_cc17',
   'frecuenciafacturacionnombre', 'nombrefrecuenciafacturacioncc17', 'nombre_frecuencia_facturacion_cc17',
   'norecibosepagofactura', 'no_recibo_se_pago_factura',
+  // Tipo de servicio / segmento (B2.3) — alias tolerantes; el whitelist debe
+  // conservar el campo crudo para que `mapCobranza` lo pueda leer.
+  'tiposervicio', 'tipo_servicio', 'tipo_de_servicio', 'servicio',
+  'segmento', 'segmento_cliente', 'unidad_negocio', 'unidadnegocio',
 ]);
 
 function mapCobranza(raw: RawRecord): CobranzaRecord {
@@ -1333,6 +1337,17 @@ function mapCobranza(raw: RawRecord): CobranzaRecord {
   const frecuenciaFacturacionClave = toStr(pick(raw, ['frecuenciaFacturacionClave', 'claveFrecuenciaFacturacionCc17', 'clave_frecuencia_facturacion_cc17', 'Clave_Frecuencia_Facturacion_CC17'])) || undefined;
   const frecuenciaFacturacionNombre = toStr(pick(raw, ['frecuenciaFacturacionNombre', 'nombreFrecuenciaFacturacionCc17', 'nombre_frecuencia_facturacion_cc17', 'Nombre_Frecuencia_Facturacion_CC17'])) || undefined;
 
+  // ── Tipo de servicio / segmento (B2.3) ── mapeo TOLERANTE: se prueba una
+  // batería de alias y, si ninguno viene, queda undefined (la UI lo agrupa
+  // bajo "Sin clasificar"). No inventa un default para no fabricar segmentos.
+  const tipoServicio = toStr(pick(raw, [
+    'tipoServicio', 'tipo_servicio', 'Tipo_Servicio', 'TipoServicio',
+    'tipo_de_servicio', 'Tipo_De_Servicio',
+    'servicio', 'Servicio',
+    'segmento', 'Segmento', 'segmento_cliente', 'Segmento_Cliente',
+    'unidad_negocio', 'Unidad_Negocio', 'unidadNegocio',
+  ])) || undefined;
+
   return {
     cia:                     normalizeCia(pick(raw, ['cia', 'compania', 'company', 'Cia'])),
     noCliente:               toStr(pick(raw, ['noCliente', 'no_cliente', 'No_Cliente', 'noCte', 'cliente', 'customerNo', 'customer'])),
@@ -1372,6 +1387,7 @@ function mapCobranza(raw: RawRecord): CobranzaRecord {
     diaPagoNombre,
     frecuenciaFacturacionClave,
     frecuenciaFacturacionNombre,
+    tipoServicio,
     // INTENCIONALMENTE NO persistimos `raw` aquí: con 10k+ facturas y ~30
     // campos cada una, el JSON.stringify del store excedía el quota de
     // 5 MB de localStorage y la app crasheaba al intentar guardar. Si se

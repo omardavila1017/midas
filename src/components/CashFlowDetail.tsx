@@ -7,6 +7,7 @@ import {
   EnrichedBankMovement,
   INTERNAL_REASON_LABELS,
 } from '../domain/netCashFlowEngine';
+import { sumBankFlowByCompany } from '../domain/bankFlowByCompany';
 import type { BankAccountStatement } from '../services/jde';
 import {
   ChevronDown,
@@ -16,7 +17,7 @@ import {
   RefreshCw,
   AlertTriangle,
 } from 'lucide-react';
-import { toCSV, downloadFile } from '../utils/export';
+import { toCSV, downloadFile, csvDate } from '../utils/export';
 import { fmtCompact, fmtCurrency } from '../formatters';
 import PageHeader from './ui/PageHeader';
 import { calculateInitialCash } from '../modules/financial-projection/services/financialProjectionService';
@@ -87,8 +88,30 @@ export default function CashFlowDetail({
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const [monthFilter, setMonthFilter] = useState<number | 'all'>('all');
   const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
+  // B2.5 — filtro por empresa. 'all' = todas; si no, una cía.
+  const [companyFilter, setCompanyFilter] = useState<string>('all');
 
-  void companies;
+  // Empresas presentes en los estados de cuenta cargados + nombre del catálogo.
+  const ciaName = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const c of companies) map.set(c.cia, c.nombre);
+    return map;
+  }, [companies]);
+  const presentCias = useMemo(() => {
+    const set = new Set<string>();
+    for (const s of bankStatements) if (s.cia) set.add(s.cia);
+    return Array.from(set)
+      .map(cia => ({ cia, nombre: ciaName.get(cia) ?? `Cia ${cia}` }))
+      .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es-MX'));
+  }, [bankStatements, ciaName]);
+
+  // Estados de cuenta acotados por el filtro de empresa. La detección de
+  // traspasos internos se siembra del catálogo (no de las cuentas cargadas),
+  // así que filtrar por cía no rompe el neteo interno.
+  const scopedStatements = useMemo(
+    () => (companyFilter === 'all' ? bankStatements : bankStatements.filter(s => s.cia === companyFilter)),
+    [bankStatements, companyFilter],
+  );
 
   // ──────────────────────────────────────────────────────────────
   // Fuente única de verdad: estados de cuenta del API de JDE.
@@ -97,12 +120,21 @@ export default function CashFlowDetail({
   // beneficiarios propios, cuenta destino propia) se filtran antes de sumar.
   // ──────────────────────────────────────────────────────────────
   const initialCash = useMemo(
-    () => calculateInitialCash(bankStatements, startingBalance),
-    [bankStatements, startingBalance],
+    () => calculateInitialCash(scopedStatements, startingBalance),
+    [scopedStatements, startingBalance],
   );
   const { daily, abonosByDate, cargosByDate, internalAbonosByDate, internalCargosByDate } = useMemo(
-    () => computeBankOnlyCashFlow(bankStatements, assumptions.year, initialCash),
-    [bankStatements, assumptions.year, initialCash],
+    () => computeBankOnlyCashFlow(scopedStatements, assumptions.year, initialCash),
+    [scopedStatements, assumptions.year, initialCash],
+  );
+
+  // Flujo Neto POR EMPRESA (B2.5): abonos/cargos reales (ya sin traspasos
+  // internos) agrupados por cía, respetando el filtro de mes. Comparativo
+  // display-only — no toca el cómputo del flujo principal.
+  const perCompany = useMemo(
+    () => sumBankFlowByCompany(abonosByDate, cargosByDate, { month: monthFilter })
+      .map(r => ({ ...r, nombre: ciaName.get(r.cia) ?? `Cia ${r.cia}` })),
+    [abonosByDate, cargosByDate, monthFilter, ciaName],
   );
 
   const weekly = useMemo(() => aggregateWeekly(daily), [daily]);
@@ -155,7 +187,7 @@ export default function CashFlowDetail({
 
   const handleExport = () => {
     const rows = daily.map(d => ({
-      Fecha: d.date,
+      Fecha: csvDate(d.date),
       Abonos: d.inflows,
       Cargos: d.outflows,
       Neto: d.net,
@@ -187,6 +219,17 @@ export default function CashFlowDetail({
               {fmtCurrency(initialCash)}
             </span>
           </div>
+          {presentCias.length > 1 && (
+            <select
+              value={companyFilter}
+              onChange={e => setCompanyFilter(e.target.value)}
+              className={`h-9 px-3 rounded-[var(--radius-md)] border ${T.border} bg-white text-sm ${T.text} focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/20 focus:border-[var(--primary)]`}
+              title="Empresa"
+            >
+              <option value="all">Todas las empresas</option>
+              {presentCias.map(c => <option key={c.cia} value={c.cia}>{c.nombre}</option>)}
+            </select>
+          )}
           <select
             value={monthFilter}
             onChange={e => setMonthFilter(e.target.value === 'all' ? 'all' : Number(e.target.value))}
@@ -214,6 +257,43 @@ export default function CashFlowDetail({
           </button>
         </div>
       </div>
+
+      {/* Flujo Neto por empresa (B2.5) — comparativo de abonos/cargos/neto por
+          cía, ya sin traspasos internos. Sólo con más de una empresa. */}
+      {presentCias.length > 1 && perCompany.length > 0 && (
+        <div className={`${T.surface} border ${T.border} rounded-[var(--radius)] p-4`}>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className={`text-sm font-semibold ${T.text}`}>Flujo neto por empresa</h3>
+            <span className={`text-xs ${T.textMuted}`}>
+              {monthFilter === 'all' ? 'todo el año' : MONTH_NAMES[monthFilter]} · sin traspasos internos
+            </span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className={`${T.textMuted} text-left border-b ${T.border}`}>
+                <tr>
+                  <th className="py-1.5 pr-3 font-medium">Empresa</th>
+                  <th className="py-1.5 px-3 font-medium text-right">Abonos</th>
+                  <th className="py-1.5 px-3 font-medium text-right">Cargos</th>
+                  <th className="py-1.5 pl-3 font-medium text-right">Neto</th>
+                </tr>
+              </thead>
+              <tbody>
+                {perCompany.map(row => (
+                  <tr key={row.cia} className={`border-b ${T.border} last:border-0`}>
+                    <td className={`py-1.5 pr-3 ${T.text}`}>{row.nombre}</td>
+                    <td className="py-1.5 px-3 text-right tabular-nums text-[var(--success)]">{fmtCurrency(row.inflows)}</td>
+                    <td className="py-1.5 px-3 text-right tabular-nums text-[var(--danger)]">{fmtCurrency(row.outflows)}</td>
+                    <td className={`py-1.5 pl-3 text-right tabular-nums font-medium ${row.net < 0 ? 'text-[var(--danger)]' : T.text}`}>
+                      {fmtCurrency(row.net)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* Tablas */}
       {granularity === 'daily' && (

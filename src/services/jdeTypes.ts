@@ -289,6 +289,15 @@ export interface CobranzaRecord {
    * Campo agregado al endpoint el 2026-05-19.
    */
   frecuenciaFacturacionNombre?: string;
+  /**
+   * Tipo de servicio / segmento comercial de la factura (p.ej. dedicado,
+   * spot, foráneo, urbano…). Se mapea de forma **tolerante** desde varios
+   * alias del API — cuando ninguno viene poblado queda `undefined` y la UI lo
+   * agrupa bajo "Sin clasificar". El mecanismo (filtro + desglose por segmento)
+   * queda listo aunque el dato aún no fluya del backend. Campo agregado al
+   * modelo el 2026-07-09 (B2.3).
+   */
+  tipoServicio?: string;
 }
 
 // ───────────────────────────────────────────────────────────────

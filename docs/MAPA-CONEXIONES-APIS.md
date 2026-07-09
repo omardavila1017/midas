@@ -152,11 +152,11 @@ más tardía la confirma (`cobradaBancoKeys`, `paidCxpKeys`,
    (Auxiliar)** son dos mecanismos distintos de atribuir CARGOs a proveedores:
    el primero alimenta la trayectoria mensual (`canonical.monthly`), el
    segundo las líneas de movimiento. Coexisten por diseño (totales vs líneas).
-4. **El dedup de la pestaña Venta es por presencia de folio, no por join.**
-   Un viaje ROL con campo `factura` vacío pero ya facturado en cobranza
-   contaría doble en el calendario de Venta (display-only; el motor de caja
-   sí cruza). Mejora posible: reusar `buildRolCobranzaCross` en
-   `salesCalendarService`.
+4. **El dedup de la pestaña Venta ahora usa el join, no la presencia de folio
+   (corregido 2026-07-09, B2.6).** Antes un viaje ROL con `factura` vacío/
+   placeholder pero ya facturado en cobranza contaba DOBLE. `salesCalendarService`
+   reusa `buildRolCobranzaCross`: sólo el bucket `predicted` alimenta "por
+   facturar"; VE juzga "tiene factura" con `normFactura`. Sin doble conteo.
 5. **El cruce VE no desempata por cia** (mapa single-value, último gana) —
    el de ROL sí (`pickBest`). Con `companyCode='all'`, un folio repetido
    entre cias podría cruzar contra la cia equivocada. Riesgo bajo (el folio

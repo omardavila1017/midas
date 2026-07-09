@@ -27,6 +27,7 @@
 import type { PagoProveedorRecord } from '../services/jdeTypes';
 import type { PaymentMatch, PaymentStatus } from './paymentReconciliationEngine';
 import { isEmployeeSearchType } from './providerDerivation';
+import { csvDate } from '../utils/export';
 
 /** Días sin cargo bancario tras los cuales un huérfano sugiere void/captura errónea en JDE. */
 export const ORPHAN_STALE_DAYS = 30;
@@ -332,7 +333,7 @@ export function pagosToCsv(matches: PaymentMatch[]): string {
       r.tipoPago,
       r.noPago,
       r.batchPago,
-      r.fechaPago,
+      csvDate(r.fechaPago),
       r.importePesos.toFixed(2),
       r.moneda,
       r.claveProveedor,
@@ -346,7 +347,7 @@ export function pagosToCsv(matches: PaymentMatch[]): string {
       r.comentarioPago,
       PAGO_STATUS_LABEL[pagoDisplayStatus(m)],
       m.cxpMatches.length,
-      m.cargoMatch?.movement.fechaOperacion ?? '',
+      csvDate(m.cargoMatch?.movement.fechaOperacion ?? ''),
       m.cargoMatch?.cuenta ?? '',
       m.cargoMatch?.tier ?? '',
     ]

@@ -12,6 +12,7 @@
  */
 
 import type { ComprasRecord } from '../services/jdeTypes';
+import { csvDate } from '../utils/export';
 import {
   compraEstado,
   comprasImporteMxn,
@@ -146,7 +147,7 @@ export function pasivoToCsv(items: PasivoItem[]): string {
       i.noOrden,
       i.lineCount,
       i.importeMxn.toFixed(2),
-      i.fechaRecepcion,
+      csvDate(i.fechaRecepcion),
       i.antiguedadDias ?? '',
       i.categoria,
     ]

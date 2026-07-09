@@ -3,6 +3,24 @@
  * Provides CSV generation and clipboard copy for all modules.
  */
 
+/**
+ * Format a date value for CSV export as `dd/mm/aaaa` (es-MX convention).
+ *
+ * Tolerant by design: `YYYY-MM-DD` (optionally carrying a `T…` time suffix)
+ * → `dd/mm/aaaa`; empty / nullish → `''`; anything that is NOT a recognizable
+ * ISO date is passed through unchanged, so legacy or already-formatted values
+ * survive without being mangled. The finance team reads these CSVs in Excel
+ * es-MX, where `2026-04-20` is ambiguous but `20/04/2026` is not.
+ */
+export function csvDate(value: string | number | null | undefined): string {
+  if (value == null || value === '') return '';
+  const s = String(value).trim();
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+  if (!m) return s;
+  const [, year, month, day] = m;
+  return `${day}/${month}/${year}`;
+}
+
 /** Convert array of objects to CSV string */
 export function toCSV(rows: Record<string, string | number>[], headers?: string[]): string {
   if (rows.length === 0) return '';

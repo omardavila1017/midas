@@ -2360,7 +2360,17 @@ export default function App() {
         setClients(prev => (prev.length > 0 ? prev : loaded));
         setCatalogLoaded(true);
       })
-      .catch(() => { if (!cancelled) setClientsCatalogError(true); })
+      .catch((err) => {
+        if (cancelled) return;
+        // Antes este path era inalcanzable (loadClientsCatalog se tragaba todo
+        // error y regresaba []), así que un catálogo que no cargaba booteaba en
+        // silencio con cero clientes. Ahora el fallo real llega aquí: lo
+        // marcamos (boot slot 'catalog' → 'error', visible en Salud de datos) y
+        // lo logueamos para diagnóstico.
+        // eslint-disable-next-line no-console
+        console.error('[catalog] no se pudo cargar clientes-db.json:', err);
+        setClientsCatalogError(true);
+      })
       .finally(() => setClientsCatalogDone(true));
     return () => { cancelled = true; };
   }, [catalogLoaded, clients.length]);

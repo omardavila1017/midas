@@ -137,27 +137,73 @@ function writeClientsCatalogCache(hash: string, clients: Client[]): void {
 }
 
 /**
- * Fetch and parse clientes-db.json from /public/.
- * Returns empty array on failure (network error, missing file, bad JSON).
+ * Descarga el texto crudo de `clientes-db.json`.
+ *
+ * Prueba primero el `BASE_URL` configurado (p.ej. `/midas/clientes-db.json`)
+ * y, si falla, cae al **root** del sitio (`/clientes-db.json`). Sin ese
+ * fallback, un despliegue servido bajo un base distinto al que Vite bakea
+ * (preview builds, un host que ignora `base`) hacía 404 y el catálogo quedaba
+ * vacío para siempre — el bug "fetch roto en el catálogo de clientes". Si
+ * NINGÚN candidato responde, **lanza** (antes se tragaba el error y regresaba
+ * `[]`, indistinguible de un catálogo legítimamente vacío → el boot reportaba
+ * "listo" con cero clientes y sin señal de error).
+ */
+async function fetchClientsCatalogText(): Promise<string> {
+  const candidates = Array.from(
+    new Set([
+      `${import.meta.env.BASE_URL}clientes-db.json`,
+      '/clientes-db.json',
+      'clientes-db.json',
+    ]),
+  );
+  let lastError: unknown;
+  for (const url of candidates) {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) {
+        lastError = new Error(`clientes-db.json: HTTP ${res.status} en ${url}`);
+        continue;
+      }
+      return await res.text();
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error('clientes-db.json: no se pudo descargar de ningún path candidato');
+}
+
+/**
+ * Fetch and parse clientes-db.json.
+ *
+ * **Lanza** ante un fallo real (red, 404 en todos los paths, JSON inválido o
+ * shape inesperado) para que el caller lo pueda distinguir de un catálogo
+ * legítimamente vacío y surfacear el estado de error (boot slot / Salud de
+ * datos) en vez de bootear en silencio con cero clientes. Un catálogo válido
+ * pero sin clientes activos regresa `[]` sin lanzar.
  */
 export async function loadClientsCatalog(): Promise<Client[]> {
+  // Lee como texto primero para poder hashear antes del JSON.parse —
+  // permite saltarse parse + regex × N si el cache tiene el mismo hash.
+  const rawText = await fetchClientsCatalogText();
+  const hash = fastHash(rawText);
+  const cached = readClientsCatalogCache(hash);
+  if (cached) return cached;
+
+  let data: CatalogJSON;
   try {
-    const res = await fetch(`${import.meta.env.BASE_URL}clientes-db.json`);
-    if (!res.ok) return [];
-    // Lee como texto primero para poder hashear antes del JSON.parse —
-    // permite saltarse parse + regex × N si el cache tiene el mismo hash.
-    const rawText = await res.text();
-    const hash = fastHash(rawText);
-    const cached = readClientsCatalogCache(hash);
-    if (cached) return cached;
-    const data = JSON.parse(rawText) as CatalogJSON;
-    if (!Array.isArray(data.clientes)) return [];
-    const clients = data.clientes
-      .filter(c => c.active !== false)
-      .map((c, i) => rawToClient(c, i));
-    writeClientsCatalogCache(hash, clients);
-    return clients;
+    data = JSON.parse(rawText) as CatalogJSON;
   } catch {
-    return [];
+    throw new Error('clientes-db.json: JSON inválido');
   }
+  if (!Array.isArray(data.clientes)) {
+    throw new Error('clientes-db.json: falta el arreglo "clientes"');
+  }
+
+  const clients = data.clientes
+    .filter(c => c.active !== false)
+    .map((c, i) => rawToClient(c, i));
+  writeClientsCatalogCache(hash, clients);
+  return clients;
 }

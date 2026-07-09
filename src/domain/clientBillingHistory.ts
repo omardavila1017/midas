@@ -55,6 +55,17 @@ function parseMonth(iso: string | undefined): number | null {
   return year * 12 + (month - 1);
 }
 
+/**
+ * Una factura CANCELADA no es venta: no debe contar en la facturación ni
+ * alimentar el pronóstico. `mapCobranza` deriva `estatus='CANCELADA'` para
+ * facturas con saldo 0 y sin fecha de cobro, pero el API también puede mandar
+ * un código propio — así que el match es tolerante (substring des-mayúsculas).
+ */
+export function isCancelledInvoice(r: CobranzaRecord): boolean {
+  const s = (r.estatus ?? '').toUpperCase();
+  return s.includes('CANCEL') || s.includes('ANULAD');
+}
+
 /** Reúne todas las facturas enlazadas a un cliente vía `jdeAccounts`. */
 export function getCobranzaForClient(
   client: Client,
@@ -101,8 +112,13 @@ export function computeMonthlyBillingFromRecords(
   const byAbsMonth = new Map<number, number>();
   let invoiceCount = 0;
   for (const r of records) {
+    if (isCancelledInvoice(r)) continue; // sin cancelados
     const am = parseMonth(r.fechaFactura);
     if (am == null) continue;
+    // Hasta fecha reciente: una factura fechada MÁS ADELANTE del mes de
+    // referencia ("hoy") es post-fechada (típicamente un error de captura);
+    // no la contamos como facturación real ni la dejamos sesgar el pronóstico.
+    if (am > referenceMonth) continue;
     const amt = r.importeBrutoPesos ?? 0;
     if (!Number.isFinite(amt)) continue;
     byAbsMonth.set(am, (byAbsMonth.get(am) ?? 0) + amt);

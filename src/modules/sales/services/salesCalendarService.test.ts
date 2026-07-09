@@ -136,6 +136,43 @@ describe('buildSaleEntries — por facturar (ROL + especiales) without double co
     expect(entries).toHaveLength(0);
   });
 
+  // B2.6 — predicho → facturado: un viaje ROL con `factura` VACÍO pero ya
+  // facturado en cobranza (cruza por UUID fiscal) NO debe re-contarse como
+  // "por facturar"; solo cuenta su venta facturada (capa 1). Antes el dedup
+  // miraba solo `r.factura` y lo contaba doble.
+  it('excludes an executed ROL trip already invoiced in cobranza via UUID even when its factura field is empty (no double count)', () => {
+    const uuid = 'ABCDEF0123456789';
+    const entries = buildSaleEntries({
+      cobranza: [cobranza({ noFactura: 'RI-500', uuidFiscal: uuid, subTotal: 1000, fechaFactura: '2026-03-10' })],
+      rol: [rol({ efectuado: true, factura: '', uuidFiscal: uuid, subTotal: 1000, fechaViaje: '2026-03-09' })],
+      viajesEspeciales: [],
+    });
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ status: 'facturado', source: 'cobranza' });
+  });
+
+  // Placeholders JDE ("-"/"0"/"N/A") = SIN factura: el viaje sigue siendo
+  // "por facturar", no debe desaparecer por un folio placeholder.
+  it('counts an executed ROL trip whose factura folio is a placeholder ("0") as por-facturar', () => {
+    const entries = buildSaleEntries({
+      cobranza: [],
+      rol: [rol({ efectuado: true, factura: '0' })],
+      viajesEspeciales: [],
+    });
+    expect(entries).toHaveLength(1);
+    expect(entries[0].status).toBe('por-facturar');
+  });
+
+  it('counts a special trip whose facturaJDE folio is a placeholder ("-") as por-facturar', () => {
+    const entries = buildSaleEntries({
+      cobranza: [],
+      rol: [],
+      viajesEspeciales: [especial({ facturaJDE: '-', fSalidaPrimera: '2026-03-15' })],
+    });
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ status: 'por-facturar', source: 'especial' });
+  });
+
   it('includes special trips without a JDE invoice, dated by departure', () => {
     const entries = buildSaleEntries({
       cobranza: [],
@@ -244,5 +281,18 @@ describe('toCsv', () => {
     expect(lines[0]).toContain('Importe sin IVA');
     expect(lines[1]).toContain('"ACME, S.A."'); // coma escapada
     expect(lines[1]).toContain('1000.00');
+  });
+
+  // B3.8 — la fecha se exporta como dd/mm/aaaa (Excel es-MX).
+  it('formats the date column as dd/mm/aaaa', () => {
+    const csv = toCsv(
+      buildSaleEntries({
+        cobranza: [cobranza({ subTotal: 1000, fechaFactura: '2026-03-10' })],
+        rol: [],
+        viajesEspeciales: [],
+      }),
+    );
+    expect(csv.split('\n')[1]).toContain('10/03/2026');
+    expect(csv.split('\n')[1]).not.toContain('2026-03-10');
   });
 });

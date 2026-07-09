@@ -23,6 +23,7 @@
 
 import type { ComprasRecord } from '../services/jdeTypes';
 import { isComprasWorkflowClosed } from './comprasToPurchaseReceipts';
+import { csvDate } from '../utils/export';
 
 /** Días sin entrada tras los cuales una OC abierta se considera probable orden muerta. */
 export const STALE_OPEN_ORDER_DAYS = 90;
@@ -339,9 +340,9 @@ export function comprasOrdersToCsv(orders: ComprasOrderSummary[]): string {
       o.importeFacturadoMxn.toFixed(2),
       o.importePendienteRecibirMxn.toFixed(2),
       o.importePendienteFacturaMxn.toFixed(2),
-      o.fechaPedido,
+      csvDate(o.fechaPedido),
       o.antiguedadDias ?? '',
-      o.fechaPagoProyectada,
+      csvDate(o.fechaPagoProyectada),
       o.categoria,
     ]
       .map(csvCell)
@@ -571,10 +572,10 @@ export function comprasToCsv(records: ComprasRecord[]): string {
       r.moneda,
       r.tipoCambio,
       comprasImporteMxn(r).toFixed(2),
-      r.fechaPedido,
-      r.fechaRecepcion,
+      csvDate(r.fechaPedido),
+      csvDate(r.fechaRecepcion),
       r.diasCredito,
-      r.fechaPagoProyectada,
+      csvDate(r.fechaPagoProyectada),
       r.noFactura,
       r.centroCostos,
       r.descCategoria || r.categoria,

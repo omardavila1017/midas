@@ -786,14 +786,19 @@ function ClientEditor({
   };
   const ivaRate = (client.ivaRate ?? 16) / 100;
 
-  // Prefer derived billing for display; fall back to whatever's on the client.
-  // Solo histórico: la proyección no se muestra en el catálogo de clientes.
+  // Facturación derivada: histórico real (meses pasados, cobranza sin
+  // cancelados) + pronóstico (regresión sobre el histórico) para el resto del
+  // año. B2.7: ambos se muestran, el pronóstico con estilo distinto — es el
+  // "pronóstico por cliente".
   const rawValues = billing?.values ?? client.monthlyBilling;
   const isHistorical = billing?.isHistorical ?? new Array(12).fill(false);
-  const values = rawValues.map((v, i) => (isHistorical[i] ? v : 0));
-  const total = values.reduce((s, v) => s + v, 0);
+  const histValues = rawValues.map((v, i) => (isHistorical[i] ? v : 0));
+  const forecastValues = rawValues.map((v, i) => (isHistorical[i] ? 0 : v));
+  const total = histValues.reduce((s, v) => s + v, 0); // base gravable = histórico
+  const forecastTotal = forecastValues.reduce((s, v) => s + v, 0);
   const hasData = billing != null && billing.historicalMonths > 0;
-  const maxVal = Math.max(1, ...values);
+  const hasForecast = hasData && forecastTotal > 0;
+  const maxVal = Math.max(1, ...rawValues);
 
   return (
     <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)]">
@@ -960,6 +965,15 @@ function ClientEditor({
               />
               Histórico
             </span>
+            {hasForecast && (
+              <span className="inline-flex items-center gap-1">
+                <span
+                  className="inline-block h-2 w-2 rounded-sm"
+                  style={{ backgroundColor: 'var(--accent-blue, #3b82f6)' }}
+                />
+                Pronóstico
+              </span>
+            )}
           </div>
         </div>
 
@@ -997,22 +1011,24 @@ function ClientEditor({
         <div className="mt-3 grid grid-cols-12 gap-1">
           {MONTHS.map((m, i) => {
             const hist = isHistorical[i];
-            const v = hist ? (values[i] ?? 0) : 0;
-            const heightPct = hist ? Math.max(2, Math.round((v / maxVal) * 100)) : 0;
+            const v = rawValues[i] ?? 0;
+            const showBar = v > 0;
+            const heightPct = showBar ? Math.max(2, Math.round((v / maxVal) * 100)) : 0;
             return (
               <div key={m} className="flex flex-col items-center">
                 <div
                   className="relative h-14 w-full overflow-hidden rounded-sm"
                   style={{ backgroundColor: 'var(--gray-100, #f1f5f9)' }}
                 >
-                  {hist && (
+                  {showBar && (
                     <div
                       className="absolute bottom-0 left-0 right-0"
                       style={{
                         height: `${heightPct}%`,
-                        backgroundColor: 'var(--gray-950)',
+                        backgroundColor: hist ? 'var(--gray-950)' : 'var(--accent-blue, #3b82f6)',
+                        opacity: hist ? 1 : 0.72,
                       }}
-                      title="Histórico (cobranza)"
+                      title={hist ? 'Histórico (cobranza)' : 'Pronóstico (regresión)'}
                     />
                   )}
                 </div>
@@ -1020,12 +1036,12 @@ function ClientEditor({
                 <span
                   className="tabular-nums text-[10.5px]"
                   style={{
-                    color: hist ? 'var(--gray-950)' : 'var(--gray-300)',
+                    color: hist ? 'var(--gray-950)' : 'var(--accent-blue, #3b82f6)',
                     fontWeight: hist ? 600 : 400,
                   }}
-                  title={hist ? 'Facturado histórico' : ''}
+                  title={hist ? 'Facturado histórico' : 'Pronóstico'}
                 >
-                  {hist ? fmt(v) : '—'}
+                  {showBar ? fmt(v) : '—'}
                 </span>
               </div>
             );
@@ -1046,6 +1062,22 @@ function ClientEditor({
             <div className="font-bold tabular-nums text-[var(--gray-950)]">{fmt(total * (1 + ivaRate))}</div>
           </div>
         </div>
+
+        {hasForecast && (
+          <div className="mt-2 flex items-center justify-between rounded-[var(--radius-md)] bg-[var(--gray-50)] px-3 py-2 text-[12px]">
+            <span className="inline-flex items-center gap-1.5 text-[var(--gray-400)]">
+              <TrendingUp className="h-3 w-3" />
+              Pronóstico resto del año (sin IVA)
+            </span>
+            <span
+              className="font-bold tabular-nums"
+              style={{ color: 'var(--accent-blue, #3b82f6)' }}
+              title="Suma de los meses proyectados por regresión sobre el histórico"
+            >
+              {fmt(forecastTotal)}
+            </span>
+          </div>
+        )}
 
         {hasData && (
           <div className="mt-2 flex items-center gap-1.5 text-[11px] text-[var(--gray-400)]">

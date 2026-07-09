@@ -189,6 +189,23 @@ describe('auxiliar contable — el fallback per-día no envenena el cache con d�
   });
 });
 
+describe('mapCobranza — tipoServicio (B2.3)', () => {
+  const base = { CIA: '00011', No_Cliente: '1', Nombre_Cliente: 'X', Factura: 'RI-1', Fecha_Factura: '2026-01-10' };
+
+  it('reads tipoServicio from a Tipo_Servicio alias', () => {
+    expect(__internal.mapCobranza({ ...base, Tipo_Servicio: 'Dedicado' }).tipoServicio).toBe('Dedicado');
+  });
+
+  it('reads tipoServicio from a Segmento / Unidad_Negocio alias', () => {
+    expect(__internal.mapCobranza({ ...base, Segmento: 'Spot' }).tipoServicio).toBe('Spot');
+    expect(__internal.mapCobranza({ ...base, Unidad_Negocio: 'Foraneo' }).tipoServicio).toBe('Foraneo');
+  });
+
+  it('is tolerant: undefined when no alias is present', () => {
+    expect(__internal.mapCobranza(base).tipoServicio).toBeUndefined();
+  });
+});
+
 describe('normalizeCobranzaPayments', () => {
   it('agrupa filas repetidas por Id Pago y mantiene importes en el nivel correcto', () => {
     const payments = normalizeCobranzaPayments([

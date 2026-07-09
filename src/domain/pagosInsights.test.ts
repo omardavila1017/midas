@@ -237,7 +237,7 @@ describe('pagosToCsv', () => {
       },
     });
     const row = pagosToCsv([m]).split('\n')[1];
-    expect(row).toContain('2026-06-02');
+    expect(row).toContain('02/06/2026'); // dd/mm/aaaa (B3.8)
     expect(row).toContain('exact');
     expect(row).toContain(PAGO_STATUS_LABEL.MATCHED_FULL);
   });

@@ -14,6 +14,8 @@
  */
 
 import type { CobranzaRecord, RolRecord, ViajeEspecialRecord } from '../../../services/jde';
+import { buildRolCobranzaCross, normFactura } from '../../../domain/rolCobranzaMatch';
+import { csvDate } from '../../../utils/export';
 
 export type SaleStatus = 'facturado' | 'por-facturar';
 export type SaleSource = 'cobranza' | 'rol' | 'especial';
@@ -117,10 +119,22 @@ export function buildSaleEntries({ cobranza, rol, viajesEspeciales }: SaleSource
     });
   }
 
-  // 2a. Por facturar — ROL: viaje ejecutado sin factura emitida todavía.
-  for (const r of rol) {
+  // 2a. Por facturar — ROL: viaje ejecutado que AÚN no se factura.
+  //
+  // El "aún no facturado" NO puede leerse solo del campo `r.factura`: un viaje
+  // ya facturado en cobranza puede llegar de ROL con `factura` vacío (o con un
+  // placeholder "-"/"0"/"N/A"), lo que lo contaría DOBLE — una vez aquí como
+  // "por facturar" y otra en la capa 1 (facturado) vía su factura de cobranza.
+  // Reusamos el cruce canónico ROL↔cobranza (`buildRolCobranzaCross`, misma
+  // verdad que la pestaña Cobranza): su bucket `predicted` es exactamente el
+  // conjunto de viajes SIN factura en cobranza (predicho→por facturar); los
+  // `matches` (ya facturados) y `invoicedOrphans` (traen folio) se excluyen,
+  // matando el doble conteo. Un viaje predicho que después se factura salta de
+  // `predicted` a `matches`, así que su venta migra sola de "por facturar" a
+  // "facturado" sin re-contarse.
+  const rolCross = buildRolCobranzaCross(rol, cobranza);
+  for (const r of rolCross.predicted) {
     if (!r.efectuado) continue;
-    if (cleanString(r.factura)) continue; // ya facturado → vive en cobranza
     const date = toISODate(r.fechaViaje);
     if (!date) continue;
     if (!isFinitePositive(r.subTotal)) continue;
@@ -135,9 +149,11 @@ export function buildSaleEntries({ cobranza, rol, viajesEspeciales }: SaleSource
     });
   }
 
-  // 2b. Por facturar — Viajes Especiales sin factura.
+  // 2b. Por facturar — Viajes Especiales sin factura. `normFactura` (canónico)
+  // trata los placeholders JDE ("-"/"0"/"N/A") como SIN factura, así que un
+  // viaje genuinamente no facturado ya no se cae por un folio placeholder.
   for (const v of viajesEspeciales) {
-    if (cleanString(v.facturaJDE)) continue; // ya facturado → vive en cobranza
+    if (normFactura(v.facturaJDE)) continue; // ya facturado → vive en cobranza
     const date = toISODate(v.fSalidaPrimera) ?? toISODate(v.fRegresoUltima);
     if (!date) continue;
     if (!isFinitePositive(v.totalNegociado)) continue;
@@ -244,7 +260,7 @@ export function toCsv(entries: SaleEntry[]): string {
     .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
     .map((e) =>
       [
-        e.date,
+        csvDate(e.date),
         e.status === 'facturado' ? 'Facturado' : 'Por facturar',
         e.cliente,
         e.referencia,
