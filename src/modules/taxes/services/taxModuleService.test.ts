@@ -266,6 +266,55 @@ describe('taxModuleService', () => {
     });
   });
 
+  it('excludes Fiscal-listed concepts (nómina/vales/…) from creditable IVA', () => {
+    const view = buildTaxDashboardView({
+      cxpRecords: [
+        // Proveedor legítimo → SÍ acredita.
+        cxpRecord({
+          nombre: 'Diesel del Norte SA',
+          noFactura: 'F-OK',
+          fechaProgramacionPago: '2026-05-07',
+          importeSubtotalPesos: 1000,
+          importeImpuestosPesos: 160,
+          importeBrutoPesos: 1160,
+          importePendientePesos: 1160,
+        }),
+        // Nómina → NO acredita (concepto excluido por Fiscal).
+        cxpRecord({
+          nombre: 'Nomina Operadores',
+          noFactura: 'F-NOM',
+          fechaProgramacionPago: '2026-05-08',
+          importeSubtotalPesos: 1000,
+          importeImpuestosPesos: 160,
+          importeBrutoPesos: 1160,
+          importePendientePesos: 1160,
+        }),
+        // Vales de despensa → NO acredita.
+        cxpRecord({
+          nombre: 'Proveedor de Vales',
+          noFactura: 'F-VAL',
+          fechaProgramacionPago: '2026-05-09',
+          importeSubtotalPesos: 2000,
+          importeImpuestosPesos: 320,
+          importeBrutoPesos: 2320,
+          importePendientePesos: 2320,
+        }),
+      ],
+      companyCode: 'all',
+      startDate: '2026-05-01',
+      endDate: '2026-05-31',
+      store: defaultTaxStore(),
+      today: '2026-05-01',
+      ivaMode: 'FORECAST',
+    });
+
+    const may = view.periods.find((period) => period.period === '2026-05')!;
+    // Sólo el proveedor legítimo (160) — nómina y vales quedan fuera.
+    expect(may.iva.ivaCreditable).toBeCloseTo(160);
+    expect(may.iva.expenseLines).toHaveLength(1);
+    expect(may.iva.expenseLines[0].concept).toContain('F-OK');
+  });
+
   it('prorates forecast CXP invoices and leaves invoices without fiscal fields unclassified', () => {
     const view = buildTaxDashboardView({
       cxpRecords: [
@@ -1131,6 +1180,77 @@ describe('taxModuleService', () => {
     expect(may.iva.ivaCaused8).toBeCloseTo(80);
     expect(may.iva.ivaCaused).toBeCloseTo(240);
     expect(may.iva.incomeLines).toHaveLength(2);
+  });
+
+  it('derives caused IVA from deposit-only collections at 16% (default) and 8% (frontera resolver)', () => {
+    const deposit = (importeCobrado: number) => cobranzaPayment({
+      idPago: 'PAY-DEP',
+      fechaCobro: '2026-05-12',
+      importeRecibo: importeCobrado,
+      applications: [{
+        noFactura: 'RI-DEP',
+        importeCobrado,
+        importeOriginalFactura: 0,
+        importeIvaFacturaOriginal: 0, // sólo el depósito, sin desglose de factura
+        tasaIva: 'IVA',               // gravable, sin tasa explícita
+      }],
+    });
+
+    // 16% por defecto (catálogo fronterizo vacío): base = depósito/1.16.
+    const view16 = buildTaxDashboardView({
+      cobranzaPayments: [deposit(1160)],
+      companyCode: 'all',
+      startDate: '2026-05-01',
+      endDate: '2026-05-31',
+      store: defaultTaxStore(),
+      today: '2026-05-01',
+    });
+    const may16 = view16.periods.find((period) => period.period === '2026-05')!;
+    expect(may16.iva.incomeBase16).toBeCloseTo(1000);
+    expect(may16.iva.ivaCaused16).toBeCloseTo(160);
+    expect(may16.iva.ivaCaused8).toBe(0);
+
+    // 8% cuando el resolver marca la empresa como fronteriza: base = depósito/1.08.
+    const view8 = buildTaxDashboardView({
+      cobranzaPayments: [deposit(1080)],
+      companyCode: 'all',
+      startDate: '2026-05-01',
+      endDate: '2026-05-31',
+      store: defaultTaxStore(),
+      today: '2026-05-01',
+      incomeIvaRateResolver: () => 8,
+    });
+    const may8 = view8.periods.find((period) => period.period === '2026-05')!;
+    expect(may8.iva.incomeBase8).toBeCloseTo(1000);
+    expect(may8.iva.ivaCaused8).toBeCloseTo(80);
+    expect(may8.iva.ivaCaused16).toBe(0);
+  });
+
+  it('does NOT over-tax exempt / zero-rate / indicator-less deposit collections', () => {
+    const mk = (tasaIva: string) => cobranzaPayment({
+      idPago: `PAY-${tasaIva || 'BLANK'}`,
+      fechaCobro: '2026-05-12',
+      importeRecibo: 1000,
+      applications: [{
+        noFactura: 'RI',
+        importeCobrado: 1000,
+        importeOriginalFactura: 1000,
+        importeIvaFacturaOriginal: 0,
+        tasaIva,
+      }],
+    });
+    const view = buildTaxDashboardView({
+      // Aun con resolver fronterizo activo, los exentos NO se gravan.
+      cobranzaPayments: [mk('EXENTO'), mk('TASA 0'), mk('')],
+      companyCode: 'all',
+      startDate: '2026-05-01',
+      endDate: '2026-05-31',
+      store: defaultTaxStore(),
+      today: '2026-05-01',
+      incomeIvaRateResolver: () => 8,
+    });
+    const may = view.periods.find((period) => period.period === '2026-05');
+    expect(may?.iva.ivaCaused ?? 0).toBe(0);
   });
 
   it('routes collections with IVA but unresolvable rate to unclassified income instead of dropping them', () => {

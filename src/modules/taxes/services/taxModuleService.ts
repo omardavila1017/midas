@@ -7,6 +7,8 @@ import type { CashFlowAssumptions, Client, Provider } from '../../../domain/type
 import { classifyBankConcept } from '../../../domain/bankConceptClassifier';
 import type { AuxiliarContableRecord, BankAccountStatement, CobranzaPayment } from '../../../services/jdeTypes';
 import { buildIvaLedgerByPeriod, type IvaLedgerLine, type IvaLedgerPeriod } from '../../../domain/ivaLedger';
+import { isCreditableExcludedConcept } from '../../../config/ivaCreditableExclusions';
+import { resolveIncomeIvaRate } from '../../../config/ivaRegionRates';
 import { todayISO } from '../../../formatters';
 import type {
   FinancialMovement,
@@ -128,7 +130,7 @@ export interface TaxSourceLine {
   taxAmount: number;
   sourceSystem: FinancialMovement['sourceSystem'];
   rateTarget?: TaxRateTarget;
-  rateSource?: 'OVERRIDE' | 'CATALOG' | 'JDE' | 'DEFAULT';
+  rateSource?: 'OVERRIDE' | 'CATALOG' | 'JDE' | 'DEFAULT' | 'REGION';
   estimated?: boolean;
 }
 
@@ -439,6 +441,13 @@ export function buildTaxDashboardView(params: {
   auxiliarIvaRecords?: AuxiliarContableRecord[];
   /** REAL = IVA declarable, FORECAST = reserva/proyeccion, BOTH = ambas vistas. */
   ivaMode?: IvaMode;
+  /**
+   * Resolver de la tasa de IVA de ingresos por empresa/región (16% ó 8%
+   * fronterizo). Se usa para derivar base/IVA de cobros SIN desglose de factura
+   * (método por depósito de Fiscal). Inyectable para tests; por defecto usa el
+   * catálogo `config/ivaRegionRates` (vacío ⇒ todo 16%).
+   */
+  incomeIvaRateResolver?: (cia?: string, nombre?: string) => 8 | 16;
   budget?: Budget | null;
   companyCode?: string;
   startDate?: string;
@@ -502,6 +511,8 @@ export function buildTaxDashboardView(params: {
       startDate,
       endDate,
       ensure: ensureReal,
+      resolveIncomeRate: params.incomeIvaRateResolver
+        ?? ((cia, nombre) => resolveIncomeIvaRate(cia, nombre)),
     });
     accumulateHistoricIvaPaidFromBankStatements({
       bankStatements: params.bankStatements ?? [],
@@ -797,7 +808,7 @@ export function buildTaxByCompany(
 
 /** Totales fiscales agrupados por coordinado fiscal (rollup sobre las cias). */
 export interface TaxCoordinadoBreakdown {
-  /** Etiqueta del coordinado ("SIRES" / "Federal" / "Sin coordinado"). */
+  /** Etiqueta del coordinado ("SIR" / "Tamaulipas" / "Sin coordinado"). */
   coordinado: string;
   /** Cias que componen el grupo, ya con sus totales por empresa. */
   companies: TaxCompanyBreakdown[];
@@ -1371,12 +1382,15 @@ function accumulateCobranzaPaymentIva({
   startDate,
   endDate,
   ensure,
+  resolveIncomeRate,
 }: {
   payments: CobranzaPayment[];
   companyCode?: string;
   startDate: string;
   endDate: string;
   ensure: (period: string) => TaxPeriodAccumulator;
+  /** Tasa 16/8 por empresa/región para derivar cobros SIN IVA de factura. */
+  resolveIncomeRate?: (cia?: string, nombre?: string) => 8 | 16;
 }): Set<string> {
   const periods = new Set<string>();
   for (const payment of payments) {
@@ -1407,15 +1421,35 @@ function accumulateCobranzaPaymentIva({
         rateSource: 'JDE',
       };
       const row = ensure(date.slice(0, 7));
-      if (resolved) {
-        addIvaCaused(row, line, resolved);
-      } else if (taxAmount > 0) {
-        // Cobro CON IVA pero tasa no resoluble (indicador raro o ratio fuera de 8|16):
-        // no se descarta — va a no clasificado para auditoría, no se pierde del neto.
-        row.unclassifiedIncome += amount;
-        row.unclassifiedLines.push(line);
+      if (taxAmount > 0) {
+        // La factura trae su IVA (cotejado).
+        if (resolved) {
+          addIvaCaused(row, line, resolved); // tasa de la factura manda
+        } else {
+          // Cobro CON IVA pero tasa no resoluble (indicador raro o ratio fuera de 8|16):
+          // no se descarta — va a no clasificado para auditoría, no se pierde del neto.
+          row.unclassifiedIncome += amount;
+          row.unclassifiedLines.push(line);
+        }
+      } else if (isTaxableIncomeIndicator(app.tasaIva)) {
+        // El cobro es gravable pero sólo trae el monto del depósito (sin IVA de
+        // factura) → método de Fiscal: base = depósito/(1+tasa), IVA = depósito−base.
+        // Tasa: la de la factura si el indicador la fija (8/16), si no la de la
+        // empresa/región del cobro (8% fronteriza, 16% resto). La tasa fronteriza
+        // es por EMPRESA interna → se resuelve por `payment.cia` (llave
+        // autoritativa), NO por el nombre del cliente.
+        const rate = resolved ?? resolveIncomeRate?.(payment.cia) ?? 16;
+        const breakdown = grossToIvaBreakdown(amount, rate);
+        addIvaCaused(row, {
+          ...line,
+          taxBase: breakdown.taxBase,
+          taxAmount: breakdown.taxAmount,
+          taxRate: rate,
+          rateSource: resolved ? 'JDE' : 'REGION',
+        }, rate);
       } else {
-        // Sin IVA (exento / tasa 0) → se ignora, como antes.
+        // Sin IVA de factura y sin indicador gravable (exento / tasa 0 / vacío)
+        // → se ignora, como antes.
         continue;
       }
       periods.add(date.slice(0, 7));
@@ -2171,6 +2205,13 @@ function addIvaCaused(acc: TaxPeriodAccumulator, line: TaxSourceLine, rate: 8 | 
 }
 
 function addIvaCreditable(acc: TaxPeriodAccumulator, line: TaxSourceLine, rate: 8 | 16): void {
+  // Fiscal excluye ciertos conceptos del acreditable (empleados/nómina/vales/
+  // reembolsos/reposiciones/pensiones/OCSI/Asociación Protacio). Se filtran por
+  // el texto de la línea (concepto + contraparte). Ver `config/ivaCreditableExclusions`.
+  // El causado (addIvaCaused) NO se toca. La ruta de libro mayor ya viene
+  // filtrada aguas arriba (ivaLedger.ts); aquí se cubren los estimadores (CXP,
+  // OC, movimientos) cuyo concepto/contraparte sí trae el nombre del proveedor.
+  if (isCreditableExcludedConcept(`${line.concept ?? ''} ${line.counterpartyName ?? ''}`)) return;
   if (rate === 16) {
     acc.expenseBase16 += line.taxBase;
     acc.ivaCreditable16 += line.taxAmount;
@@ -2634,6 +2675,22 @@ function taxRateFromIndicator(value: string, amount: number, taxAmount: number):
   if (text.includes('IVA8') || text.includes('8')) return 8;
   if (taxAmount > 0) return taxRateFromAmounts(Math.max(0, amount - taxAmount), taxAmount);
   return undefined;
+}
+
+/**
+ * True si el indicador `tasaIva` marca un cobro GRAVABLE (no exento, no tasa 0,
+ * no vacío). Cuando el cobro ya no trae el IVA de su factura, esto distingue
+ * "gravable sin desglose" (aplica el método por depósito con la tasa de la
+ * región) de "exento / tasa 0 / sin dato" (se ignora — byte-idéntico al
+ * comportamiento previo, que descartaba todo cobro con IVA 0).
+ */
+function isTaxableIncomeIndicator(value: string): boolean {
+  const text = normalizeText(value);
+  if (!text) return false;
+  if (text.includes('EXENT')) return false;
+  // Tasa 0 explícita ("0" / "TASA 0" / "T0") sin señal de 8 ó 16 → exento.
+  if (!text.includes('16') && !text.includes('8') && /(^|[^0-9])0([^0-9]|$)/.test(text)) return false;
+  return true;
 }
 
 function grossToIvaBreakdown(amount: number, rate: 8 | 16): { taxBase: number; taxAmount: number; taxRate: 8 | 16 } {

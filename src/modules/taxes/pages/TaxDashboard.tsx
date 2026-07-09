@@ -18,7 +18,7 @@ import type { AuxiliarContableRecord, CobranzaPayment, CobranzaRecord, Company }
 import type { AuxiliarReconResult } from '../../../domain/auxiliarReconciliationEngine';
 import type { CxpPaymentCoverage, PaymentMatch } from '../../../domain/paymentReconciliationEngine';
 import { fmtCompact, fmtCurrency, fmtDate, fmtYearMonthLong, todayISO } from '../../../formatters';
-import { COORDINADO_LABEL, SIN_COORDINADO, resolveCoordinadoForCia } from '../../../config/coordinadoFiscalCatalog';
+import { coordinadoLabelForCia } from '../../../config/coordinadoFiscalCatalog';
 import KpiCard from '../../../components/ui/KpiCard';
 import PageHeader from '../../../components/ui/PageHeader';
 import CompanyMultiSelect from '../../../components/ui/CompanyMultiSelect';
@@ -199,11 +199,11 @@ export default function TaxDashboard(props: Props) {
     [monthParams, props.companies],
   );
   const coordinadoBreakdown = useMemo(
-    () => buildTaxByCoordinado(companyBreakdown, (cia, nombre) => {
-      const c = resolveCoordinadoForCia(cia, nombre);
-      return c ? COORDINADO_LABEL[c] : SIN_COORDINADO;
-    }),
-    [companyBreakdown],
+    // Resuelve por código de cía → RFC → nombre desde el catálogo de compañías
+    // (autoritativo, catálogo CANAPAT). `nombre` del breakdown se ignora: el
+    // resolver re-lee nombre+RFC de `companies` para amarrar por la llave fuerte.
+    () => buildTaxByCoordinado(companyBreakdown, (cia) => coordinadoLabelForCia(cia, props.companies ?? [])),
+    [companyBreakdown, props.companies],
   );
   const paymentSchedule = useMemo(() => buildTaxPaymentSchedule(view.obligations), [view.obligations]);
   const hasFiscalData = props.clients.length > 0
@@ -597,7 +597,7 @@ function TaxByCompanyPanel({
       </div>
       <p className="px-4 py-2 text-[10px] text-[var(--gray-400)]">
         IVA por coordinado fiscal del mes (causado por cobranza aplicada − acreditable del libro mayor / CXP), con ISN e IMSS de nómina.
-        El mapeo cia→coordinado es provisional (se afina con el catálogo). Los ajustes manuales y el saldo vencido globales se mantienen en la vista consolidada.
+        El mapeo cia→coordinado (SIR / Tamaulipas) es autoritativo: sale de los escritos CANAPAT al SAT. Los ajustes manuales y el saldo vencido globales se mantienen en la vista consolidada.
       </p>
     </section>
   );

@@ -17,6 +17,15 @@
  *   2. El signo de `importe` por lado — se expone el bruto firmado para auditar.
  */
 import type { AuxiliarContableRecord } from '../services/jdeTypes';
+import { isCreditableExcludedConcept } from '../config/ivaCreditableExclusions';
+
+/**
+ * Texto descriptivo de un asiento para probar exclusiones de acreditable
+ * (contraparte + concepto + explicación). Ver `config/ivaCreditableExclusions`.
+ */
+function creditableMatchText(rec: AuxiliarContableRecord): string {
+  return `${rec.nombre ?? ''} ${rec.concepto ?? ''} ${rec.explicacion ?? ''}`;
+}
 
 export type IvaAccountKind = 'creditable' | 'caused' | 'withheld' | 'other';
 
@@ -216,9 +225,22 @@ export function missingIvaKindsByCia(accounts: IvaLedgerAccount[]): Record<strin
  */
 export function buildIvaLedgerByPeriod(
   records: AuxiliarContableRecord[],
-  opts: { companyCode?: string; startDate?: string; endDate?: string } = {},
+  opts: {
+    companyCode?: string;
+    startDate?: string;
+    endDate?: string;
+    /**
+     * Predicado de exclusión del ACREDITABLE (Fiscal quita nómina/empleados/
+     * vales/reembolsos/… — ver `config/ivaCreditableExclusions`). Inyectable
+     * para tests; por defecto usa el catálogo contra el texto del asiento.
+     * NO afecta el causado.
+     */
+    isCreditableExcluded?: (rec: AuxiliarContableRecord) => boolean;
+  } = {},
 ): Map<string, IvaLedgerPeriod> {
   const { companyCode, startDate, endDate } = opts;
+  const isCreditableExcluded = opts.isCreditableExcluded
+    ?? ((rec: AuxiliarContableRecord) => isCreditableExcludedConcept(creditableMatchText(rec)));
   const creditableNet = new Map<string, number>();
   const causedNet = new Map<string, number>();
   const creditableLines = new Map<string, IvaLedgerLine[]>();
@@ -233,6 +255,9 @@ export function buildIvaLedgerByPeriod(
 
     const kind = classifyIvaAccount(rec.nombreCuenta);
     if (kind !== 'creditable' && kind !== 'caused') continue;
+    // Fiscal excluye ciertos conceptos del acreditable (nómina/empleados/vales/…).
+    // Sólo aplica al lado acreditable; el causado no se toca.
+    if (kind === 'creditable' && isCreditableExcluded(rec)) continue;
 
     const signed = Number.isFinite(rec.importe) ? rec.importe : 0;
     if (signed === 0) continue;
