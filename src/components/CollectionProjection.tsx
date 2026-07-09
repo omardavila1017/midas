@@ -27,12 +27,13 @@ import {
   buildCobranzaBankCuadre,
   type CuadreStatus,
 } from '../domain/cobranzaBankCuadre';
+import { COMPENSATION_SCHEME_LABEL } from '../config/compensationClientsCatalog';
 import { CXPRecord } from '../domain/persistence';
 import type { BankAccountStatement, CobranzaPayment, CobranzaRecord } from '../services/jde';
 import type { RolRecord } from '../services/jdeTypes';
 import RolCobranzaPanel from './RolCobranzaPanel';
 import { MONTHS } from '../types';
-import { Search, Settings2, ChevronDown, ChevronLeft, ChevronRight, Check, Download, Landmark, ArrowRightLeft, CheckCircle2, AlertTriangle, HelpCircle, Banknote, CalendarRange, Inbox, SlidersHorizontal, Database, Loader2 } from 'lucide-react';
+import { Search, Settings2, ChevronDown, ChevronLeft, ChevronRight, Check, Download, Landmark, ArrowRightLeft, CheckCircle2, AlertTriangle, HelpCircle, Handshake, Banknote, CalendarRange, Inbox, SlidersHorizontal, Database, Loader2 } from 'lucide-react';
 import { useDataWindow } from '../contexts/DataWindowContext';
 import { toCSV, downloadFile, csvDate } from '../utils/export';
 import { hex } from '../theme';
@@ -1912,6 +1913,9 @@ const CUADRE_META: Record<CuadreStatus, { label: string; color: string; Icon: ty
   'descuadre-importe': { label: 'Descuadre de importe', color: 'var(--warning)', Icon: AlertTriangle },
   'sin-banco': { label: 'Sin banco (no entró)', color: 'var(--danger)', Icon: Landmark },
   'revisar': { label: 'Revisar', color: 'var(--info)', Icon: HelpCircle },
+  // Esperado por esquema de compensación del cliente (TLJ/APTIV/CMI) — NO es
+  // descuadre accionable. Catálogo: src/config/compensationClientsCatalog.ts.
+  'compensacion': { label: 'Compensación (esperado)', color: 'var(--accent-blue)', Icon: Handshake },
 };
 
 /**
@@ -1943,6 +1947,12 @@ function CobranzaBankCuadrePanel({
   const glTracked = glConfirmedInvoiceKeys != null && glConfirmedInvoiceKeys.size > 0;
   const glCount = glTracked ? payments.filter(p => p.glConfirmado).length : 0;
   const descuadreImporte = totals.sinBanco.importe + totals.descuadreImporte.importe;
+  const hasCompensacion = totals.compensacion.count > 0;
+  // Reglas de compensación presentes en el resultado (para la nota explicativa
+  // y la cuenta asociada): únicas por etiqueta del catálogo.
+  const compensacionReglas = hasCompensacion
+    ? Array.from(new Map(payments.filter(p => p.compensacion).map(p => [p.compensacion!.label, p.compensacion!])).values())
+    : [];
 
   const CLIENT_PAGE = 15;
   const visibleClients = showAllClients ? byClient : byClient.slice(0, CLIENT_PAGE);
@@ -1952,6 +1962,9 @@ function CobranzaBankCuadrePanel({
     { status: 'descuadre-importe', bucket: totals.descuadreImporte },
     { status: 'sin-banco', bucket: totals.sinBanco },
     { status: 'revisar', bucket: totals.revisar },
+    // La tarjeta de compensación sólo aparece cuando hay recibos en el bucket
+    // (el caso común sin clientes de compensación no cambia de layout).
+    ...(hasCompensacion ? [{ status: 'compensacion' as const, bucket: totals.compensacion }] : []),
   ];
 
   const pctColor = totals.pctCuadradoImporte >= 95
@@ -1975,6 +1988,10 @@ function CobranzaBankCuadrePanel({
       Diferencia: p.diferencia,
       Cuadre: CUADRE_META[p.status].label,
       EstatusMotor: p.paymentStatus,
+      ...(hasCompensacion ? {
+        EsquemaCompensacion: p.compensacion ? COMPENSATION_SCHEME_LABEL[p.compensacion.scheme] : '',
+        CuentaCompensacion: p.compensacion?.cuentaCompensacion ?? '',
+      } : {}),
       ...(glTracked ? { ConfirmadoGL: p.glConfirmado ? 'Sí' : 'No' } : {}),
     }));
     downloadFile(toCSV(rows), `cobranza-cuadre-banco-${todayISO()}.csv`);
@@ -2036,6 +2053,24 @@ function CobranzaBankCuadrePanel({
             </div>
           )}
 
+          {hasCompensacion && (
+            <div className="text-[11px] text-[var(--gray-500)] flex items-start gap-1.5">
+              <Handshake className="w-3.5 h-3.5 shrink-0 mt-px text-[var(--accent-blue)]" />
+              <span>
+                <span className="font-medium text-[var(--gray-950)]">Compensación (esperado, no accionable):</span>{' '}
+                clientes con esquema de compensación — el cobro aplicado no entra (completo) como abono
+                bancario de cobranza y se excluye del % de descuadre.{' '}
+                {compensacionReglas.map((r, i) => (
+                  <span key={r.label}>
+                    {i > 0 && ' · '}
+                    <span className="font-medium">{r.label}</span>: {COMPENSATION_SCHEME_LABEL[r.scheme].toLowerCase()}
+                    {r.cuentaCompensacion ? ` (cuenta ${r.cuentaCompensacion})` : ''}
+                  </span>
+                ))}
+              </span>
+            </div>
+          )}
+
           {glTracked && (
             <div className="text-[11px] text-[var(--gray-500)] inline-flex items-center gap-1.5">
               <CheckCircle2 className="w-3.5 h-3.5 text-[var(--success)]" />
@@ -2053,7 +2088,8 @@ function CobranzaBankCuadrePanel({
                   <th className="py-1.5 px-2 font-medium text-right">Aplicado</th>
                   <th className="py-1.5 px-2 font-medium text-right">Cuadrado</th>
                   <th className="py-1.5 px-2 font-medium text-right">Descuadre imp.</th>
-                  <th className="py-1.5 pl-2 font-medium text-right">Sin banco</th>
+                  <th className={`py-1.5 ${hasCompensacion ? 'px-2' : 'pl-2'} font-medium text-right`}>Sin banco</th>
+                  {hasCompensacion && <th className="py-1.5 pl-2 font-medium text-right">Compensación</th>}
                 </tr>
               </thead>
               <tbody>
@@ -2066,7 +2102,12 @@ function CobranzaBankCuadrePanel({
                     <td className="py-1.5 px-2 text-right tabular-nums">{fmtCompact(c.totalEdwards)}</td>
                     <td className="py-1.5 px-2 text-right tabular-nums text-[var(--success)]">{c.cuadrado.importe > 0 ? fmtCompact(c.cuadrado.importe) : '—'}</td>
                     <td className="py-1.5 px-2 text-right tabular-nums text-[var(--warning)]">{c.descuadreImporte.importe > 0 ? fmtCompact(c.descuadreImporte.importe) : '—'}</td>
-                    <td className="py-1.5 pl-2 text-right tabular-nums text-[var(--danger)]">{c.sinBanco.importe > 0 ? fmtCompact(c.sinBanco.importe) : '—'}</td>
+                    <td className={`py-1.5 ${hasCompensacion ? 'px-2' : 'pl-2'} text-right tabular-nums text-[var(--danger)]`}>{c.sinBanco.importe > 0 ? fmtCompact(c.sinBanco.importe) : '—'}</td>
+                    {hasCompensacion && (
+                      <td className="py-1.5 pl-2 text-right tabular-nums text-[var(--accent-blue)]" title="Esperado por esquema de compensación — no es descuadre.">
+                        {c.compensacion.importe > 0 ? fmtCompact(c.compensacion.importe) : '—'}
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>

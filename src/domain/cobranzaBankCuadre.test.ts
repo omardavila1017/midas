@@ -212,6 +212,107 @@ describe('buildCobranzaBankCuadre — corroboración GL (auxiliar)', () => {
   });
 });
 
+describe('buildCobranzaBankCuadre — clientes con esquema de compensación', () => {
+  // Reglas inyectadas espejo del catálogo real (herméticas al seed de producción).
+  const RULES = [
+    {
+      scheme: 'aplica-a-proveedor' as const,
+      label: 'TLJ',
+      clientKeys: ['00123'],
+      namePatterns: [/\bTLJ\b/i],
+      cuentaCompensacion: '21.2010.0000123',
+    },
+    { scheme: 'descuento-en-origen' as const, label: 'APTIV', namePatterns: [/\bAPTIV?\b/i] },
+    { scheme: 'descuento-en-origen' as const, label: 'CMI', namePatterns: [/\bCMI\b/i] },
+  ];
+
+  it('TLJ (aplica-a-proveedor) sin depósito bancario → compensacion, NO sin-banco', () => {
+    const res = buildCobranzaBankCuadre([
+      pay({ idPago: 'P1', noCliente: '123', cliente: 'TLJ SA DE CV', status: 'UNMATCHED', importeRecibo: 1000 }),
+    ], { compensationRules: RULES });
+    expect(res.payments[0].status).toBe('compensacion');
+    expect(res.payments[0].compensacion).toEqual({
+      scheme: 'aplica-a-proveedor',
+      label: 'TLJ',
+      cuentaCompensacion: '21.2010.0000123',
+    });
+    expect(res.totals.sinBanco).toEqual({ count: 0, importe: 0 });
+    expect(res.totals.compensacion).toEqual({ count: 1, importe: 1000 });
+  });
+
+  it('TLJ empata por clave JDE aunque el nombre no traiga "TLJ" (tolerante a padding)', () => {
+    const res = buildCobranzaBankCuadre([
+      pay({ idPago: 'P1', noCliente: '123', cliente: 'TRANSPORTES LOGISTICOS X', status: 'UNMATCHED' }),
+    ], { compensationRules: RULES });
+    expect(res.payments[0].status).toBe('compensacion');
+  });
+
+  it('APTIV/CMI (descuento-en-origen): depósito neto menor que lo aplicado → compensacion (no descuadre-importe)', () => {
+    const res = buildCobranzaBankCuadre([
+      // El cliente descontó $200 en origen y depositó el neto.
+      pay({ idPago: 'P1', noCliente: 'A1', cliente: 'APTIV CONTRACT SERVICES NORESTE', status: 'CONFIRMED_REF', importeRecibo: 1000, bankMovement: bankMov(800) }),
+      pay({ idPago: 'P2', noCliente: 'C1', cliente: 'CMI FILTRATION MEXICO MANUFACTURA', status: 'UNMATCHED', importeRecibo: 500 }),
+    ], { compensationRules: RULES });
+    expect(res.payments.map(p => p.status)).toEqual(['compensacion', 'compensacion']);
+    // El depósito neto real SÍ cuenta como banco (existe el abono).
+    expect(res.payments[0].importeBanco).toBe(800);
+    expect(res.totals.descuadreImporte).toEqual({ count: 0, importe: 0 });
+    expect(res.totals.compensacion).toEqual({ count: 2, importe: 1500 });
+  });
+
+  it('descuento-en-origen con banco MAYOR que Edwards NO es compensación → sigue descuadre-importe', () => {
+    const res = buildCobranzaBankCuadre([
+      pay({ idPago: 'P1', cliente: 'APTIV CONTRACT SERVICES', status: 'CONFIRMED_REF', importeRecibo: 800, bankMovement: bankMov(1000) }),
+    ], { compensationRules: RULES });
+    expect(res.payments[0].status).toBe('descuadre-importe');
+  });
+
+  it('cliente de compensación cuyo depósito SÍ cuadra completo → cuadrado normal (caso Corning→Bajío no es excepción)', () => {
+    const res = buildCobranzaBankCuadre([
+      pay({ idPago: 'P1', cliente: 'APTIV CONTRACT SERVICES', status: 'CONFIRMED_REF', importeRecibo: 1000, bankMovement: bankMov(1000) }),
+    ], { compensationRules: RULES });
+    expect(res.payments[0].status).toBe('cuadrado');
+    expect(res.payments[0].compensacion).toBeUndefined();
+  });
+
+  it('cliente normal (fuera del catálogo) NO entra a la excepción → sin-banco', () => {
+    const res = buildCobranzaBankCuadre([
+      pay({ idPago: 'P1', cliente: 'CORNING OPTICAL COMMUNICATIONS', status: 'UNMATCHED', importeRecibo: 700 }),
+    ], { compensationRules: RULES });
+    expect(res.payments[0].status).toBe('sin-banco');
+    expect(res.payments[0].compensacion).toBeUndefined();
+    expect(res.totals.compensacion).toEqual({ count: 0, importe: 0 });
+  });
+
+  it('la compensación sale del % de descuadre: pctCuadradoImporte se calcula sobre la base bancarizable', () => {
+    const res = buildCobranzaBankCuadre([
+      pay({ idPago: 'P1', cliente: 'CLIENTE NORMAL', status: 'CONFIRMED_REF', importeRecibo: 800, bankMovement: bankMov(800) }),
+      pay({ idPago: 'P2', cliente: 'TLJ SA', status: 'UNMATCHED', importeRecibo: 200 }),
+    ], { compensationRules: RULES });
+    // Sin la excepción sería 80% (800/1000); con ella la base excluye los $200: 100%.
+    expect(res.totals.pctCuadradoImporte).toBeCloseTo(100, 5);
+  });
+
+  it('todo el importe es compensación → 100% (no hay descuadre accionable)', () => {
+    const res = buildCobranzaBankCuadre([
+      pay({ idPago: 'P1', cliente: 'TLJ SA', status: 'UNMATCHED', importeRecibo: 500 }),
+    ], { compensationRules: RULES });
+    expect(res.totals.pctCuadradoImporte).toBe(100);
+  });
+
+  it('la compensación no cuenta como descuadre en el orden por cliente', () => {
+    const res = buildCobranzaBankCuadre([
+      pay({ idPago: 'P1', noCliente: 'N1', cliente: 'CLIENTE NORMAL', status: 'UNMATCHED', importeRecibo: 100 }),
+      pay({ idPago: 'P2', noCliente: 'T1', cliente: 'TLJ SA', status: 'UNMATCHED', importeRecibo: 9000 }),
+    ], { compensationRules: RULES });
+    // TLJ tiene más importe pero es compensación (esperado) → el descuadre real va primero.
+    expect(res.byClient.map(c => c.noCliente)).toEqual(['N1', 'T1']);
+    const tlj = res.byClient.find(c => c.noCliente === 'T1')!;
+    expect(tlj.compensacion).toEqual({ count: 1, importe: 9000 });
+    expect(tlj.sinBanco).toEqual({ count: 0, importe: 0 });
+  });
+});
+
 describe('glConfirmedInvoiceKeysFromSourceConfirmation', () => {
   it('extrae sólo facturas de ingreso confirmadas', () => {
     const src = new Map([

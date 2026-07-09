@@ -1,5 +1,11 @@
 import type { PaymentReconciliation } from './realReconciliationEngine';
 import { normFactura } from './rolCobranzaMatch';
+import {
+  COMPENSATION_CLIENT_RULES,
+  resolveCompensationRule,
+  type CompensationClientRule,
+  type CompensationScheme,
+} from '../config/compensationClientsCatalog';
 
 /**
  * Cuadre de la cobranza APLICADA en Edwards contra el BANCO (y, opcionalmente,
@@ -18,6 +24,12 @@ import { normFactura } from './rolCobranzaMatch';
  *
  * Este helper traduce eso a la pregunta de negocio "¿el cobro aplicado sí entró
  * al banco?" con desglose por cliente e importe: cuadrado vs descuadre.
+ *
+ * Excepción de COMPENSACIONES (junta 2026-07-09): los clientes del catálogo
+ * `compensationClientsCatalog.ts` (TLJ, APTIV, CMI) liquidan por compensación y
+ * su faltante bancario es ESPERADO — se clasifican en el bucket `compensacion`
+ * (fuera del % de descuadre) en vez de `sin-banco`/`descuadre-importe`. Ver
+ * `docs/COMPENSACIONES-COBRANZA.md`.
  */
 
 /** Clasificación de cuadre de un recibo aplicado contra el banco. */
@@ -29,7 +41,23 @@ export type CuadreStatus =
   /** Aplicado en Edwards pero SIN depósito bancario (o cuenta sin estado de cuenta). */
   | 'sin-banco'
   /** Varios candidatos en banco — requiere revisión manual. */
-  | 'revisar';
+  | 'revisar'
+  /**
+   * Cliente con esquema de compensación (junta 2026-07-09): el cobro se liquida
+   * total o parcialmente por compensación y NO entra (completo) al banco como
+   * abono de cobranza. Esperado, no accionable — fuera del % de descuadre.
+   * Catálogo: `src/config/compensationClientsCatalog.ts`.
+   */
+  | 'compensacion';
+
+/** Detalle de la regla de compensación aplicada a un recibo. */
+export interface PaymentCompensacion {
+  scheme: CompensationScheme;
+  /** Nombre corto de la regla (p.ej. "TLJ"). */
+  label: string;
+  /** Cuenta de compensación asociada, cuando el catálogo la conoce. */
+  cuentaCompensacion?: string;
+}
 
 export interface PaymentCuadre {
   idPago: string;
@@ -49,6 +77,8 @@ export interface PaymentCuadre {
   status: CuadreStatus;
   /** Status crudo del motor (trazabilidad). */
   paymentStatus: PaymentReconciliation['status'];
+  /** Presente sólo cuando `status === 'compensacion'`. */
+  compensacion?: PaymentCompensacion;
   /**
    * Corroboración en Auxiliar Contable: `true` si TODAS las facturas del recibo
    * están confirmadas como cobradas en el libro mayor; `false` si el set de
@@ -74,6 +104,7 @@ export interface ClientCuadre {
   descuadreImporte: CuadreBucket;
   sinBanco: CuadreBucket;
   revisar: CuadreBucket;
+  compensacion: CuadreBucket;
   /** Suma de |diferencia| de los recibos con descuadre de importe. */
   diferenciaAbs: number;
 }
@@ -86,7 +117,14 @@ export interface CobranzaBankCuadreTotals {
   descuadreImporte: CuadreBucket;
   sinBanco: CuadreBucket;
   revisar: CuadreBucket;
-  /** % del importe aplicado que cuadró con banco (cuadrado / totalEdwards). */
+  /** Recibos de clientes con esquema de compensación (esperado, no accionable). */
+  compensacion: CuadreBucket;
+  /**
+   * % del importe aplicado que cuadró con banco. La base EXCLUYE el importe de
+   * compensación (no es bancarizable por diseño): `cuadrado / (totalEdwards −
+   * compensacion)`. Si toda la base es compensación no hay nada que cuadrar →
+   * 100 (no hay descuadre accionable).
+   */
   pctCuadradoImporte: number;
 }
 
@@ -105,6 +143,11 @@ export interface CobranzaBankCuadreOptions {
   glConfirmedInvoiceKeys?: ReadonlySet<string>;
   /** Restringe a estas cías (vacío/omitido = todas). */
   ciaFilter?: ReadonlySet<string>;
+  /**
+   * Reglas de clientes con esquema de compensación. Inyectable para tests;
+   * default: el catálogo declarativo `COMPENSATION_CLIENT_RULES`.
+   */
+  compensationRules?: readonly CompensationClientRule[];
 }
 
 /** Tolerancia para considerar que el recibo y el depósito bancario cuadran. */
@@ -120,6 +163,32 @@ function classify(p: PaymentReconciliation): CuadreStatus {
   if (p.status === 'UNMATCHED' || !p.bankMovement) return 'sin-banco';
   // CONFIRMED_REF / AUTO_UNIQUE con movimiento bancario asociado.
   return importesCuadran(p.importeRecibo, p.bankMovement.importe) ? 'cuadrado' : 'descuadre-importe';
+}
+
+/**
+ * Re-clasifica a `compensacion` los descuadres ESPERADOS de un cliente con
+ * esquema de compensación:
+ *  - `sin-banco` → compensación en ambos esquemas (el cobro no entra al banco:
+ *    aplica-a-proveedor liquida contra deuda; descuento-en-origen puede
+ *    compensar el 100%).
+ *  - `descuadre-importe` con Edwards > banco → compensación SÓLO en
+ *    descuento-en-origen (el cliente depositó el neto; el faltante es el
+ *    descuento). Banco > Edwards NO es explicable por compensación y se queda
+ *    como descuadre real.
+ * `cuadrado` y `revisar` nunca se tocan: si el depósito sí apareció completo
+ * (p.ej. Corning pagando a Bajío) el cuadre normal manda.
+ */
+function applyCompensacion(
+  base: CuadreStatus,
+  rule: CompensationClientRule,
+  importeEdwards: number,
+  importeBanco: number,
+): CuadreStatus {
+  if (base === 'sin-banco') return 'compensacion';
+  if (base === 'descuadre-importe' && rule.scheme === 'descuento-en-origen' && importeEdwards > importeBanco) {
+    return 'compensacion';
+  }
+  return base;
 }
 
 /**
@@ -156,12 +225,14 @@ function bucketForStatus(agg: {
   descuadreImporte: CuadreBucket;
   sinBanco: CuadreBucket;
   revisar: CuadreBucket;
+  compensacion: CuadreBucket;
 }, status: CuadreStatus): CuadreBucket {
   switch (status) {
     case 'cuadrado': return agg.cuadrado;
     case 'descuadre-importe': return agg.descuadreImporte;
     case 'sin-banco': return agg.sinBanco;
     case 'revisar': return agg.revisar;
+    case 'compensacion': return agg.compensacion;
   }
 }
 
@@ -173,7 +244,7 @@ export function buildCobranzaBankCuadre(
   paymentReconciliations: readonly PaymentReconciliation[],
   options: CobranzaBankCuadreOptions = {},
 ): CobranzaBankCuadreResult {
-  const { glConfirmedInvoiceKeys, ciaFilter } = options;
+  const { glConfirmedInvoiceKeys, ciaFilter, compensationRules = COMPENSATION_CLIENT_RULES } = options;
   const useCiaFilter = ciaFilter && ciaFilter.size > 0;
 
   const payments: PaymentCuadre[] = [];
@@ -186,19 +257,24 @@ export function buildCobranzaBankCuadre(
     descuadreImporte: emptyBucket(),
     sinBanco: emptyBucket(),
     revisar: emptyBucket(),
+    compensacion: emptyBucket(),
     pctCuadradoImporte: 0,
   };
 
   for (const p of paymentReconciliations) {
     if (useCiaFilter && !ciaFilter!.has(p.cia)) continue;
-    const status = classify(p);
+    const baseStatus = classify(p);
     const importeEdwards = p.importeRecibo;
     // AMBIGUOUS: el motor cuelga el MISMO abono candidato en cada recibo del
     // grupo (markPaymentAmbiguous) — sumarlo por recibo multi-contaba un solo
     // depósito en `totalBanco` y presentaba el candidato sin confirmar como
     // cruzado en el CSV. Un candidato no es un cruce: banco = 0, como sin-banco
     // (consistente con el contrato "0 si no cruzó" de `importeBanco`).
-    const importeBanco = status === 'revisar' ? 0 : (p.bankMovement?.importe ?? 0);
+    const importeBanco = baseStatus === 'revisar' ? 0 : (p.bankMovement?.importe ?? 0);
+    const compRule = resolveCompensationRule(p.noCliente, p.cliente, compensationRules);
+    const status = compRule
+      ? applyCompensacion(baseStatus, compRule, importeEdwards, importeBanco)
+      : baseStatus;
     const cuadre: PaymentCuadre = {
       idPago: p.idPago,
       cia: p.cia,
@@ -213,6 +289,9 @@ export function buildCobranzaBankCuadre(
       diferencia: importeEdwards - importeBanco,
       status,
       paymentStatus: p.status,
+      compensacion: status === 'compensacion' && compRule
+        ? { scheme: compRule.scheme, label: compRule.label, cuentaCompensacion: compRule.cuentaCompensacion }
+        : undefined,
       glConfirmado: glConfirmedFor(p, glConfirmedInvoiceKeys),
     };
     payments.push(cuadre);
@@ -239,6 +318,7 @@ export function buildCobranzaBankCuadre(
         descuadreImporte: emptyBucket(),
         sinBanco: emptyBucket(),
         revisar: emptyBucket(),
+        compensacion: emptyBucket(),
         diferenciaAbs: 0,
       };
       clientMap.set(clientKey, entry);
@@ -250,9 +330,12 @@ export function buildCobranzaBankCuadre(
     if (status === 'descuadre-importe') entry.diferenciaAbs += Math.abs(cuadre.diferencia);
   }
 
-  totals.pctCuadradoImporte = totals.totalEdwards > 0
-    ? (totals.cuadrado.importe / totals.totalEdwards) * 100
-    : 0;
+  // La base del % excluye la compensación (esperada, no bancarizable): un
+  // cliente TLJ/APTIV/CMI no debe hundir el indicador de descuadre.
+  const baseBancarizable = totals.totalEdwards - totals.compensacion.importe;
+  totals.pctCuadradoImporte = baseBancarizable > 0
+    ? (totals.cuadrado.importe / baseBancarizable) * 100
+    : totals.totalEdwards > 0 ? 100 : 0;
 
   // Orden: más descuadre primero (sin-banco + descuadre-importe por importe),
   // para que lo accionable quede arriba.
