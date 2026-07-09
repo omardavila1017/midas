@@ -8,11 +8,12 @@
  * (~último año), así que años anteriores pueden salir vacíos.
  */
 
-import { useMemo, useState } from 'react';
-import { ChevronLeft, ChevronRight, ShoppingCart, FileText, Clock, Info, Download, Building2 } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { ChevronLeft, ChevronRight, ShoppingCart, FileText, Clock, Info, Download, Building2, Loader2 } from 'lucide-react';
 import PageHeader from '../../../components/ui/PageHeader';
 import { fmtCurrency, fmtCompact, fmtKpi, todayISO } from '../../../formatters';
 import { MONTHS } from '../../../types';
+import { useDataWindow } from '../../../contexts/DataWindowContext';
 import type { CobranzaRecord, RolRecord, ViajeEspecialRecord, Company } from '../../../services/jde';
 import {
   aggregateByCompany,
@@ -34,6 +35,9 @@ const WEEKDAYS = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
 const FACTURADO_COLOR = 'var(--success)';
 const POR_FACTURAR_COLOR = '#d97706';
 const ALL_COMPANIES = '__all__';
+// Datasets que Venta necesita para pintar un año (viajes especiales viajan con
+// el slot 'rol' en el backfill).
+const VENTA_DATASETS = ['cobranza', 'rol'];
 
 function isoKey(year: number, month: number, day: number): string {
   return `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
@@ -119,6 +123,15 @@ export default function SalesCalendarDashboard({
   const [year, setYear] = useState(currentYear);
   const [month, setMonth] = useState(Number(today.slice(5, 7)) - 1);
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
+
+  // Carga diferida: al consultar un año previo al piso por defecto, pide la
+  // cobranza/ROL/viajes de ese año bajo demanda (ver DataWindowContext). Venta
+  // agrega sobre los records en memoria, así que basta con que lleguen por props.
+  const { ensureYearLoaded, isLoadingHistorical } = useDataWindow();
+  useEffect(() => {
+    ensureYearLoaded(year, VENTA_DATASETS);
+  }, [year, ensureYearLoaded]);
+  const loadingHistorical = isLoadingHistorical(VENTA_DATASETS);
 
   // Totales del año seleccionado.
   const yearTotals = useMemo(() => {
@@ -231,6 +244,17 @@ export default function SalesCalendarDashboard({
               <Download className="h-4 w-4" strokeWidth={1.75} aria-hidden />
               Exportar
             </button>
+            {loadingHistorical && (
+              <span
+                className="inline-flex items-center gap-1.5 rounded-[var(--radius-md)] px-2.5 py-1 text-[12px] font-medium"
+                style={{ background: 'var(--primary-muted)', color: 'var(--primary)' }}
+                role="status"
+                aria-live="polite"
+              >
+                <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={2} aria-hidden />
+                Cargando {year}…
+              </span>
+            )}
             <div
               className="inline-flex items-center gap-1 rounded-[var(--radius-md)] p-0.5"
               style={{ background: 'var(--gray-100)', border: '1px solid var(--gray-200)' }}

@@ -32,7 +32,8 @@ import type { BankAccountStatement, CobranzaPayment, CobranzaRecord } from '../s
 import type { RolRecord } from '../services/jdeTypes';
 import RolCobranzaPanel from './RolCobranzaPanel';
 import { MONTHS } from '../types';
-import { Search, Settings2, ChevronDown, ChevronLeft, ChevronRight, Check, Download, Landmark, ArrowRightLeft, CheckCircle2, AlertTriangle, HelpCircle, Banknote, CalendarRange, Inbox, SlidersHorizontal, Database } from 'lucide-react';
+import { Search, Settings2, ChevronDown, ChevronLeft, ChevronRight, Check, Download, Landmark, ArrowRightLeft, CheckCircle2, AlertTriangle, HelpCircle, Banknote, CalendarRange, Inbox, SlidersHorizontal, Database, Loader2 } from 'lucide-react';
+import { useDataWindow } from '../contexts/DataWindowContext';
 import { toCSV, downloadFile, csvDate } from '../utils/export';
 import { hex } from '../theme';
 import { fmtCurrency, fmtCompact, todayISO } from '../formatters';
@@ -1400,6 +1401,8 @@ function collectionEventMatchesCia(event: CollectionCalendarEvent, ciaFilter: Se
 // El input ya viene normalizado por `collectionCalendarEngine`; esta vista
 // solo filtra, pinta barras por fuente y expone el drill-down operativo.
 // ─────────────────────────────────────────────────────────────────────────
+// Datasets que el calendario de Cobranza necesita para pintar un año previo.
+const COBRANZA_CALENDAR_DATASETS = ['cobranza', 'rol', 'banks'];
 function CobranzaRealCalendar({
   calendar,
   ciaFilter,
@@ -1416,6 +1419,14 @@ function CobranzaRealCalendar({
   const [year, setYear] = useState(() => new Date().getFullYear());
   const [month, setMonth] = useState(() => new Date().getMonth());
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
+
+  // Carga diferida: al navegar a un año previo al piso por defecto, pide la
+  // cobranza/ROL/bancos de ese año bajo demanda (ver DataWindowContext).
+  const { ensureYearLoaded, isLoadingHistorical } = useDataWindow();
+  useEffect(() => {
+    ensureYearLoaded(year, COBRANZA_CALENDAR_DATASETS);
+  }, [year, ensureYearLoaded]);
+  const loadingHistorical = isLoadingHistorical(COBRANZA_CALENDAR_DATASETS);
 
   const monthEvents = useMemo(() => {
     const prefix = `${year}-${String(month + 1).padStart(2, '0')}`;
@@ -1533,6 +1544,12 @@ function CobranzaRealCalendar({
           <h2 key={`${year}-${month}`} className="text-lg font-bold text-white flex items-center gap-2 capitalize animate-slide-down">
             <CalendarRange className="w-4 h-4 text-white/60" />
             <span>{monthLabel}</span>
+            {loadingHistorical && (
+              <span className="inline-flex items-center gap-1 text-[11px] font-medium text-white/70" role="status" aria-live="polite">
+                <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden />
+                Cargando {year}…
+              </span>
+            )}
           </h2>
           <button
             onClick={nextMonth}

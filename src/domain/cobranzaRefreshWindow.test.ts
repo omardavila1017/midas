@@ -87,6 +87,15 @@ describe('planCobranzaRefresh', () => {
     expect(plans.find(p => p.cia === '00011')?.mode).toBe('full');
   });
 
+  it('fullFrom explícito gana sobre lookbackDays (ventana uniforme de datos)', () => {
+    // AppCore pasa el piso de `defaultWindowFloor` (2025-07-01) para que el
+    // `full` de Cobranza baje 13 meses, no 24. La historia previa a ese piso
+    // se carga bajo demanda.
+    const plans = planCobranzaRefresh(baseInput({ force: true, fullFrom: '2025-07-01' }));
+    expect(plans.every(p => p.mode === 'full')).toBe(true);
+    expect(plans[0]).toEqual({ cia: '00001', mode: 'full', from: '2025-07-01', to: TODAY });
+  });
+
   it('constantes por defecto documentadas', () => {
     expect(COBRANZA_LOOKBACK_DAYS).toBe(730);
     expect(COBRANZA_REVALIDATE_DAYS).toBe(45);

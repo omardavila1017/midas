@@ -78,6 +78,14 @@ export interface PlanCobranzaRefreshInput {
   ttlMs?: number;
   lookbackDays?: number;
   revalidateDays?: number;
+  /**
+   * Piso ISO (`YYYY-MM-DD`) explícito para el modo `full`. Si se provee, gana
+   * sobre `lookbackDays` — lo usa AppCore para alinear el `full` de Cobranza a
+   * la ventana por defecto uniforme (`defaultWindowFloor`) en vez de un
+   * lookback fijo de 24 meses. La historia anterior a este piso se carga bajo
+   * demanda (ver DataWindowContext).
+   */
+  fullFrom?: string;
 }
 
 /**
@@ -107,7 +115,7 @@ export function planCobranzaRefresh(input: PlanCobranzaRefreshInput): CobranzaCi
   const lookbackDays = input.lookbackDays ?? COBRANZA_LOOKBACK_DAYS;
   const revalidateDays = input.revalidateDays ?? COBRANZA_REVALIDATE_DAYS;
   const to = isoDayFromMs(input.nowMs);
-  const fullFrom = isoDaysBefore(to, lookbackDays);
+  const fullFrom = input.fullFrom ?? isoDaysBefore(to, lookbackDays);
   const revalidateFrom = isoDaysBefore(to, revalidateDays);
 
   return input.activeCias.map((cia): CobranzaCiaRefreshPlan => {

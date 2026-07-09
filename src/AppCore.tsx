@@ -161,6 +161,13 @@ import {
   COBRANZA_REVALIDATE_DAYS,
 } from './domain/cobranzaRefreshWindow';
 import { glConfirmedInvoiceKeysFromSourceConfirmation } from './domain/cobranzaBankCuadre';
+import {
+  defaultWindowFloor,
+  defaultWindowMonths,
+  previousIsoDay,
+  yearStartISO,
+} from './domain/dataWindow';
+import { DataWindowProvider, type DataWindowValue } from './contexts/DataWindowContext';
 import { useToast } from './components/Toast';
 import { useAuth } from './contexts/AuthContext';
 import {
@@ -309,18 +316,14 @@ const SNAPSHOT_COVERED_SLOTS = new Set<string>([
 const COBRANZA_AUTO_REFRESH_TTL_MS = 6 * 60 * 60 * 1000;
 const CXP_AUTO_REFRESH_TTL_MS = 6 * 60 * 60 * 1000;
 const COMPRAS_AUTO_REFRESH_TTL_MS = 6 * 60 * 60 * 1000;
-// Boot auto-fetch lookback para Compras/Pagos. NO alimenta Holt-Winters (ese
-// entrena con cobranza/nómina; compras sólo aporta un overlay de OCs futuras).
-// Antes era 180d: suficiente para proyección (sólo OCs cuya fecha de pago
-// sigue abierta, y el crédito MX ≤ 6m). Pero la auditoría Pago↔CXP↔OC en
-// Pagos necesita OCs históricas — un pago de Mar-2026 puede cubrir CXPs
-// emitidas en Oct/Nov-2025, y sus OCs caen fuera de 180d. 365d cubre el año
-// fiscal completo de compras sin explotar el cold-boot (~2x vs 180; el cache
-// IDB diario absorbe el delta). Lo vencido-no-pagado lo cubren CXP +
-// conciliación pagoProveedor, no 2 años de compras. El filtro
-// `selectComprasForProjection` (drop fechaPago < hoy) sigue recortando para
-// proyección. Futuro: +3 meses vía COMPRAS_FUTURE_LOOKAHEAD_MONTHS.
-const COMPRAS_LOOKBACK_DAYS = 365;
+// Boot auto-fetch de Compras/Pagos. El piso base es `defaultWindowFloor` (año
+// en curso + 12 meses atrás, uniforme con el resto de datasets) — cubre el año
+// fiscal de compras que la auditoría Pago↔CXP↔OC necesita (un pago de Mar-2026
+// puede cubrir CXPs emitidas en Oct/Nov-2025). OCs previas se cargan bajo
+// demanda (DataWindowContext). El filtro `selectComprasForProjection` (drop
+// fechaPago < hoy) sigue recortando para proyección. Las OCs aún ABIERTAS más
+// viejas que el piso se re-piden aparte vía COMPRAS_MAX_REVALIDATE_LOOKBACK_DAYS
+// (siguen siendo pasivos vivos). Futuro: +3 meses vía COMPRAS_FUTURE_LOOKAHEAD_MONTHS.
 const COMPRAS_FUTURE_LOOKAHEAD_MONTHS = 3;
 const COMPRAS_CACHE_KEY = '__all__';
 // Frescura de datos (Etapa 1). El cache mensual sirve meses pasados sin red,
@@ -808,10 +811,10 @@ export default function App() {
   const [cobranzaPaymentsLoadedCias, setCobranzaPaymentsLoadedCias] = useState<Record<string, string>>({});
   // Compras (Órdenes de Compra) — endpoint /JDEdwards/compras,
   // liberado a producción 2026-05-08. Restricción del API: 30 días por
-  // request → fetchComprasRange parte el rango en chunks. Cargamos
-  // COMPRAS_LOOKBACK_DAYS (180) hacia atrás — cota por el crédito máximo de
-  // proveedor para no perder OCs aún abiertas, ver su definición — y 3 meses
-  // hacia adelante para ver OCs futuras ya capturadas en JDE.
+  // request → fetchComprasRange parte el rango en chunks. Cargamos desde el
+  // piso `defaultWindowFloor` (año en curso + 12 meses atrás) — cubre las OCs
+  // aún abiertas dentro del crédito máximo de proveedor — y 3 meses hacia
+  // adelante para ver OCs futuras ya capturadas en JDE.
   const [comprasRecords, setComprasRecords] = useState<ComprasRecord[]>([]);
   const [comprasLoadedCias, setComprasLoadedCias] = useState<Record<string, string>>({});
   // PagoProveedor — endpoint /JDEdwards/pagoproveedor, liberado a
@@ -1028,6 +1031,39 @@ export default function App() {
   // refetchear: si corren antes, ven los records en 0 y disparan un fetch JDE
   // completo aunque IDB tuviera la cache. Ver hydrateDataset() + boot effects.
   const [idbHydratedDatasets, setIdbHydratedDatasets] = useState<Set<DatasetKey>>(() => new Set());
+
+  // ── Carga diferida de años históricos (DataWindowContext) ──────────────
+  // El boot baja SÓLO la ventana por defecto (`defaultWindowFloor`: año en
+  // curso + 12 meses atrás). Cuando una vista con navegación por año consulta
+  // un año MÁS ANTIGUO que ese piso, llama `ensureYearLoaded(year, datasets)`;
+  // el controlador de backfill (abajo) fetchea ese rango, lo mergea al
+  // heavy-store y re-renderiza. Es session-scoped: bajo el default
+  // `clear-on-entry` cada ingreso re-baja la ventana por defecto de todas
+  // formas, así que no persistimos el piso solicitado.
+  const dataWindowDefaultFloor = useMemo(() => defaultWindowFloor(), []);
+  const [historicalFloorByDataset, setHistoricalFloorByDataset] = useState<Record<string, string>>({});
+  const [historicalLoadingByDataset, setHistoricalLoadingByDataset] = useState<Record<string, boolean>>({});
+  const [backfillTick, setBackfillTick] = useState(0);
+  const ensureYearLoaded = useCallback((year: number, datasets: string[]) => {
+    const target = yearStartISO(year);
+    // El año ya cae dentro de la ventana por defecto → nada que bajar.
+    if (target >= dataWindowDefaultFloor) return;
+    const allowed = allowedDatasetsRef.current;
+    setHistoricalFloorByDataset(prev => {
+      let changed = false;
+      const next = { ...prev };
+      for (const ds of datasets) {
+        if (!allowed.has(ds as DatasetKey)) continue; // no bajes lo que el usuario no ve
+        const current = next[ds] ?? dataWindowDefaultFloor;
+        if (target < current) { next[ds] = target; changed = true; }
+      }
+      return changed ? next : prev;
+    });
+  }, [dataWindowDefaultFloor]);
+  const isLoadingHistorical = useCallback(
+    (datasets: string[]) => datasets.some(ds => historicalLoadingByDataset[ds]),
+    [historicalLoadingByDataset],
+  );
   // Timestamp del light store cargado desde localStorage. Sirve para reparar
   // mapas de TTL faltantes cuando el heavy sí existe en IDB pero el light quedó
   // incompleto/stale por un cierre durante boot. No actualiza timestamps viejos:
@@ -2918,9 +2954,11 @@ export default function App() {
     // OCs futuras no emitidas: el egreso de compras es solo OC real
     // (F_Recepcion + D_Credito) + CXP abierto.
     const fechaFinal = today.toISOString().slice(0, 10);
-    const lookback = new Date(today);
-    lookback.setUTCDate(lookback.getUTCDate() - COMPRAS_LOOKBACK_DAYS);
-    const lookbackStart = lookback.toISOString().slice(0, 10);
+    // Ventana por defecto uniforme (año en curso + 12 meses atrás). Cubre el
+    // año fiscal de compras que la auditoría Pago↔CXP↔OC necesita; OCs previas
+    // se cargan bajo demanda (DataWindowContext). El piso de OCs aún ABIERTAS
+    // se extiende aparte vía COMPRAS_MAX_REVALIDATE_LOOKBACK_DAYS (siguen vivas).
+    const lookbackStart = defaultWindowFloor(today);
     (async () => {
       try {
         // El cache mensual (M:compras.{cia}.{YYYY-MM}) hace el delta-sync
@@ -3063,9 +3101,10 @@ export default function App() {
     // completa". Floor = inicio del año en curso (KPIs YTD del dashboard).
     //
     // Detección de agujero: cualquier cía con `maxDate < today` necesita
-    // delta-sync (días recientes); cualquier cía con `minDate > yearStart`
-    // necesita backfill (días viejos del YTD). Ambos → refetch.
-    const expectedFloorDate = `${new Date().getUTCFullYear()}-01-01`;
+    // delta-sync (días recientes); cualquier cía con `minDate > floor`
+    // necesita backfill (días viejos de la ventana). Ambos → refetch.
+    // Floor = ventana por defecto uniforme (año en curso + 12 meses atrás).
+    const expectedFloorDate = defaultWindowFloor();
     const expectedTopDate = new Date().toISOString().slice(0, 10);
     const minDateByCia = new Map<string, string>();
     const maxDateByCia = new Map<string, string>();
@@ -3101,14 +3140,12 @@ export default function App() {
     setDatasetSlot('auxiliar', 'loading');
     const today = new Date();
     const fechaFinal = today.toISOString().slice(0, 10);
-    // Piso duro: 2025-01-01. Descarta 2024 completo (decisión 2026-05-25 —
-    // libros 2024 ya no se cruzan contra bancos vivos y bloated el heavy
-    // store). El backfill arranca el 1° de enero 2025.
-    const AUX_HARD_FLOOR = '2025-01-01';
-    const twoYearsAgo = new Date(today);
-    twoYearsAgo.setUTCDate(twoYearsAgo.getUTCDate() - 730);
-    const candidate = twoYearsAgo.toISOString().slice(0, 10);
-    const lookbackStart = candidate < AUX_HARD_FLOOR ? AUX_HARD_FLOOR : candidate;
+    // Piso = ventana por defecto uniforme (`defaultWindowFloor`: año en curso +
+    // 12 meses atrás). Antes bajaba hasta 2 años con piso duro 2025-01-01;
+    // ahora arranca en el piso compartido y los libros previos se cargan bajo
+    // demanda (DataWindowContext). El clamp `bootClampStart` (abajo) usa el
+    // mismo piso, así que la ventana efectiva por cía es [piso, hoy].
+    const lookbackStart = defaultWindowFloor(today);
     (async () => {
       try {
         await primeDailyCache();
@@ -3128,11 +3165,11 @@ export default function App() {
           const prev = maxStateByCia.get(r.cia);
           if (!prev || r.fechaContable > prev) maxStateByCia.set(r.cia, r.fechaContable);
         }
-        // Boot clamp: lookback dinámico hasta inicio del año en curso (YTD).
-        // Antes era fijo 7 días → la conciliación cruzaba 96% sobre 8 días vs
-        // YTD banco 5 meses ⇒ solo 6% de los ingresos YTD aparecían cruzados.
-        // Ahora pedimos aux desde `${year}-01-01` para que el cruce represente
-        // el año completo.
+        // Boot clamp: lookback dinámico hasta el piso de la ventana por defecto
+        // (`defaultWindowFloor`: año en curso + 12 meses atrás). Antes era fijo
+        // 7 días → la conciliación cruzaba 96% sobre 8 días vs YTD banco 5 meses
+        // ⇒ solo 6% de los ingresos YTD aparecían cruzados. Libros previos al
+        // piso se cargan bajo demanda (DataWindowContext).
         //
         // Riesgo mitigado: el chunked-daily-cache filtra días ya hidratados
         // (IDB `auxiliarcontable.{cia}.{YYYY-MM-DD}`), así que un boot warm
@@ -3140,7 +3177,7 @@ export default function App() {
         // cierre-de-mes pesados. NO gatea el splash — el splash gatea por
         // `done|error` no por tiempo, y la pestaña Conciliación tolera
         // resultados vacíos hasta que llegue.
-        const bootClampStart = `${today.getUTCFullYear()}-01-01`;
+        const bootClampStart = defaultWindowFloor(today);
         // Revalidación de días PARCIALES del auxiliar: pólizas se postean con
         // atraso, así que re-pedimos los días recientes aunque estén cacheados
         // (main no revalidaba el cache chunked). Floor del rango a la ventana +
@@ -3477,9 +3514,9 @@ export default function App() {
     setDatasetSlot('pagos', 'loading');
     const today = new Date();
     const fechaFinal = today.toISOString().slice(0, 10);
-    const lookback = new Date(today);
-    lookback.setUTCDate(lookback.getUTCDate() - COMPRAS_LOOKBACK_DAYS);
-    const lookbackStart = lookback.toISOString().slice(0, 10);
+    // Ventana por defecto uniforme (año en curso + 12 meses atrás); pagos
+    // previos se cargan bajo demanda (DataWindowContext).
+    const lookbackStart = defaultWindowFloor(today);
     (async () => {
       try {
         // Delta sync — mismo patrón que Compras. Ver comentario allá.
@@ -3582,6 +3619,10 @@ export default function App() {
         ttlMs: COBRANZA_AUTO_REFRESH_TTL_MS,
         lookbackDays: COBRANZA_LOOKBACK_DAYS,
         revalidateDays: COBRANZA_REVALIDATE_DAYS,
+        // Ventana por defecto uniforme: año en curso + 12 meses atrás. La
+        // historia previa a este piso se carga bajo demanda al consultar años
+        // previos (DataWindowContext). Antes el `full` bajaba 24 meses fijos.
+        fullFrom: defaultWindowFloor(),
       });
       const fullCiasCount = plans.filter(p => p.mode === 'full').length;
       // eslint-disable-next-line no-console
@@ -3772,7 +3813,12 @@ export default function App() {
     async (force = true, progressSlot?: 'rol') => {
       const today = new Date();
       const year = today.getUTCFullYear();
-      const yearStart = `${year}-01-01`;
+      // Ventana por defecto uniforme (año en curso + 12 meses atrás). Antes
+      // ROL sólo bajaba el año en curso (`${year}-01-01`); ahora arranca en el
+      // piso compartido para que Venta/Cobranza tengan 12 meses atrás por
+      // defecto. Años previos → carga diferida (DataWindowContext). ROL corre
+      // detrás del splash (Fase 0), así que el rango extra no retrasa el boot.
+      const yearStart = defaultWindowFloor(today);
       const fechaFinal = today.toISOString().slice(0, 10);
       const cacheKey = `${year}:full`;
       // Refresh si force=true, si no hay cache aún, o si el timestamp es viejo.
@@ -3922,7 +3968,9 @@ export default function App() {
     async (force = true) => {
       const today = new Date();
       const year = today.getUTCFullYear();
-      const yearStart = `${year}-01-01`;
+      // Ventana por defecto uniforme (año en curso + 12 meses atrás); años
+      // previos se cargan bajo demanda (DataWindowContext).
+      const yearStart = defaultWindowFloor(today);
       const fechaFinal = today.toISOString().slice(0, 10);
       const cacheKey = `${year}:full`;
       const lastFetch = viajesEspecialesLoadedKeys[cacheKey];
@@ -4298,11 +4346,14 @@ export default function App() {
         setBootSlot('nomina', 'done');
         setDatasetSlot('nomina', 'ready');
 
-        // BACKGROUND: meses 5..23 atrás para alimentar el predictor estacional
-        // y avg 3m de meses cerrados. Solo los que no estén cacheados ni
-        // fueron parte del fast path. Chunks pequeños para no saturar JDE.
+        // BACKGROUND: meses previos hasta el piso de la ventana por defecto
+        // (`defaultWindowMonths`: año en curso + 12 meses atrás = 13 meses).
+        // Antes bajaba 24 meses para el predictor estacional; ahora es uniforme
+        // con el resto de datasets y la historia previa se carga bajo demanda
+        // (el predictor estacional degrada a lineal hasta entonces). Solo los
+        // que no estén cacheados ni fueron parte del fast path.
         const recentKeysSet = new Set(recent.map(r => r.cacheKey));
-        const historical = plan(24).filter(p => {
+        const historical = plan(defaultWindowMonths(today)).filter(p => {
           if (recentKeysSet.has(p.cacheKey)) return false;
           return !shouldSkip(p);
         });
@@ -4353,6 +4404,288 @@ export default function App() {
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [requestedDatasets, storeHydrated, nominaHeavyHydrated, companies.length, setDatasetSlot]);
+
+  // ── Backfill de historia bajo demanda (DataWindowContext) ──────────────
+  // Fetch de un rango [from, to] ESTRICTAMENTE anterior a la ventana ya
+  // cargada, con la misma lógica de merge (upsert/append, nunca encoge) de los
+  // boot effects. Persiste a IDB para sobrevivir reload en configs con cache
+  // persistente. Disparado por `ensureYearLoaded` cuando una vista consulta un
+  // año previo al piso por defecto. El rango es DISJUNTO (más viejo) de lo ya
+  // cargado, así que Cobranza hace APPEND sin re-key por folio (no colapsa
+  // facturas multi-línea); el resto hace upsert por su llave única.
+  const backfilledFloorRef = useRef<Record<string, string>>({});
+  const backfillInFlightRef = useRef<Set<string>>(new Set());
+
+  const backfillCobranza = useCallback(async (from: string, to: string) => {
+    const activeCias = filterActiveCompanies(companies).map(c => c.cia);
+    if (activeCias.length === 0) return;
+    const olderRecords: CobranzaRecord[] = [];
+    const olderPayments: CobranzaPayment[] = [];
+    let cursor = 0;
+    const concurrency = Math.min(10, activeCias.length);
+    const worker = async () => {
+      while (true) {
+        const idx = cursor++;
+        if (idx >= activeCias.length) return;
+        const cia = activeCias[idx];
+        const [recordsResult, paymentsResult] = await Promise.allSettled([
+          fetchCobranzaRange(cia, from, to, { concurrency: 10 }),
+          fetchIndicadoresCobranzaRange(cia, from, to, { concurrency: 10 }),
+        ]);
+        if (recordsResult.status === 'fulfilled') {
+          for (const r of recordsResult.value) olderRecords.push({ ...r, cia: r.cia || cia });
+        }
+        if (paymentsResult.status === 'fulfilled') {
+          for (const p of paymentsResult.value) olderPayments.push(p);
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: concurrency }, worker));
+    if (olderRecords.length > 0) {
+      setCobranzaRecords(prev => {
+        const merged = [...prev, ...olderRecords]; // ventana disjunta → append
+        void saveHeavyRecords('cobranzaRecords', merged);
+        return merged;
+      });
+    }
+    if (olderPayments.length > 0) {
+      setCobranzaPayments(prev => {
+        const map = new Map<string, CobranzaPayment>();
+        for (const p of prev) map.set(p.idPago, p);
+        for (const p of olderPayments) map.set(p.idPago, p);
+        const merged = Array.from(map.values());
+        void saveHeavyRecords('cobranzaPayments', merged);
+        return merged;
+      });
+    }
+  }, [companies]);
+
+  const backfillRol = useCallback(async (from: string, to: string) => {
+    const rolKey = (r: RolRecord) =>
+      `${r.cia}::${r.kCliente}::${r.anio}::${r.semana}::${r.ruta}::${r.tipoViaje}`;
+    const [rolResult, viajesResult] = await Promise.allSettled([
+      fetchRolRange(from, to, {}),
+      fetchViajesEspecialesRange(from, to, {}),
+    ]);
+    if (rolResult.status === 'fulfilled' && rolResult.value.length > 0) {
+      setRolRecords(prev => {
+        const map = new Map<string, RolRecord>();
+        for (const r of prev) map.set(rolKey(r), r);
+        for (const r of rolResult.value) map.set(rolKey(r), r);
+        const merged = Array.from(map.values());
+        void saveHeavyRecords('rolRecords', merged);
+        return merged;
+      });
+    }
+    if (viajesResult.status === 'fulfilled' && viajesResult.value.length > 0) {
+      setViajesEspecialesRecords(prev => {
+        const map = new Map<number, ViajeEspecialRecord>();
+        for (const v of prev) map.set(v.kRenta, v);
+        for (const v of viajesResult.value) map.set(v.kRenta, v);
+        const merged = Array.from(map.values());
+        void saveHeavyRecords('viajesEspecialesRecords', merged);
+        return merged;
+      });
+    }
+  }, []);
+
+  const backfillCompras = useCallback(async (from: string, to: string) => {
+    const activeCias = filterActiveCompanies(companies).map(c => c.cia);
+    if (activeCias.length === 0) return;
+    await primeDailyCache();
+    const fetchedAll: ComprasRecord[] = [];
+    let cursor = 0;
+    const concurrency = Math.min(10, activeCias.length);
+    const worker = async () => {
+      while (true) {
+        const idx = cursor++;
+        if (idx >= activeCias.length) return;
+        const cia = activeCias[idx];
+        try {
+          const fetched = await fetchComprasRange(cia, from, to, { concurrency: 4 });
+          for (const r of fetched) fetchedAll.push(r);
+        } catch { /* best-effort; el resto de cías sigue */ }
+      }
+    };
+    await Promise.all(Array.from({ length: concurrency }, worker));
+    if (fetchedAll.length > 0) {
+      setComprasRecords(prev => {
+        const map = new Map<string, ComprasRecord>();
+        for (const r of prev) map.set(`${r.cia}::${r.noOrden}::${r.lineaOrden}`, r);
+        for (const r of fetchedAll) map.set(`${r.cia}::${r.noOrden}::${r.lineaOrden}`, r);
+        const merged = Array.from(map.values());
+        void saveHeavyRecords('comprasRecords', merged);
+        return merged;
+      });
+    }
+  }, [companies]);
+
+  const backfillPagos = useCallback(async (from: string, to: string) => {
+    await primeDailyCache();
+    const fetched = await fetchPagoProveedorRange(from, to, { concurrency: 10 });
+    if (fetched.length > 0) {
+      setPagoProveedorRecords(prev => {
+        const map = new Map<string, PagoProveedorRecord>();
+        for (const r of prev) map.set(`${r.cia}::${r.noPago}`, r);
+        for (const r of fetched) map.set(`${r.cia}::${r.noPago}`, r);
+        const merged = Array.from(map.values());
+        void saveHeavyRecords('pagoProveedorRecords', merged);
+        return merged;
+      });
+    }
+  }, []);
+
+  const backfillAuxiliar = useCallback(async (from: string, to: string) => {
+    const activeCias = companies
+      .filter(c => c.activa !== false && isAuxiliarAllowlistedCia(c.cia))
+      .map(c => c.cia);
+    if (activeCias.length === 0) return;
+    await primeDailyCache();
+    const keyOf = (r: AuxiliarContableRecord) =>
+      `${r.cia}::${r.idCuenta}::${r.noDocto}::${r.tipoDocto}`;
+    const fetchedAll: AuxiliarContableRecord[] = [];
+    let cursor = 0;
+    const concurrency = Math.min(10, activeCias.length);
+    const worker = async () => {
+      while (true) {
+        const idx = cursor++;
+        if (idx >= activeCias.length) return;
+        const cia = activeCias[idx];
+        try {
+          const fetched = await fetchAuxiliarContableRange(cia, from, to, AUX_RECON_PARAMS, { concurrency: 4 });
+          for (const r of fetched) fetchedAll.push(r);
+        } catch { /* best-effort */ }
+      }
+    };
+    await Promise.all(Array.from({ length: concurrency }, worker));
+    if (fetchedAll.length > 0) {
+      setAuxiliarContableRecords(prev => {
+        const map = new Map<string, AuxiliarContableRecord>();
+        for (const r of prev) map.set(keyOf(r), r);
+        for (const r of fetchedAll) map.set(keyOf(r), r);
+        const merged = Array.from(map.values());
+        void saveHeavyRecords('auxiliarContableRecords', merged);
+        return merged;
+      });
+    }
+  }, [companies]);
+
+  const backfillBanks = useCallback(async (from: string, to: string) => {
+    await primeDailyCache();
+    const defaultFormat: BankStatementFormat = 'SWIFT';
+    const fetched = await fetchBankStatementsRange(from, to, defaultFormat, { concurrency: 10 });
+    if (fetched.length > 0) {
+      // El effect de persistencia (debounced) escribe bankJdeStatements a IDB.
+      setBankJdeStatements(prev => mergeBankStatements(prev, fetched));
+    }
+  }, []);
+
+  const backfillNomina = useCallback(async (from: string, to: string) => {
+    const months: Array<{ anio: number; mes: number }> = [];
+    let y = Number(from.slice(0, 4));
+    let m = Number(from.slice(5, 7));
+    const endY = Number(to.slice(0, 4));
+    const endM = Number(to.slice(5, 7));
+    while (y < endY || (y === endY && m <= endM)) {
+      months.push({ anio: y, mes: m });
+      m += 1; if (m > 12) { m = 1; y += 1; }
+    }
+    if (months.length === 0) return;
+    const results = await Promise.allSettled(
+      months.map(({ anio, mes }) => fetchNomina({ idEmpresa: 99, tipoNomina: 99, anio, mes })),
+    );
+    let batch: PayrollCostRecord[] = [];
+    const keys: Record<string, string> = {};
+    const ts = new Date().toISOString();
+    results.forEach((res, idx) => {
+      if (res.status !== 'fulfilled') return;
+      const recs = refineBatch(res.value);
+      batch = mergeNominaBatch(batch, recs);
+      const { anio, mes } = months[idx];
+      keys[nominaCacheKey({ idEmpresa: 99, tipoNomina: 99, anio, mes })] = ts;
+    });
+    if (batch.length > 0) {
+      setNominaRecords(prev => {
+        const merged = mergeNominaBatch(prev, batch);
+        void saveHeavyRecords('nominaRecords', merged);
+        return merged;
+      });
+    }
+    if (Object.keys(keys).length > 0) {
+      setNominaLoadedKeys(prev => ({ ...prev, ...keys }));
+    }
+  }, []);
+
+  const runBackfill = useCallback(async (ds: string, from: string, to: string): Promise<void> => {
+    switch (ds) {
+      case 'cobranza': return backfillCobranza(from, to);
+      case 'rol': return backfillRol(from, to);
+      case 'compras': return backfillCompras(from, to);
+      case 'pagos': return backfillPagos(from, to);
+      case 'auxiliar': return backfillAuxiliar(from, to);
+      case 'banks': return backfillBanks(from, to);
+      case 'nomina': return backfillNomina(from, to);
+      default: return;
+    }
+  }, [backfillCobranza, backfillRol, backfillCompras, backfillPagos, backfillAuxiliar, backfillBanks, backfillNomina]);
+
+  // Controlador de backfill: por cada dataset cuyo piso solicitado bajó por
+  // debajo de lo ya cargado, fetchea el hueco [solicitado, ya-cargado) una vez.
+  // El piso "ya cargado" arranca en la fecha MÍNIMA real de los records (para
+  // no re-fetchear historia ya persistida), acotado al piso por defecto.
+  useEffect(() => {
+    const allowed = allowedDatasetsRef.current;
+    const minLoadedDate = (ds: string): string => {
+      const dates: (string | undefined)[] = [];
+      if (ds === 'cobranza') for (const r of cobranzaRecords) dates.push(r.fechaFactura);
+      else if (ds === 'rol') for (const r of rolRecords) dates.push(r.fechaViaje);
+      else if (ds === 'compras') for (const r of comprasRecords) dates.push(r.fechaPedido || r.fechaRecepcion);
+      else if (ds === 'pagos') for (const r of pagoProveedorRecords) dates.push(r.fechaPago);
+      else if (ds === 'auxiliar') for (const r of auxiliarContableRecords) dates.push(r.fechaContable);
+      else if (ds === 'banks') for (const acc of bankJdeStatements) for (const mv of acc.movimientos) dates.push(mv.fechaOperacion);
+      else if (ds === 'nomina') for (const r of nominaRecords) {
+        if (r.year && r.month) dates.push(`${r.year}-${String(r.month).padStart(2, '0')}-01`);
+      }
+      let min: string | null = null;
+      for (const d of dates) {
+        if (d && (min === null || d < min)) min = d;
+      }
+      return min !== null && min < dataWindowDefaultFloor ? min : dataWindowDefaultFloor;
+    };
+    for (const ds of Object.keys(historicalFloorByDataset)) {
+      if (!allowed.has(ds as DatasetKey)) continue;
+      if (backfillInFlightRef.current.has(ds)) continue;
+      if (backfilledFloorRef.current[ds] === undefined) {
+        backfilledFloorRef.current[ds] = minLoadedDate(ds);
+      }
+      const coveredFloor = backfilledFloorRef.current[ds];
+      const requestedFloor = historicalFloorByDataset[ds];
+      if (requestedFloor >= coveredFloor) continue; // ya cubierto
+      const from = requestedFloor;
+      const to = previousIsoDay(coveredFloor);
+      backfilledFloorRef.current[ds] = requestedFloor; // reclama el rango (evita reentrada)
+      backfillInFlightRef.current.add(ds);
+      setHistoricalLoadingByDataset(prev => ({ ...prev, [ds]: true }));
+      void (async () => {
+        try {
+          await runBackfill(ds, from, to);
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.warn(`[backfill] ${ds} ${from}..${to} falló`, err);
+          backfilledFloorRef.current[ds] = coveredFloor; // rollback → un re-intento puede volver
+        } finally {
+          backfillInFlightRef.current.delete(ds);
+          setHistoricalLoadingByDataset(prev => ({ ...prev, [ds]: false }));
+          // Re-evalúa por si el usuario pidió un año AÚN más viejo durante el fetch.
+          setBackfillTick(t => t + 1);
+        }
+      })();
+    }
+    // Referenciamos los arrays de records sólo para el piso inicial (una vez por
+    // dataset); no los listamos como deps para no re-correr en cada commit del
+    // boot — el efecto sólo actúa cuando el usuario navega a un año previo.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [historicalFloorByDataset, backfillTick, runBackfill, dataWindowDefaultFloor]);
 
 
   // Persist bank statements (JDE + supplemental) → IDB heavy-store.
@@ -4416,11 +4749,12 @@ export default function App() {
     includeRange: boolean = false,
   ) => {
     const today = todayISO();
-    // 2 años hacia atrás para alimentar Holt-Winters seasonal (≥24m).
-    // Antes era year-start (≤365d) → predictor caía a naive-mean (flat).
-    const twoYearsAgo = new Date();
-    twoYearsAgo.setUTCDate(twoYearsAgo.getUTCDate() - 730);
-    const yearStart = twoYearsAgo.toISOString().slice(0, 10);
+    // Ventana por defecto uniforme (año en curso + 12 meses atrás). Antes
+    // bajaba 2 años para alimentar Holt-Winters seasonal (≥24m); ahora el piso
+    // es compartido y los estados de cuenta previos se cargan bajo demanda
+    // (DataWindowContext / ensureBankCoverageForCollections). El predictor
+    // estacional degrada a lineal hasta que se cargue más historia.
+    const yearStart = defaultWindowFloor();
     const defaultFormat: BankStatementFormat = 'SWIFT';
 
     // Cache hit: skip unless forced. SOLO aplica al prime-only path
@@ -4967,7 +5301,16 @@ export default function App() {
     setActiveTab(DEFAULT_TAB[s]);
   };
 
+  const dataWindowValue = useMemo<DataWindowValue>(() => ({
+    defaultFloor: dataWindowDefaultFloor,
+    floorByDataset: historicalFloorByDataset,
+    loadingByDataset: historicalLoadingByDataset,
+    ensureYearLoaded,
+    isLoadingHistorical,
+  }), [dataWindowDefaultFloor, historicalFloorByDataset, historicalLoadingByDataset, ensureYearLoaded, isLoadingHistorical]);
+
   return (
+    <DataWindowProvider value={dataWindowValue}>
     <ScenarioSelectionProvider initialScenarios={initialHeaderScenarios}>
     <div className="min-h-dvh" style={{ background: 'var(--background)' }}>
       {splashMounted && (
@@ -5657,6 +6000,7 @@ export default function App() {
       </div>
     </div>
     </ScenarioSelectionProvider>
+    </DataWindowProvider>
   );
 }
 
