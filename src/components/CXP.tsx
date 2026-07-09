@@ -29,6 +29,7 @@ import {
 } from 'recharts';
 import { hex } from '../theme';
 import PageHeader from './ui/PageHeader';
+import SourceInfo from './ui/SourceInfo';
 import { fmtCompact, fmtCurrency } from '../formatters';
 import type { CashFlowAssumptions, Client, Provider, ProviderFlexibility, ProviderRisk } from '../domain/types';
 import { enrichFromCatalog, flexibilityLabel, type Antiguedad } from '../domain/providerCatalog';
@@ -37,6 +38,7 @@ import type { Budget } from '../domain/budget';
 import type { CxpPaymentCoverage } from '../domain/paymentReconciliationEngine';
 import { excludeConcursoMercantil } from '../domain/concursoMercantil';
 import { buildProviderIndex, findProviderByRef, type ProviderIndex } from '../domain/providerIdentity';
+import { makeAttribution, sourceOf, type SourceAttribution } from '../domain/sourceAttribution';
 
 /* ═══════════════════════════════════════════════════════════════════════
    Types
@@ -503,6 +505,21 @@ function findPossibleBankPayments(record: EnrichedCXPRecord, bankStatements: Ban
     })
     .sort((a, b) => b.fechaOperacion.localeCompare(a.fechaOperacion))
     .slice(0, 6);
+}
+
+/**
+ * Fuente de un renglón de factura CxP. La base SIEMPRE es CxP (Antigüedad de
+ * saldos); si además tiene cobertura de pago conciliada (PagoProveedor × banco),
+ * el renglón es un CRUCE de tres fuentes.
+ */
+function attributeCxpRow(record: CXPRecord, coverage?: CxpPaymentCoverage): SourceAttribution {
+  if (coverage && (coverage.status === 'PAID' || coverage.status === 'PARTIAL')) {
+    return makeAttribution(['cxp', 'pagoproveedor', 'bancos'], {
+      crossKey: coverage.payments.map(p => p.noPago).join(', '),
+      note: 'Cobertura de pago conciliada',
+    });
+  }
+  return sourceOf('cxp');
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -1226,6 +1243,7 @@ const CXPDashboard = ({
                                         Parcial
                                       </span>
                                     )}
+                                    <SourceInfo attribution={attributeCxpRow(r, paymentCoverage?.get(`${r.cia}::${r.noFactura}::${r.noProveedor}`))} />
                                   </div>
                                 </td>
                                 <td className="py-1.5 text-[var(--gray-500)]">{r.fechaFactura}</td>
@@ -1520,7 +1538,10 @@ function InvoiceDetailPanel({
         <header className="border-b border-[var(--gray-100)] bg-white px-5 py-4">
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
-              <p className="text-[11px] font-medium uppercase tracking-wide text-[var(--gray-400)]">Detalle de factura</p>
+              <p className="inline-flex items-center gap-1 text-[11px] font-medium uppercase tracking-wide text-[var(--gray-400)]">
+                Detalle de factura
+                <SourceInfo attribution={sourceOf('cxp')} />
+              </p>
               <h2 className="mt-1 truncate text-[18px] font-bold text-[var(--gray-950)]">{record.noFactura || 'Sin factura'}</h2>
               <p className="mt-1 truncate text-[12px] text-[var(--gray-500)]">{record.nombre}</p>
             </div>
@@ -1616,7 +1637,10 @@ function InvoiceDetailPanel({
                 {bankMatches.map((movement, index) => (
                   <div key={`${movement.referencia}-${index}`} className="rounded-[var(--radius-md)] border border-[var(--gray-200)] px-3 py-2">
                     <div className="flex items-center justify-between gap-3">
-                      <span className="text-[12px] font-medium text-[var(--gray-950)]">{movement.fechaOperacion}</span>
+                      <span className="inline-flex items-center gap-1">
+                        <span className="text-[12px] font-medium text-[var(--gray-950)]">{movement.fechaOperacion}</span>
+                        <SourceInfo attribution={sourceOf('bancos', 'Cargo bancario candidato (cruce heurístico por monto/concepto).')} />
+                      </span>
                       <span className="font-mono text-[12px] font-bold text-[var(--gray-950)]">{fmtFull(movement.importe)}</span>
                     </div>
                     <p className="mt-1 text-[11px] text-[var(--gray-500)]">{movement.referencia} · {movement.concepto}</p>

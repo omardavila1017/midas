@@ -4,6 +4,7 @@ import type { PaymentMatch } from './paymentReconciliationEngine';
 import {
   ORPHAN_STALE_DAYS,
   PAGO_STATUS_LABEL,
+  attributePagoSource,
   buildPagadoPorMes,
   buildPagosDepuracionInsights,
   isPagoForeignCurrency,
@@ -56,6 +57,41 @@ function findInsight(
 ) {
   return insights.find((i) => i.id === id);
 }
+
+describe('attributePagoSource', () => {
+  it('single source when neither bank nor cxp cross', () => {
+    const attr = attributePagoSource(match(pago({})));
+    expect(attr.sources).toEqual(['pagoproveedor']);
+    expect(attr.crossed).toBe(false);
+  });
+
+  it('crosses bancos when a CARGO matched', () => {
+    const m = match(pago({}), {
+      status: 'MATCHED_BANK_ONLY',
+      cargoMatch: {
+        movement: { fechaOperacion: '2026-06-02', importe: -1000 } as unknown as NonNullable<PaymentMatch['cargoMatch']>['movement'],
+        cia: '00001',
+        cuenta: '70138708851',
+        tier: 'exact',
+        confidence: 1,
+      },
+    });
+    const attr = attributePagoSource(m);
+    expect(attr.sources).toEqual(['pagoproveedor', 'bancos']);
+    expect(attr.crossed).toBe(true);
+    expect(attr.crossKey).toContain('CARGO');
+  });
+
+  it('crosses cxp when it covers invoices', () => {
+    const m = match(pago({}), {
+      status: 'MATCHED_CXP_ONLY',
+      cxpMatches: [{ cxp: {} as never, tier: 'folio-exact', confidence: 1 }],
+    });
+    const attr = attributePagoSource(m);
+    expect(attr.sources).toEqual(['pagoproveedor', 'cxp']);
+    expect(attr.crossKey).toContain('CXP');
+  });
+});
 
 describe('pagoDisplayStatus / isRealOrphan', () => {
   it('splits UNMATCHED by bank coverage and reserves orphan for covered non-employees', () => {
@@ -216,7 +252,10 @@ describe('pagosToCsv', () => {
     const csv = pagosToCsv([m]);
     const [header, row] = csv.split('\n');
     expect(header).toContain('Estado cruce');
-    expect(header.split(',').length).toBe(22);
+    expect(header).toContain('Fuente');
+    expect(header).toContain('Cruce');
+    expect(header.split(',').length).toBe(24);
+    expect(row).toContain('Pago a proveedores');
     expect(row).toContain('"ACME, SA"');
     expect(row).toContain('"FL ""CXP"", VALE"');
     expect(row).toContain(PAGO_STATUS_LABEL.NO_BANK_DATA);

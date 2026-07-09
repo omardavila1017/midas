@@ -21,8 +21,10 @@ import {
   aggregateByMonth,
   buildSaleEntries,
   entriesForMonth,
+  saleSourceAttribution,
   toCsv,
 } from '../services/salesCalendarService';
+import SourceInfo from '../../../components/ui/SourceInfo';
 
 interface SalesCalendarDashboardProps {
   cobranzaRecords: CobranzaRecord[];
@@ -454,7 +456,10 @@ export default function SalesCalendarDashboard({
                         style={{ borderColor: 'var(--gray-100)' }}
                       >
                         <div className="flex items-center justify-between gap-2">
-                          <StatusChip status={e.status} />
+                          <span className="inline-flex items-center gap-1">
+                            <StatusChip status={e.status} />
+                            <SourceInfo attribution={saleSourceAttribution(e.source)} />
+                          </span>
                           <span className="text-[13px] font-semibold" style={{ color: 'var(--gray-950)' }}>
                             {fmtCurrency(e.amount)}
                           </span>

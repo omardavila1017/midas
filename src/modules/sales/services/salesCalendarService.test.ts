@@ -6,6 +6,7 @@ import {
   aggregateByMonth,
   aggregateByCompany,
   entriesForMonth,
+  saleSourceAttribution,
   toCsv,
 } from './salesCalendarService';
 import type { CobranzaRecord, RolRecord, ViajeEspecialRecord } from '../../../services/jde';
@@ -264,6 +265,20 @@ describe('aggregateByCompany', () => {
     );
     expect(result.map((r) => r.cia)).toEqual(['00038', '00011']);
     expect(result[0].total).toBe(3000);
+  });
+});
+
+describe('saleSourceAttribution', () => {
+  it('maps each SaleSource to its datalake source, single-source (no cross)', () => {
+    expect(saleSourceAttribution('cobranza').sources).toEqual(['cobranza']);
+    expect(saleSourceAttribution('rol').sources).toEqual(['rol']);
+    expect(saleSourceAttribution('especial').sources).toEqual(['viajes-especiales']);
+    expect(saleSourceAttribution('rol').crossed).toBe(false);
+  });
+
+  it('exposes the label used by the CSV Fuente column', () => {
+    expect(saleSourceAttribution('cobranza').label).toBe('Cobranza JDE');
+    expect(saleSourceAttribution('especial').label).toBe('Viajes Especiales');
   });
 });
 

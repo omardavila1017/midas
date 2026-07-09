@@ -13,6 +13,7 @@
 
 import type { ComprasRecord } from '../services/jdeTypes';
 import { csvDate } from '../utils/export';
+import { SOURCE_CATALOG } from './sourceAttribution';
 import {
   compraEstado,
   comprasImporteMxn,
@@ -137,8 +138,9 @@ function csvCell(value: string | number): string {
 export function pasivoToCsv(items: PasivoItem[]): string {
   const header = [
     'Compañía', 'No. proveedor', 'Proveedor', 'OC', 'Líneas',
-    'Importe MXN', 'Recepción', 'Antigüedad (días)', 'Categoría',
+    'Importe MXN', 'Recepción', 'Antigüedad (días)', 'Categoría', 'Fuente',
   ];
+  const fuente = SOURCE_CATALOG.compras.label;
   const rows = items.map((i) =>
     [
       i.cia,
@@ -150,6 +152,7 @@ export function pasivoToCsv(items: PasivoItem[]): string {
       csvDate(i.fechaRecepcion),
       i.antiguedadDias ?? '',
       i.categoria,
+      fuente,
     ]
       .map(csvCell)
       .join(','),

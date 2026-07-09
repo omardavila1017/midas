@@ -46,6 +46,8 @@ import { clearProjectionRunCache, fingerprintArray, primeProjectionRunCache } fr
 import { clearProjectionSourceCache } from '../../financial-projection/services/financialProjectionService';
 import { onMemoryPressure } from '../../../services/runtimeGuardian';
 import { downloadFile, toCSV } from '../../../utils/export';
+import SourceInfo from '../../../components/ui/SourceInfo';
+import { attributeMovementId, sourceCsvFields } from '../../../domain/sourceAttribution';
 import { projectionWindowFor } from '../../financial-projection/services/projectionWindow';
 import { useScenarioRunWorker } from '../../shared-finance/hooks/useScenarioRunWorker';
 import { CellDetailPopover, type CellDetailData } from '../components/CellDetailPopover';
@@ -1788,6 +1790,7 @@ function PlanningCellDetailPanel({
       Moneda: movement.currency,
       Score: movement.confidenceScore,
       Estado: movement.status,
+      ...sourceCsvFields(attributeMovementId(movement.id)),
     }));
     const slug = (text: string) =>
       text
@@ -1847,8 +1850,9 @@ function PlanningCellDetailPanel({
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <div className="truncate text-[12px] font-semibold text-[var(--gray-950)]">
-                      {movement.counterpartyName ?? movement.concept}
+                    <div className="flex items-center gap-1 text-[12px] font-semibold text-[var(--gray-950)]">
+                      <span className="truncate">{movement.counterpartyName ?? movement.concept}</span>
+                      <SourceInfo attribution={attributeMovementId(movement.id)} />
                     </div>
                     <div className="mt-0.5 truncate text-[10.5px] text-[var(--gray-500)]">
                       {movement.sourceSystem === 'BANK'

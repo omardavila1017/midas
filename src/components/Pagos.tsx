@@ -59,6 +59,7 @@ import { isInternalCounterparty, isInternalProviderClassification } from '../dom
 import { normFactura } from '../domain/rolCobranzaMatch';
 import {
   PAGO_STATUS_LABEL,
+  attributePagoSource,
   buildPagadoPorMes,
   buildPagosDepuracionInsights,
   isEmployeePago,
@@ -70,6 +71,7 @@ import {
   type PagosInsight,
   type PagosInsightSeverity,
 } from '../domain/pagosInsights';
+import SourceInfo from './ui/SourceInfo';
 
 interface PagosProps {
   pagoProveedorRecords: PagoProveedorRecord[];
@@ -1238,6 +1240,7 @@ function PaymentAuditCard({ match, bridge }: { match: PaymentMatch; bridge: Comp
             <Chip style={STATUS_STYLE[display]} icon={statusIcon(display)}>
               {PAGO_STATUS_LABEL[display]}
             </Chip>
+            <SourceInfo attribution={attributePagoSource(match)} />
             {totalOCs > 0 && (
               <span className="inline-flex items-center gap-1 text-[11px] text-[var(--gray-500)] font-medium">
                 <FileText className="w-3 h-3" /> {totalOCs} OC{totalOCs > 1 ? 's' : ''}
@@ -1555,9 +1558,12 @@ function FlatPaymentList({
                     )}
                   </Td>
                   <Td>
-                    <Chip style={STATUS_STYLE[pagoDisplayStatus(m)]} icon={statusIcon(pagoDisplayStatus(m))}>
-                      {PAGO_STATUS_LABEL[pagoDisplayStatus(m)]}
-                    </Chip>
+                    <span className="inline-flex items-center gap-1">
+                      <Chip style={STATUS_STYLE[pagoDisplayStatus(m)]} icon={statusIcon(pagoDisplayStatus(m))}>
+                        {PAGO_STATUS_LABEL[pagoDisplayStatus(m)]}
+                      </Chip>
+                      <SourceInfo attribution={attributePagoSource(m)} />
+                    </span>
                   </Td>
                   <Td>
                     <span className="text-[11px] text-[var(--gray-600)] font-mono truncate inline-block max-w-[200px]" title={r.comentarioPago}>

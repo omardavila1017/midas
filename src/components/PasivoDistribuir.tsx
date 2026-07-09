@@ -4,6 +4,8 @@ import { type ComprasRecord } from '../services/jde';
 import { fmtCompact, fmtCurrency, fmtDate, todayISO } from '../formatters';
 import PageHeader from './ui/PageHeader';
 import ProviderBadge from './ProviderBadge';
+import SourceInfo from './ui/SourceInfo';
+import { sourceOf } from '../domain/sourceAttribution';
 import { buildProviderIndex } from '../domain/providerIdentity';
 import type { Provider } from '../domain/types';
 import {
@@ -264,7 +266,10 @@ function PasivoRow({
         <div className="mt-0.5"><ProviderBadge index={providerIndex} jdeCode={item.noProveedor} name={item.nombreProveedor} /></div>
       </Td>
       <Td>
-        <span className="font-mono text-[11px] text-[var(--gray-700)]">{item.noOrden}</span>
+        <span className="inline-flex items-center gap-1">
+          <span className="font-mono text-[11px] text-[var(--gray-700)]">{item.noOrden}</span>
+          <SourceInfo attribution={sourceOf('compras', 'OC recibida sin factura (pasivo por distribuir).')} />
+        </span>
         <div className="text-[10px] text-[var(--gray-400)]">{item.lineCount} {item.lineCount === 1 ? 'línea' : 'líneas'}</div>
       </Td>
       <Td align="right">

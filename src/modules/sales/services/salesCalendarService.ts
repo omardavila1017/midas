@@ -16,9 +16,32 @@
 import type { CobranzaRecord, RolRecord, ViajeEspecialRecord } from '../../../services/jde';
 import { buildRolCobranzaCross, normFactura } from '../../../domain/rolCobranzaMatch';
 import { csvDate } from '../../../utils/export';
+import { sourceOf, type SourceAttribution, type SourceId } from '../../../domain/sourceAttribution';
 
 export type SaleStatus = 'facturado' | 'por-facturar';
 export type SaleSource = 'cobranza' | 'rol' | 'especial';
+
+/** SaleSource → id canónico de fuente del datalake. */
+const SALE_SOURCE_ID: Record<SaleSource, SourceId> = {
+  cobranza: 'cobranza',
+  rol: 'rol',
+  especial: 'viajes-especiales',
+};
+
+/**
+ * Fuente de un renglón de Venta. NO es un cruce: el dedup contra cobranza corre
+ * aguas arriba (sólo el bucket `predicted` de ROL y los VE sin factura
+ * sobreviven), así que cada renglón es de una sola fuente.
+ */
+export function saleSourceAttribution(source: SaleSource): SourceAttribution {
+  const note =
+    source === 'cobranza'
+      ? 'Venta ya facturada (factura de cobranza por fecha de factura).'
+      : source === 'rol'
+        ? 'Viaje ejecutado aún por facturar (ROL sin factura cruzada).'
+        : 'Viaje especial aún por facturar (sin factura JDE).';
+  return sourceOf(SALE_SOURCE_ID[source], note);
+}
 
 export interface SaleEntry {
   /** Fecha de la venta (YYYY-MM-DD): fecha de factura, o de viaje si no facturado. */
@@ -265,7 +288,7 @@ export function toCsv(entries: SaleEntry[]): string {
         e.cliente,
         e.referencia,
         e.cia,
-        e.source,
+        saleSourceAttribution(e.source).label,
         e.amount.toFixed(2),
       ]
         .map(csvCell)

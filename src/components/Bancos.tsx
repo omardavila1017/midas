@@ -59,6 +59,8 @@ import {
   findBankAccount,
   type BankAccountCatalogEntry,
 } from '../domain/bankAccountsCatalog';
+import SourceInfo from './ui/SourceInfo';
+import { makeAttribution, sourceOf, type SourceAttribution } from '../domain/sourceAttribution';
 
 /* ═══════════════════════════════════════════════════════════════════════
    Props
@@ -134,6 +136,38 @@ function catalogFlowClass(flow: string | undefined): string {
   if (flow === 'ingreso') return 'bg-[var(--success-muted)] text-[var(--success)]';
   if (flow === 'egreso') return 'bg-[var(--danger-muted)] text-[var(--danger)]';
   return 'bg-[var(--gray-100)] text-[var(--gray-500)]';
+}
+
+/**
+ * Atribución de fuente de un movimiento bancario. La base SIEMPRE es Bancos
+ * (el estado de cuenta). Se vuelve un CRUCE cuando el motor de conciliación
+ * enriqueció la línea: un ABONO conciliado contra facturas de Cobranza, o un
+ * CARGO conciliado contra pagos a proveedor. Un traspaso interno se anota como
+ * Bancos con su razón. Consumido por la tabla de movimientos (ícono ⓘ) y por el
+ * export CSV (columnas Fuente/Cruce).
+ */
+function attributeBankMovement(
+  m: BankStatementLine,
+  enrichment?: AbonoEnrichment,
+  cargoEnrichment?: import('../domain/paymentReconciliationEngine').CargoPaymentEnrichment,
+  internalReason?: InternalReason | null,
+): SourceAttribution {
+  if (enrichment?.status === 'factura-cobrada' && enrichment.facturas && enrichment.facturas.length > 0) {
+    return makeAttribution(['bancos', 'cobranza'], {
+      crossKey: enrichment.facturas.map(f => f.noFactura).filter(Boolean).join(', '),
+      note: 'ABONO conciliado con factura(s) de cobranza (cruce por monto/fecha/cuenta).',
+    });
+  }
+  if (cargoEnrichment?.status === 'MATCHED' && cargoEnrichment.payments && cargoEnrichment.payments.length > 0) {
+    return makeAttribution(['bancos', 'pagoproveedor'], {
+      crossKey: cargoEnrichment.payments.map(p => p.noPago).filter(Boolean).join(', '),
+      note: 'CARGO conciliado con pago(s) a proveedor.',
+    });
+  }
+  if (internalReason) {
+    return sourceOf('bancos', `Traspaso interno: ${INTERNAL_REASON_LABELS[internalReason]}.`);
+  }
+  return sourceOf('bancos', 'Movimiento del estado de cuenta bancario.');
 }
 
 function BankAccountBadges({
@@ -653,12 +687,23 @@ const BancosDashboard = ({
   };
 
   const exportCsv = () => {
-    const header = ['cia','empresa','banco','cuenta','moneda','unidadNegocio','rolCuenta','flujoCuenta','razonSocialCuenta','conceptoCuenta','fechaOperacion','fechaValor','referencia','concepto','tipoMovimiento','importe','saldo'];
+    const header = ['cia','empresa','banco','cuenta','moneda','unidadNegocio','rolCuenta','flujoCuenta','razonSocialCuenta','conceptoCuenta','fechaOperacion','fechaValor','referencia','concepto','tipoMovimiento','importe','saldo','Fuente','Cruce'];
     const rows: string[] = [header.join(',')];
     accountsView.forEach(acc => {
       const empresaNombre = ciaNameMap.get(acc.cia) ?? '';
       const catalogEntry = accountCatalogEntry(acc);
       acc.movimientos.forEach(m => {
+        // Atribución de fuente por movimiento (mismo cruce que la tabla): la
+        // línea enriquecida sólo cuando NO es traspaso interno (espejo del render).
+        const internalReason = internalReasonOf(acc.cia, acc.cuenta, m);
+        const isInternal = internalReason !== null;
+        const enrichment = !isInternal && m.tipoMovimiento === 'ABONO' && abonoEnrichmentIndex
+          ? abonoEnrichmentIndex.get(bankMovementKey(m))
+          : undefined;
+        const cargoEnrichment = !isInternal && m.tipoMovimiento === 'CARGO' && cargoEnrichmentIndex
+          ? cargoEnrichmentIndex.get(bankMovementKey(m))
+          : undefined;
+        const attr = attributeBankMovement(m, enrichment, cargoEnrichment, internalReason);
         rows.push([
           acc.cia, empresaNombre, acc.banco, acc.cuenta, acc.moneda,
           catalogEntry ? bankAccountBusinessUnitLabel(catalogEntry.unidadNegocio) : '',
@@ -669,6 +714,7 @@ const BancosDashboard = ({
           m.fechaOperacion, m.fechaValor ?? '',
           m.referencia, m.concepto, m.tipoMovimiento,
           m.importe, m.saldo ?? '',
+          attr.label, attr.crossKey ?? '',
         ].map(csvEscape).join(','));
       });
     });
@@ -1032,8 +1078,9 @@ const BancosDashboard = ({
                                   )}
                                   <span className="text-[11px] text-[var(--gray-400)]">{acc.cia ? '· ' : ''}{acc.movimientos.length} mov.</span>
                                 </div>
-                                <div className="mt-1.5">
+                                <div className="mt-1.5 flex items-center gap-1">
                                   <BankAccountBadges entry={catalogEntry} acc={acc} />
+                                  <SourceInfo attribution={sourceOf('bancos', 'Estado de cuenta; el catálogo de cuentas aporta las etiquetas de rol/unidad.')} />
                                 </div>
                               </div>
 
@@ -1268,6 +1315,10 @@ const BancosMovimientos = ({
                         Sin pago
                       </span>
                     )}
+                    <SourceInfo
+                      className="ml-1.5"
+                      attribution={attributeBankMovement(m, enrichment, cargoEnrichment, internalReason)}
+                    />
                   </td>
                   <td className="py-1.5 text-center">
                     <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${tipoColor}`}>

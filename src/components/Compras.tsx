@@ -22,6 +22,8 @@ import { type ComprasRecord } from '../services/jde';
 import { fmtCompact, fmtCurrency, fmtDate, fmtInt, fmtNum, todayISO } from '../formatters';
 import PageHeader from './ui/PageHeader';
 import ProviderBadge from './ProviderBadge';
+import SourceInfo from './ui/SourceInfo';
+import { sourceOf } from '../domain/sourceAttribution';
 import { buildProviderIndex } from '../domain/providerIdentity';
 import type { Provider } from '../domain/types';
 import {
@@ -1044,7 +1046,10 @@ function OrderRow({
         </div>
       </Td>
       <Td>
-        <span className="font-mono text-[11px] text-[var(--gray-700)]">{o.noOrden}</span>
+        <span className="inline-flex items-center gap-1">
+          <span className="font-mono text-[11px] text-[var(--gray-700)]">{o.noOrden}</span>
+          <SourceInfo attribution={sourceOf('compras', 'Orden de compra (JDE).')} />
+        </span>
         <div className="text-[10px] text-[var(--gray-400)]">
           {o.lineCount} {o.lineCount === 1 ? 'línea' : 'líneas'}
         </div>
@@ -1150,7 +1155,10 @@ function CompraRow({
         </div>
       </Td>
       <Td>
-        <span className="font-mono text-[11px] text-[var(--gray-700)]">{r.noOrden}</span>
+        <span className="inline-flex items-center gap-1">
+          <span className="font-mono text-[11px] text-[var(--gray-700)]">{r.noOrden}</span>
+          <SourceInfo attribution={sourceOf('compras', 'Orden de compra (JDE), detalle por línea.')} />
+        </span>
         {ocMeta && (
           <div className="text-[10px] text-[var(--gray-400)] truncate max-w-[140px]" title={ocMeta}>
             {ocMeta}

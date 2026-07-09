@@ -24,6 +24,7 @@
 import type { ComprasRecord } from '../services/jdeTypes';
 import { isComprasWorkflowClosed } from './comprasToPurchaseReceipts';
 import { csvDate } from '../utils/export';
+import { SOURCE_CATALOG } from './sourceAttribution';
 
 /** Días sin entrada tras los cuales una OC abierta se considera probable orden muerta. */
 export const STALE_OPEN_ORDER_DAYS = 90;
@@ -325,8 +326,9 @@ export function comprasOrdersToCsv(orders: ComprasOrderSummary[]): string {
     'Compañía', 'No. proveedor', 'Proveedor', 'OC', 'Líneas', 'Estado',
     'Importe total MXN', 'Recibido MXN', 'Facturado MXN',
     'Pendiente por recibir MXN', 'Pendiente factura MXN',
-    'Fecha pedido', 'Antigüedad (días)', 'Pago proyectado', 'Categoría',
+    'Fecha pedido', 'Antigüedad (días)', 'Pago proyectado', 'Categoría', 'Fuente',
   ];
+  const fuente = SOURCE_CATALOG.compras.label;
   const rows = orders.map((o) =>
     [
       o.cia,
@@ -344,6 +346,7 @@ export function comprasOrdersToCsv(orders: ComprasOrderSummary[]): string {
       o.antiguedadDias ?? '',
       csvDate(o.fechaPagoProyectada),
       o.categoria,
+      fuente,
     ]
       .map(csvCell)
       .join(','),
@@ -552,8 +555,9 @@ export function comprasToCsv(records: ComprasRecord[]): string {
     'Producto', 'Descripción', 'Concepto', 'Cantidad', 'Precio unitario',
     'Importe', 'Moneda', 'Tipo de cambio', 'Importe MXN',
     'Fecha pedido', 'Fecha recepción', 'Días crédito', 'Pago proyectado', 'Factura',
-    'Centro de costos', 'Categoría', 'Familia', 'Subfamilia', 'Edo. sig.', 'Tasa fiscal',
+    'Centro de costos', 'Categoría', 'Familia', 'Subfamilia', 'Edo. sig.', 'Tasa fiscal', 'Fuente',
   ];
+  const fuente = SOURCE_CATALOG.compras.label;
   const rows = records.map((r) =>
     [
       r.cia,
@@ -583,6 +587,7 @@ export function comprasToCsv(records: ComprasRecord[]): string {
       r.descSubFamilia || r.subFamilia,
       r.estadoSiguiente,
       r.tasaFiscal,
+      fuente,
     ]
       .map(csvCell)
       .join(','),

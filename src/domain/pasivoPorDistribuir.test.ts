@@ -117,6 +117,8 @@ describe('pasivoToCsv', () => {
     const [header, row] = csv.split('\n');
     expect(header).toContain('Importe MXN');
     expect(header).toContain('Antigüedad (días)');
+    expect(header).toContain('Fuente');
     expect(row).toContain('OC-CSV');
+    expect(row).toContain('Compras');
   });
 });

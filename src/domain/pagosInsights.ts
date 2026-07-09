@@ -28,6 +28,29 @@ import type { PagoProveedorRecord } from '../services/jdeTypes';
 import type { PaymentMatch, PaymentStatus } from './paymentReconciliationEngine';
 import { isEmployeeSearchType } from './providerDerivation';
 import { csvDate } from '../utils/export';
+import { makeAttribution, sourceCsvFields, type SourceAttribution, type SourceId } from './sourceAttribution';
+
+/**
+ * Fuente de un renglón de Pagos: siempre `pagoproveedor`, cruzado con `bancos`
+ * cuando el motor le encontró su CARGO y con `cxp` cuando cubre facturas. El
+ * `crossKey` resume la llave del cruce (cuenta+fecha del CARGO, # de CXPs).
+ */
+export function attributePagoSource(m: PaymentMatch): SourceAttribution {
+  const sources: SourceId[] = ['pagoproveedor'];
+  const cross: string[] = [];
+  if (m.cargoMatch) {
+    sources.push('bancos');
+    cross.push(`CARGO ${m.cargoMatch.cuenta} ${m.cargoMatch.movement.fechaOperacion} (${m.cargoMatch.tier})`);
+  }
+  if (m.cxpMatches.length > 0) {
+    sources.push('cxp');
+    cross.push(`${m.cxpMatches.length} factura${m.cxpMatches.length === 1 ? '' : 's'} CXP`);
+  }
+  return makeAttribution(sources, {
+    crossKey: cross.length > 0 ? cross.join(' · ') : undefined,
+    note: m.reason,
+  });
+}
 
 /** Días sin cargo bancario tras los cuales un huérfano sugiere void/captura errónea en JDE. */
 export const ORPHAN_STALE_DAYS = 30;
@@ -324,9 +347,12 @@ export function pagosToCsv(matches: PaymentMatch[]): string {
     'Tipo búsqueda', 'Clasificación', 'Clasificación financiera',
     'Cuenta bancaria', 'Cuenta banco', 'Comentario',
     'Estado cruce', 'CXPs cubiertas', 'Cargo banco fecha', 'Cargo banco cuenta', 'Cruce banco',
+    'Fuente', 'Cruce',
   ];
   const rows = matches.map((m) => {
     const r = m.payment;
+    const attr = attributePagoSource(m);
+    const csv = sourceCsvFields(attr);
     return [
       r.cia,
       r.nombreCia,
@@ -350,6 +376,8 @@ export function pagosToCsv(matches: PaymentMatch[]): string {
       csvDate(m.cargoMatch?.movement.fechaOperacion ?? ''),
       m.cargoMatch?.cuenta ?? '',
       m.cargoMatch?.tier ?? '',
+      csv.Fuente,
+      csv.Cruce,
     ]
       .map(csvCell)
       .join(',');
