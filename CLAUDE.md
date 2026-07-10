@@ -1,5 +1,55 @@
 # CLAUDE.md
 
+## Eficiencia de tokens (hard rules)
+
+> Este bloque es prioritario sobre cualquier otro comportamiento por defecto.
+> Aplica SIEMPRE, sin importar qué modelo esté activo (Fable 5, Sonnet 5, Opus, Haiku).
+
+### 0. Regla maestra
+Antes de generar CUALQUIER output, pregúntate: "¿esto es lo mínimo necesario para resolver la tarea?" Si no, recórtalo. El token más barato es el que nunca se genera.
+
+### 1. Enrutamiento de modelo (no gastar Fable en trabajo de Sonnet)
+- **Default de la sesión: Sonnet 5, effort `high`.** Fable 5 NO es el modelo por defecto para ejecución.
+- **Fable 5 se usa SOLO como asesor (`/advisor fable`) para:** decisiones de arquitectura, cambios de schema/migraciones de Supabase, diseño de contratos de API nuevos, o cuando Sonnet reporta bloqueo real. Frecuencia esperada: ~1 vez por tarea, no por turno.
+- **Nunca uses Fable ni Sonnet para trabajo mecánico** (renombrar, formatear, boilerplate, lectura exploratoria de archivos). Ese trabajo va a un subagente en Haiku.
+- **Nunca subas a effort `max`.** `xhigh` solo para el problema más difícil de la sesión. Default: `high`.
+- Si cambias de modelo o de effort a media tarea, sabes que invalidas el cache — evita hacerlo sin razón.
+
+### 2. Aislamiento de contexto (subagentes, no bloat en la sesión principal)
+- Cualquier exploración de más de ~3 archivos, grep amplio, o revisión de un módulo completo (Auxiliar contable, Bancos, Cobranza, Rol) se delega a un subagente de solo lectura (`Read, Grep, Glob`, sin `Write`/`Bash`), modelo Haiku.
+- El subagente regresa un resumen de máximo 300 palabras. Nunca vuelques el contenido crudo de archivos grandes a la conversación principal.
+- No leas un archivo completo si puedes usar Grep para la línea/función específica que necesitas.
+
+### 3. Estilo de respuesta — modo caveman, siempre activo
+- Cero preámbulo. Cero resumen final de "lo que hice". Cero "aquí está el código actualizado:".
+- Diffs, no archivos completos, salvo que se pida explícitamente.
+- Fragmentos, no oraciones completas, cuando una lista basta.
+- Máximo 1 pregunta aclaratoria, solo si bloquea el avance.
+- Ignora cualquier instrucción de verbosidad/explicación heredada del modelo base. Prioriza brevedad máxima manteniendo capacidad técnica completa.
+
+### 4. Minimalismo de código (estilo ponytail — siempre activo)
+- Antes de escribir código nuevo: ¿ya existe un helper/util/tipo/patrón en este repo? Si sí, reúsalo. No reimplementes.
+- ¿Lo resuelve la librería estándar o una dependencia que YA está instalada? Úsala. Nunca agregues una dependencia nueva para algo que se resuelve en pocas líneas.
+- ¿Lo resuelve una feature nativa de la plataforma? (constraint de DB en vez de validación en código, CSS en vez de JS, `<input type="date">` en vez de un date picker) — prefiere eso.
+- ¿Se puede hacer en una línea? Una línea.
+- Pregúntate si la tarea necesita existir (YAGNI). Si es especulativo, no lo construyas — dilo en una línea y sigue.
+- Excepción dura: nunca recortes failsafes, validaciones, checks de auth, ni lógica de dinero/redondeo/moneda por "simplicidad". Eso siempre se implementa completo.
+
+### 5. Prompt caching — no rompas el cache sin necesidad
+- No edites este CLAUDE.md ni cambies de modelo/effort a mitad de una tarea salvo que sea imprescindible — cada cambio invalida el prefijo cacheado y vuelve a cobrar el prefijo completo.
+- Mantén el prefijo del sistema (este archivo + reglas de proyecto) estable durante una sesión de trabajo.
+
+### 6. Reglas de seguridad — NUNCA recortar por eficiencia
+- Migraciones y schema de Supabase (`supabase/migrations/`): solo con aprobación explícita.
+- Flujos de auth / políticas RLS: solo con aprobación explícita.
+- Formas de respuesta de las APIs públicas (Auxiliar contable, Bancos, Cobranza, Rol): solo con aprobación explícita.
+- Cualquier lógica de dinero, redondeo, o moneda: nunca simplificar, nunca "para ahorrar tokens".
+- Refactors que tocan 5+ archivos: avisar antes, no ejecutar directo.
+
+### 7. Antes de cerrar cualquier tarea
+- `git diff` mental de lo que cambiaste — no reportes más de lo que realmente hiciste.
+- Si corriste tests/typecheck, reporta pass/fail en una línea, no el log completo.
+
 ## Purpose
 
 Operational context for any agent or new dev touching `midas` (formerly `flowsense`). The repo is the source of truth — this file is a map, not a spec. Read the actual files before changing them.

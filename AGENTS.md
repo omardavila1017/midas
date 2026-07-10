@@ -15,6 +15,7 @@
 - **Frontend RBAC is UX only, not a security boundary.** See `AUTH.md`.
 - **Deployment is platform-agnostic** (static SPA + `api/*` serverless functions). Don't bake a specific hosting platform into code or docs.
 - **Spanish UI, English code.** User-facing copy es-MX; identifiers/comments/commits in English. Don't translate type names.
+- **Eficiencia de tokens (hard rules).** Model routing (Sonnet default / Fable advisor-only / Haiku for mechanical), context isolation via read-only subagents, caveman response style, code minimalism (reuse before writing), and the "never cut for efficiency" safety carve-outs (money/auth/schema/API shapes). Full detail at the top of `CLAUDE.md` → "Eficiencia de tokens (hard rules)".
 
 ## Before you ship
 
