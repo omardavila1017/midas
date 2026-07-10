@@ -819,6 +819,19 @@ const BancosDashboard = ({
         </div>
       )}
 
+      {/* Aviso de carga manual local: los estados de cuenta subidos a mano
+          (Santander/Bajío) viven solo en este navegador y no se propagan, así
+          que la Caja disponible / Flujo Neto de este usuario puede diferir del
+          resto (audit #2.1). */}
+      {query.hasUploadedSantander && (
+        <div className="bg-[var(--warning-muted)] border border-[var(--warning)]/30 rounded-[var(--radius)] px-4 py-2.5 flex items-start gap-2 text-[13px] text-[var(--warning)] font-medium">
+          <Upload className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+          <span>
+            Hay cargas manuales (Santander/Bajío) en <strong>este navegador</strong>. Estos movimientos solo existen aquí — otros usuarios no los ven hasta que se suban al servidor. Afecta Caja disponible, Flujo Neto y la proyección.
+          </span>
+        </div>
+      )}
+
       {/* ── Caja disponible (concentradoras) vs comprometido (pagadoras) ── */}
       {balanceAccountsView.length > 0 && (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">

@@ -47,7 +47,7 @@ describe('buildKpiRows', () => {
     expect(value('system:flujo_neto_mes')).toBe(200);
     expect(delta('system:flujo_neto_mes')).toBe(180);
     expect(value('system:cobertura_cxp_caja')).toBeCloseTo(1_000 / 750);
-    expect(value('system:liquidez_inmediata')).toBeCloseTo(1_000 / 750);
+    expect(value('system:liquidez_inmediata')).toBeCloseTo(1_000 / 250);
     expect(value('system:cobertura_caja_cxc')).toBeCloseTo(1_400 / 750);
     expect(value('system:capital_trabajo_operativo')).toBe(650);
     expect(value('system:cobertura_flujo_30d')).toBeCloseTo(300 / 180);

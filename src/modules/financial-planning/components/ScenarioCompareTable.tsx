@@ -1,6 +1,7 @@
 import { GitBranch, Lock, ShieldCheck } from 'lucide-react';
 import { fmtCompact, fmtCurrency } from '../../../formatters';
 import type { FinancialScenario, ProjectionSummary } from '../../shared-finance/types';
+import { scenarioDisplayName } from '../services/scenarioBootstrap';
 
 export interface CompareRow {
   scenario: FinancialScenario;
@@ -65,7 +66,7 @@ function CompareRowItem({ row, baselineFinalCash }: { row: CompareRow; baselineF
           <Icon className="h-3 w-3" strokeWidth={1.5} />
         </span>
         <span className="truncate text-[12px] font-medium text-[var(--gray-950)]">
-          {scenario.name}
+          {scenarioDisplayName(scenario)}
         </span>
         <span
           className="rounded-[var(--radius-sm)] px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-[0.08em] text-[var(--gray-500)]"

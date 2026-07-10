@@ -15,6 +15,7 @@ import {
   Database,
   RefreshCw,
   HelpCircle,
+  Download,
 } from 'lucide-react';
 import { fetchAgedBalances, JdeApiError, type BankAccountStatement, type BankStatementLine, type Company } from '../services/jde';
 import {
@@ -30,7 +31,9 @@ import {
 import { hex } from '../theme';
 import PageHeader from './ui/PageHeader';
 import SourceInfo from './ui/SourceInfo';
-import { fmtCompact, fmtCurrency } from '../formatters';
+import { fmtCompact, fmtCurrency, todayISO } from '../formatters';
+import { csvDate, toCSV, downloadFile } from '../utils/export';
+import { isCxpOverdue } from '../domain/cxpOverdue';
 import type { CashFlowAssumptions, Client, Provider, ProviderFlexibility, ProviderRisk } from '../domain/types';
 import { enrichFromCatalog, flexibilityLabel, type Antiguedad } from '../domain/providerCatalog';
 import { scoreBucket, SCORE_LABELS, type ScoreBucket } from '../domain/providerScore';
@@ -765,13 +768,14 @@ const CXPDashboard = ({
     let porVencer = 0;
     let aPagarEsteMes = 0;
     const porPrioridad: Record<PaymentPriority, number> = { critical: 0, highImpact: 0, negotiable: 0, normal: 0 };
+    const today = todayISO();
     for (const r of filtered) {
       const amt = r.importePendientePesos;
       total += amt;
-      const overdue = r.diasVencida > 0;
+      const due = dueDateForRecord(r);
+      const overdue = isCxpOverdue(r.diasVencida, due, today);
       if (overdue) vencido += amt;
       else porVencer += amt;
-      const due = dueDateForRecord(r);
       if (overdue || (due !== null && due <= endOfMonth)) {
         aPagarEsteMes += amt;
         porPrioridad[r.paymentPriority] += amt;
@@ -788,9 +792,10 @@ const CXPDashboard = ({
     const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
     const endOfMonth = `${lastDay.getFullYear()}-${String(lastDay.getMonth() + 1).padStart(2, '0')}-${String(lastDay.getDate()).padStart(2, '0')}`;
     const map = new Map<string, { nombre: string; noProveedor: string; total: number; vencido: number; count: number; priority: PaymentPriority; priorityRank: number }>();
+    const today = todayISO();
     for (const r of filtered) {
-      const overdue = r.diasVencida > 0;
       const due = dueDateForRecord(r);
+      const overdue = isCxpOverdue(r.diasVencida, due, today);
       if (!(overdue || (due !== null && due <= endOfMonth))) continue;
       const key = r.noProveedor || r.nombre || 'SIN';
       let e = map.get(key);
@@ -880,6 +885,28 @@ const CXPDashboard = ({
     ...(searchTerm ? [{ key: 'search', label: `Busqueda: ${searchTerm}`, onRemove: () => setSearchTerm('') }] : []),
   ];
 
+  // CSV of the currently filtered rows — same csvDate (dd/mm/aaaa) + BOM
+  // convention as the other Egresos tabs (Compras/Pagos/Pasivo), which CXP
+  // was the only one missing.
+  const handleExportCsv = () => {
+    const rows = filtered.map((r) => ({
+      Empresa: ciaName(r.cia),
+      'No. Proveedor': r.noProveedor,
+      Proveedor: r.nombre,
+      'No. Factura': r.noFactura,
+      'Fecha Factura': csvDate(r.fechaFactura),
+      'Fecha Vence': csvDate(r.fechaVence),
+      'Días Vencida': r.diasVencida,
+      Moneda: r.moneda,
+      'Importe Bruto (MXN)': Math.round(r.importeBrutoPesos),
+      'Importe Pendiente (MXN)': Math.round(r.importePendientePesos),
+      'Clasificación Proveedor': r.clasificacionProveedor,
+      'Estado Pago': r.edoPago,
+      'Cond. Pago': r.condPago,
+    }));
+    downloadFile(toCSV(rows), 'cxp-antiguedad-saldos.csv');
+  };
+
   /* ── Render ── */
   return (
     <div className="relative space-y-4">
@@ -904,6 +931,15 @@ const CXPDashboard = ({
             <Receipt className="w-3.5 h-3.5" />
             {filtered.length.toLocaleString()} facturas
           </div>
+
+          <button
+            onClick={handleExportCsv}
+            disabled={filtered.length === 0}
+            className="flex items-center gap-1 text-[12px] text-[var(--gray-400)] hover:text-[var(--primary)] disabled:opacity-40 transition bg-[var(--gray-50)] rounded-full px-3 py-1.5"
+            title="Exportar las facturas filtradas a CSV"
+          >
+            <Download className="w-3.5 h-3.5" /> Exportar CSV
+          </button>
 
           {hasDrill && (
             <button onClick={clearAllFilters} className="text-[12px] text-[var(--gray-400)] hover:text-[var(--primary)] flex items-center gap-1 transition">

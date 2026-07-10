@@ -212,7 +212,7 @@ export default function CashFlowDetail({
 
   return (
     <div style={{ fontFamily: "'Roboto', sans-serif" }} className="space-y-5">
-      <PageHeader title="Flujo de efectivo" />
+      <PageHeader title="Flujo Neto" />
 
       {/* Alerta de saldo mínimo negativo */}
       {minBalance < 0 && minBalanceDate && (

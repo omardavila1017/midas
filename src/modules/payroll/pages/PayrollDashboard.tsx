@@ -325,6 +325,19 @@ export default function PayrollDashboard({
         }
       />
 
+      {/* Puente hacia el flujo de caja: Nómina es análisis sobre TRESS, no el
+          egreso de caja. Aclara dónde vive ese egreso para que el módulo no
+          quede como una isla (audit #23). */}
+      <div
+        className="rounded-md px-4 py-2.5 text-[12px] leading-relaxed"
+        style={{ background: 'var(--gray-50)', border: '1px solid var(--gray-200)', color: 'var(--gray-600)' }}
+      >
+        Este módulo es <strong>análisis de nómina sobre TRESS</strong> (conceptos, tendencia,
+        anomalías). El <strong>egreso de caja</strong> de la nómina —lo que sale del banco— se
+        ve en <strong>Egresos → Planeación / Proyección</strong>, donde entra al flujo junto con
+        el resto de los pagos.
+      </div>
+
       {/* Filtros */}
       <section
         className="rounded-lg border p-4"

@@ -33,7 +33,7 @@ import {
   Provider,
 } from '../domain/types';
 import type { CXPRecord } from '../domain/persistence';
-import { todayISO } from '../formatters';
+import { todayISO, fmtCurrency as fmtCurrencyBase, fmtCompact as fmtCompactBase } from '../formatters';
 
 interface Props {
   provider: Provider;
@@ -41,17 +41,12 @@ interface Props {
   onClose: () => void;
 }
 
-const fmtCurrency = (n: number | null | undefined): string => {
-  if (n == null || !Number.isFinite(n)) return '—';
-  return new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN', maximumFractionDigits: 0 }).format(n);
-};
+// Single source of truth (formatters.ts) with the module's null guard kept.
+const fmtCurrency = (n: number | null | undefined): string =>
+  n == null || !Number.isFinite(n) ? '—' : fmtCurrencyBase(n);
 
-const fmtCompact = (n: number | null | undefined): string => {
-  if (n == null || !Number.isFinite(n)) return '—';
-  if (Math.abs(n) >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
-  if (Math.abs(n) >= 1_000) return `$${(n / 1_000).toFixed(0)}K`;
-  return `$${Math.round(n)}`;
-};
+const fmtCompact = (n: number | null | undefined): string =>
+  n == null || !Number.isFinite(n) ? '—' : fmtCompactBase(n);
 
 const fmtDate = (iso?: string): string => {
   if (!iso) return '—';

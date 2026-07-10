@@ -26,6 +26,8 @@ import {
 } from '../services/accessControlStore';
 import UsersTable from '../components/UsersTable';
 import SetPasswordModal from '../components/SetPasswordModal';
+import AccessNotEnforcedBanner from '../components/AccessNotEnforcedBanner';
+import LocalRegistryNote from '../components/LocalRegistryNote';
 import { adminSetPassword, sendUserPasswordReset } from '../../../services/authApi';
 import { isLocalAuthEnabled } from '../../../services/localAuth';
 import { useToast } from '../../../components/Toast';
@@ -128,6 +130,9 @@ export default function UsersDashboard() {
           </span>
         }
       />
+
+      <AccessNotEnforcedBanner />
+      <LocalRegistryNote />
 
       <div
         className="flex items-start gap-2.5 rounded-[var(--radius-md)] px-4 py-3 text-[12px]"

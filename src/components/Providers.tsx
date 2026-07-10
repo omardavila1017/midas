@@ -21,6 +21,7 @@ import ProviderDetailModal from './ProviderDetailModal';
 import type { CXPRecord } from '../domain/persistence';
 import { lookupRecentSpend, type ProviderSpendIndex } from '../domain/providerRecentSpend';
 import { toCSV, downloadFile } from '../utils/export';
+import { fmtCurrency as fmtCurrencyBase } from '../formatters';
 
 /**
  * Catálogo de Proveedores — pestaña Catálogos → Proveedores.
@@ -89,10 +90,9 @@ type CategoryFilter = 'all' | string;
 
 const bucketOf = (p: Provider): ScoreBucket => p.clasificacionAutomatica ?? 'BAJO';
 
-const fmtCurrency = (n: number | null | undefined): string => {
-  if (n == null || !Number.isFinite(n)) return '—';
-  return new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN', maximumFractionDigits: 0 }).format(n);
-};
+// Single source of truth (formatters.ts) with the module's null guard kept.
+const fmtCurrency = (n: number | null | undefined): string =>
+  n == null || !Number.isFinite(n) ? '—' : fmtCurrencyBase(n);
 
 export default function Providers({ providers, cxpRecords, spendIndex, onReplace, onAdd, onUpdate: _onUpdate, onDelete: _onDelete }: Props) {
   void _onUpdate; void _onDelete;

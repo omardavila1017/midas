@@ -60,7 +60,7 @@ describe('<FinancialPlanningDashboard />', () => {
 
     await flushPlanningWarmup();
     expect(screen.getByText('Planeación Financiera')).toBeTruthy();
-    expect(screen.getAllByText('Escenario Base').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Real a hoy').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Escenario Aprobado').length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: /Nueva propuesta/i })).toBeTruthy();
   });

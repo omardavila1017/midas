@@ -147,7 +147,7 @@ export const COMPRA_ESTADO_LABEL: Record<CompraEstado, string> = {
   cerradaWorkflow: 'Cerrada en JDE',
   // "Por pagar" confundía: la mercancía ya entró pero NO hay factura — es el
   // "pasivo por distribuir" de JDE, no una cuenta por pagar (ver Compras.tsx).
-  porPagar: 'Pendiente factura',
+  porPagar: 'Pasivo por distribuir',
   sinEntrada: 'Sin entrada',
 };
 
@@ -178,7 +178,7 @@ export type ComprasOrderEstado =
 
 export const COMPRA_ORDER_ESTADO_LABEL: Record<ComprasOrderEstado, string> = {
   pendienteRecibir: 'Pendiente de recibir',
-  pendienteFactura: 'Pendiente factura',
+  pendienteFactura: 'Pasivo por distribuir',
   facturada: 'Facturada',
   cerrada: 'Cerrada en JDE',
   cancelada: 'Cancelada',
@@ -325,7 +325,7 @@ export function comprasOrdersToCsv(orders: ComprasOrderSummary[]): string {
   const header = [
     'Compañía', 'No. proveedor', 'Proveedor', 'OC', 'Líneas', 'Estado',
     'Importe total MXN', 'Recibido MXN', 'Facturado MXN',
-    'Pendiente por recibir MXN', 'Pendiente factura MXN',
+    'Pendiente por recibir MXN', 'Pasivo por distribuir MXN',
     'Fecha pedido', 'Antigüedad (días)', 'Pago proyectado', 'Categoría', 'Fuente',
   ];
   const fuente = SOURCE_CATALOG.compras.label;

@@ -1256,8 +1256,8 @@ const commitQuickAdjustment = useCallback((movement: FinancialMovement, kind: 'S
             { label: 'Meses transcurridos', value: String(ytd.monthsElapsed) },
             { label: 'Margen neto', value: `${(ytd.margenYtd * 100).toFixed(1)}%`, valueColor: toneByDelta(ytd.margenYtd) },
           ] : undefined}
-          onClick={() => goTo({ tab: 'collections', focus: 'ingresos-ytd' })}
-          navHint="Ver detalle de cobranza"
+          onClick={() => goTo({ tab: 'netflow', focus: 'ingresos-ytd' })}
+          navHint="Ver Flujo Neto (caja real)"
         />
         <KpiCard
           label={`Egresos operativos YTD ${currentYear}`}
@@ -1269,8 +1269,8 @@ const commitQuickAdjustment = useCallback((movement: FinancialMovement, kind: 'S
             { label: 'Vs Ingresos', value: `${ytd.ingresosYtd > 0 ? ((ytd.egresosYtd / ytd.ingresosYtd) * 100).toFixed(1) : '—'}%` },
             { label: 'Flujo neto YTD', value: fmtCompact(ytd.flujoNetoYtd), valueColor: toneByDelta(ytd.flujoNetoYtd) },
           ] : undefined}
-          onClick={() => goTo({ tab: 'cxp', focus: 'egresos-ytd' })}
-          navHint="Ver Antigüedad de Saldo"
+          onClick={() => goTo({ tab: 'netflow', focus: 'egresos-ytd' })}
+          navHint="Ver Flujo Neto (caja real)"
         />
         <KpiCard
           label="Caja actual"

@@ -21,6 +21,8 @@ import {
   type ManagedUser,
 } from '../services/accessControlStore';
 import PermissionToggle from '../components/PermissionToggle';
+import AccessNotEnforcedBanner from '../components/AccessNotEnforcedBanner';
+import LocalRegistryNote from '../components/LocalRegistryNote';
 import { useToast } from '../../../components/Toast';
 
 export default function PermissionsDashboard() {
@@ -101,6 +103,9 @@ export default function PermissionsDashboard() {
           subtitle="Elige un usuario y prende o apaga su acceso a cada módulo."
         />
       </div>
+
+      <AccessNotEnforcedBanner />
+      <LocalRegistryNote />
 
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-[280px_1fr]">
         {/* Lista de usuarios */}

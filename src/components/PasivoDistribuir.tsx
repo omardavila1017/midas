@@ -199,7 +199,7 @@ export default function PasivoDistribuir({
                   <Th>OC</Th>
                   <Th align="right">Importe (MXN)</Th>
                   <Th>Recepción</Th>
-                  <Th align="right">Antigüedad</Th>
+                  <Th align="right">Antigüedad (recepción)</Th>
                   <Th>Categoría</Th>
                 </tr>
               </thead>

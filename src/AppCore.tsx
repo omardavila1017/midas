@@ -381,24 +381,32 @@ const RECONCILIATION_TABS = new Set<TabId>([
 type DatasetKey = 'cxp' | 'cobranza' | 'compras' | 'pagos' | 'nomina' | 'rol' | 'banks' | 'auxiliar';
 type DatasetStatus = 'idle' | 'loading' | 'ready' | 'stale' | 'error';
 
+// Datasets each tab's component actually consumes. This is the REAL data
+// contract: allowedDatasets (permission gating) is the union over permitted
+// tabs, so a tab that under-declares leaves scoped users with silently
+// incomplete numbers (taxes/concurso/pagos without banks → IVA=$0, empty Pagos).
+// Keep in sync with each tab's render props below.
 const TAB_DATASETS: Partial<Record<TabId, DatasetKey[]>> = {
   netflow: ['banks'],
   bancos: ['banks'],
   cxp: ['cxp', 'pagos'],
-  concursoMercantil: ['cxp'],
+  concursoMercantil: ['cxp', 'banks'],
   venta: ['cobranza', 'rol'],
   collections: ['cobranza', 'banks', 'rol'],
-  fideicomiso: ['cobranza', 'banks'],
+  fideicomiso: ['banks'],
   compras: ['compras'],
   pasivoDistribuir: ['compras'],
-  pagos: ['pagos'],
+  pagos: ['pagos', 'banks', 'compras'],
   payroll: ['nomina'],
   financialProjection: ['cxp', 'cobranza', 'compras', 'pagos', 'nomina', 'rol', 'auxiliar'],
   financialPlanning: ['cxp', 'cobranza', 'compras', 'pagos', 'nomina', 'rol', 'auxiliar'],
-  taxes: ['cxp', 'cobranza', 'compras', 'pagos', 'nomina', 'auxiliar'],
+  taxes: ['cxp', 'cobranza', 'compras', 'pagos', 'nomina', 'auxiliar', 'banks'],
   providers: [],
   clients: [],
-  kpisObjectives: ['cxp', 'cobranza', 'banks'],
+  // Declares everything KpisObjectivesDashboard consumes (auxiliar/rol/compras/
+  // nomina feed the auto-calculated KPIs) so a kpis-scoped user gets complete
+  // numbers, not just the admin who happens to hold every permission.
+  kpisObjectives: ['cxp', 'cobranza', 'banks', 'compras', 'nomina', 'rol', 'auxiliar'],
 };
 
 const KEEP_ALIVE_TABS = new Set<TabId>(['financialProjection', 'financialPlanning']);

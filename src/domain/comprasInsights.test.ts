@@ -133,8 +133,8 @@ describe('compraEstado', () => {
     expect(compraEstado(compra({}))).toBe('sinEntrada');
   });
 
-  it('renombra "Por pagar" → "Pendiente factura" (es pasivo por distribuir, no CXP)', () => {
-    expect(COMPRA_ESTADO_LABEL.porPagar).toBe('Pendiente factura');
+  it('renombra "Por pagar" → "Pasivo por distribuir" (unificado con el tab dedicado)', () => {
+    expect(COMPRA_ESTADO_LABEL.porPagar).toBe('Pasivo por distribuir');
   });
 });
 
@@ -183,9 +183,9 @@ describe('buildComprasByOrder', () => {
     const csv = comprasOrdersToCsv(orders);
     const [header, row] = csv.split('\n');
     expect(header).toContain('Pendiente por recibir MXN');
-    expect(header).toContain('Pendiente factura MXN');
+    expect(header).toContain('Pasivo por distribuir MXN');
     expect(row).toContain('OC-CSV');
-    expect(row).toContain('Pendiente factura'); // estado pendienteFactura
+    expect(row).toContain('Pasivo por distribuir'); // estado pendienteFactura
   });
 });
 

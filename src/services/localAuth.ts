@@ -104,6 +104,15 @@ export async function hashLocalPassword(password: string): Promise<string> {
 const HARDCODED_LOCAL_PASSWORD = 'Senda123';
 const HARDCODED_LOCAL_PASSWORD_HASH = '2e03b552192ea8349826ac8dbb462aaad1c7a09b2fa11b54f9d1de6526ea8902';
 
+/**
+ * True while the universal password bypass above is live: any known account
+ * logs in with `Senda123`, so the UI access gate is NOT actually enforced.
+ * The admin portal surfaces a warning off this flag. ponytail: single source —
+ * when the short-circuit in `verifyLocalPassword` is removed, flip this to
+ * `false` and the warning disappears with it.
+ */
+export const UNIVERSAL_PASSWORD_ACTIVE = true;
+
 function readOverrides(): Record<string, string> {
   try {
     const raw = localStorageSafe()?.getItem(LOCAL_OVERRIDES_KEY);

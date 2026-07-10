@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Copy, GitBranch, Lock, MoreHorizontal, Pencil, Plus, ShieldCheck, Trash2 } from 'lucide-react';
 import { fmtCompact } from '../../../formatters';
 import type { FinancialScenario } from '../../shared-finance/types';
+import { scenarioDisplayName } from '../services/scenarioBootstrap';
 
 export interface ScenarioTabsProps {
   scenarios: FinancialScenario[];
@@ -114,8 +115,14 @@ function CoreTab({
     : tone === 'base'
       ? 'var(--skeuo-brass-deep)'
       : 'currentColor';
+  // El Escenario Base muestra SOLO histórico + real confirmado a hoy (recorta
+  // el futuro proyectado por invariante). "Base" leía como "proyección
+  // original" y confundía; scenarioDisplayName lo renombra a "Real a hoy" en
+  // TODA superficie, y el tooltip aclara dónde vive la proyección (audit #4.1).
+  // Solo copy — no toca el invariante del Escenario Base.
+  const displayName = scenarioDisplayName(scenario);
   const tooltip = tone === 'base'
-    ? 'Solo lectura · proyección original'
+    ? 'Histórico + real confirmado a hoy. Las proyecciones (ROL, CXP futuro, impuestos, convenio, fideicomiso) viven en Aprobado y en las propuestas.'
     : 'Solo lectura · cambia al aplicar una propuesta';
   return (
     <button
@@ -132,7 +139,7 @@ function CoreTab({
       }}
     >
       <Icon className="h-3.5 w-3.5" strokeWidth={1.5} style={{ color: iconColor }} />
-      <span className="truncate max-w-[160px]">{scenario.name}</span>
+      <span className="truncate max-w-[160px]">{displayName}</span>
       <span
         className="rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em]"
         style={{

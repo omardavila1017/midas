@@ -98,7 +98,7 @@ export const PERSONAL_NOMINA_BUCKET = 'Personal y nómina';
  * que vienen de CXP / pagoProveedor ("Nóminas", "Reembolsos").
  */
 const MACRO_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
-  { pattern: /\bint\.?\s*cm\b|concurso\s*merc/i, label: 'Int. CM' },
+  { pattern: /\bint\.?\s*cm\b|concurso\s*merc/i, label: 'Intereses Concurso Mercantil' },
   // Mantenimiento de CENTRALES (edificios/estaciones) antes que Flota: sin
   // esta entrada, `mantenim` (Flota) se comía "MANTENIMIENTO CENTRALES" y
   // "Mtto central" caía sin bucket.

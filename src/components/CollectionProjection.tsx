@@ -1658,7 +1658,7 @@ function CobranzaRealCalendar({
                   <div className="mt-1 space-y-0.5">
                     {dayMatchedTotal > 0 && (
                       <div
-                        className="rounded-md bg-[#dbeafe] text-[#1d4ed8] px-1.5 py-0.5 text-[11px] font-bold tabular-nums w-fit"
+                        className="rounded-md bg-[#dbeafe] text-[#1d4ed8] dark:bg-[#1e3a8a]/50 dark:text-[#93c5fd] px-1.5 py-0.5 text-[11px] font-bold tabular-nums w-fit"
                         title="Ingreso real (cruzado con banco o JDE pagada)"
                       >
                         Ing. {fmtCompact(dayMatchedTotal)}
@@ -1666,7 +1666,7 @@ function CobranzaRealCalendar({
                     )}
                     {dayFederalTotal > 0 && (
                       <div
-                        className="rounded-md bg-[#800020]/10 text-[#800020] px-1.5 py-0.5 text-[11px] font-bold tabular-nums w-fit"
+                        className="rounded-md bg-[#800020]/10 text-[#800020] dark:text-[#f0a0b0] px-1.5 py-0.5 text-[11px] font-bold tabular-nums w-fit"
                         title="Ingreso Federal (venta directa a banco, sin factura JDE) — suma al ingreso del día"
                       >
                         Fed. {fmtCompact(dayFederalTotal)}
@@ -1674,7 +1674,7 @@ function CobranzaRealCalendar({
                     )}
                     {dayUnmatchedTotal > 0 && (
                       <div
-                        className="rounded-md bg-[#fef3c7] text-[#b45309] px-1.5 py-0.5 text-[11px] font-semibold tabular-nums w-fit"
+                        className="rounded-md bg-[var(--warning-muted)] text-[var(--warning)] px-1.5 py-0.5 text-[11px] font-semibold tabular-nums w-fit"
                         title="Ingreso real en banco sin factura JDE cruzada — por identificar. No entra al cruce ('Ing.') ni al Δ."
                       >
                         S/F {fmtCompact(dayUnmatchedTotal)}
@@ -1682,7 +1682,7 @@ function CobranzaRealCalendar({
                     )}
                     {dayProjectedTotal > 0 && (
                       <div
-                        className="rounded-md bg-[#ede9fe] text-[#5b21b6] px-1.5 py-0.5 text-[11px] font-semibold tabular-nums w-fit"
+                        className="rounded-md bg-[#ede9fe] text-[#5b21b6] dark:bg-[#4c1d95]/50 dark:text-[#c4b5fd] px-1.5 py-0.5 text-[11px] font-semibold tabular-nums w-fit"
                         title="Proyección desde ROL ejecutado / facturas JDE abiertas"
                       >
                         Proy. {fmtCompact(dayProjectedTotal)}
@@ -1692,8 +1692,8 @@ function CobranzaRealCalendar({
                       <div
                         className={`rounded-md px-1.5 py-0.5 text-[11px] font-semibold tabular-nums w-fit ${
                           dayDiff >= 0
-                            ? 'bg-[#dcfce7] text-[#15803d]'
-                            : 'bg-[#fee2e2] text-[#b91c1c]'
+                            ? 'bg-[var(--success-muted)] text-[var(--success)]'
+                            : 'bg-[var(--danger-muted)] text-[var(--danger)]'
                         }`}
                         title="Diferencia entre ingreso real y proyección"
                       >

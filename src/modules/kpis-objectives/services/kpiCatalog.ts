@@ -4,6 +4,7 @@ import type {
   CobranzaRecord,
 } from '../../../services/jdeTypes';
 import type { CXPRecord } from '../../../domain/persistence';
+import { isCxpOverdue } from '../../../domain/cxpOverdue';
 import {
   currentBankStatements,
   latestStatementDate,
@@ -114,7 +115,7 @@ export const SYSTEM_KPIS: SystemKpiDescriptor[] = [
     label: 'Liquidez inmediata',
     unit: 'ratio',
     periodLabel: 'Hoy',
-    description: 'Caja actual dividida entre CXP pendiente.',
+    description: 'Caja actual dividida entre CXP vencida (capacidad de cubrir lo ya vencido).',
   },
   {
     id: 'cobertura_caja_cxc',
@@ -383,7 +384,7 @@ function computeDerivedTotals(inputs: KpiInputs): DerivedTotals {
     if (pending <= 0) continue;
     cxpPendiente += pending;
     const dueDate = (record.fechaVence || record.fechaProgramacionPago || '').slice(0, 10);
-    const isOverdue = (Number(record.diasVencida) || 0) > 0 || (!!dueDate && dueDate < inputs.today);
+    const isOverdue = isCxpOverdue(record.diasVencida, dueDate, inputs.today);
     if (isOverdue) {
       cxpVencida += pending;
     } else if (dueDate && dueDate >= inputs.today && dueDate <= due30End) {
@@ -564,11 +565,19 @@ export function evaluateSystemKpi(
       if (!totals.hasCxpRecords) return empty('Sin CXP cargada');
       return { value: totals.cxpPendiente, deltaPrev: null };
     case 'cobertura_cxp_caja':
-    case 'liquidez_inmediata':
       if (!totals.hasBankBalanceBase) return empty('Sin saldo bancario');
       if (!totals.hasCxpRecords || totals.cxpPendiente <= 0) return empty('Sin CXP pendiente');
       return {
         value: (totals.cajaActual ?? 0) / totals.cxpPendiente,
+        deltaPrev: null,
+      };
+    case 'liquidez_inmediata':
+      // Distinta a cobertura_cxp_caja: mide la caja contra lo YA VENCIDO, no
+      // contra todo el pendiente — "¿alcanza para pagar lo que ya debía?".
+      if (!totals.hasBankBalanceBase) return empty('Sin saldo bancario');
+      if (!totals.hasCxpRecords || totals.cxpVencida <= 0) return empty('Sin CXP vencida');
+      return {
+        value: (totals.cajaActual ?? 0) / totals.cxpVencida,
         deltaPrev: null,
       };
     case 'cobertura_caja_cxc':

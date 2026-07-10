@@ -67,8 +67,8 @@ export default function RolCobranzaPanel({ rolRecords, cobranzaRecords, cobranza
           tone="var(--primary)"
         />
         <Kpi
-          label="Huérfano"
-          hint="Marcado facturado sin match en cobranza ni pagos"
+          label="Sin cruce"
+          hint="Factura marcada como facturada sin viaje ROL asociado (ni match en cobranza/pagos)"
           trips={cross.invoicedOrphans.length}
           amount={orphanAmount}
           tone="var(--warning)"
@@ -92,7 +92,7 @@ export default function RolCobranzaPanel({ rolRecords, cobranzaRecords, cobranza
                     <th className="px-4 py-2 font-medium">Cliente</th>
                     <th className="px-4 py-2 font-medium text-right">Facturado</th>
                     <th className="px-4 py-2 font-medium text-right">Predicho</th>
-                    <th className="px-4 py-2 font-medium text-right">Huérfano</th>
+                    <th className="px-4 py-2 font-medium text-right">Sin cruce</th>
                   </tr>
                 </thead>
                 <tbody>

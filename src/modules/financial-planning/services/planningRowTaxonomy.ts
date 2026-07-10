@@ -60,7 +60,7 @@ export const OUTFLOW_BUCKET_ORDER = [
   'Inmuebles y rentas',
   'Personal y nómina',
   'Servicios',
-  'Int. CM',
+  'Intereses Concurso Mercantil',
   INTERNAL_GROUP_BUCKET,
   UNCATEGORIZED_PROVIDER_BUCKET,
   'Impuestos',

@@ -1178,6 +1178,7 @@ function ProviderAuditDetail({
             label="Huérfanos"
             value={`${rollup.pagosOrphan}`}
             accent={rollup.pagosOrphan > 0 ? 'warning' : 'neutral'}
+            hint="Pago sin conciliar (revisar): hay estado de cuenta cargado pero el cargo no cruzó. NO es falta de datos — eso es 'Sin edo. de cuenta'."
           />
           {rollup.pagosSinBanco > 0 && (
             <MiniStat label="Sin edo. de cuenta" value={`${rollup.pagosSinBanco}`} />
@@ -1629,17 +1630,19 @@ function MiniStat({
   label,
   value,
   accent = 'neutral',
+  hint,
 }: {
   label: string;
   value: string;
   accent?: 'neutral' | 'success' | 'warning';
+  hint?: string;
 }) {
   const color =
     accent === 'success' ? 'var(--success)' :
     accent === 'warning' ? 'var(--warning)' :
     'var(--gray-950)';
   return (
-    <div className="bg-white border border-[var(--gray-200)] rounded-[var(--radius-sm)] px-3 py-2">
+    <div className="bg-white border border-[var(--gray-200)] rounded-[var(--radius-sm)] px-3 py-2" title={hint}>
       <div className="text-[10px] font-medium uppercase tracking-[0.06em] text-[var(--gray-400)]">
         {label}
       </div>

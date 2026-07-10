@@ -70,7 +70,7 @@ describe('generalizeCategoria — cobertura del vocabulario real', () => {
     expect(generalizeCategoria('REFACCIONARIO')).toBe('Flota');
     expect(generalizeCategoria('RENTAS')).toBe('Inmuebles y rentas');
     expect(generalizeCategoria('TECNOLOGIA Y SOPORTE')).toBe('Proveedor TI');
-    expect(generalizeCategoria('INT CM')).toBe('Int. CM');
+    expect(generalizeCategoria('INT CM')).toBe('Intereses Concurso Mercantil');
     expect(generalizeCategoria('Nóminas')).toBe(PERSONAL_NOMINA_BUCKET);
     expect(generalizeCategoria('SEGUROS Y FIANZAS')).toBe('Servicios');
     expect(generalizeCategoria('INSUMOS ALIMENTICIOS')).toBe(PERSONAL_NOMINA_BUCKET);

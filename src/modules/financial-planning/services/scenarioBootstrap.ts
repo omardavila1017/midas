@@ -11,6 +11,17 @@ import { LEGACY_SCENARIO_KINDS } from '../../shared-finance/types';
 export const BASE_SCENARIO_ID = 'base';
 export const APPROVED_SCENARIO_ID = 'approved';
 
+/**
+ * Nombre visible del escenario. El Escenario Base se muestra como "Real a hoy":
+ * solo contiene histórico + real confirmado (recorta el futuro por invariante),
+ * y "Base" leía como "proyección original" y confundía (audit #4.1). Copy-only:
+ * no cambia el `id` ni el `name` almacenado. Usarlo en TODA superficie que
+ * muestre el nombre del escenario para no re-introducir la divergencia.
+ */
+export function scenarioDisplayName(scenario: { id: string; name: string }): string {
+  return scenario.id === BASE_SCENARIO_ID ? 'Real a hoy' : scenario.name;
+}
+
 export interface BootstrapInput {
   storedScenarios: FinancialScenario[];
   storedAdjustments: FinancialAdjustment[];

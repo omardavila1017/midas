@@ -160,7 +160,11 @@ export function DataHealthPanel({
             </p>
             <div className="flex flex-col gap-1.5">
               {datasets.map((d) => {
-                const meta = STATUS_META[d.status];
+                // Honesto: 'Al día' con lastSync 'Nunca' = el dataset nunca se
+                // cargó (permiso faltante, fetch temprano, o sin datos). No lo
+                // pintes verde — muéstralo como 'Sin cargar'.
+                const effectiveStatus = d.status === 'ready' && !d.lastSync ? 'idle' : d.status;
+                const meta = STATUS_META[effectiveStatus];
                 const dsGaps = gapsByDataset.get(d.key) ?? [];
                 return (
                   <div

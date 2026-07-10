@@ -59,7 +59,7 @@ const OUTFLOW_VISUALS: Record<string, BucketVisual> = {
   'Inmuebles y rentas': { Icon: Building2, color: '#0D9488' },
   'Personal y nómina': { Icon: Users, color: '#7C3AED' },
   Servicios: { Icon: Wrench, color: '#0891B2' },
-  'Int. CM': { Icon: Scale, color: '#E11D48' },
+  'Intereses Concurso Mercantil': { Icon: Scale, color: '#E11D48' },
   'Empresas del grupo': { Icon: Building2, color: 'var(--gray-400)' },
   'Proveedores sin categoría': { Icon: Package, color: 'var(--gray-400)' },
   Impuestos: { Icon: Receipt, color: 'var(--danger)' },

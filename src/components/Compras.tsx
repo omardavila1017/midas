@@ -464,9 +464,9 @@ export default function Compras({
           />
           <KpiCard
             icon={FileText}
-            label="Pendiente factura"
+            label="Pasivo por distribuir"
             value={fmtCurrency(ocKpis.pendienteFactura)}
-            sub="Recibido sin factura · pasivo por distribuir"
+            sub="Recibido sin factura"
             tone="warning"
           />
           <KpiCard
@@ -488,7 +488,7 @@ export default function Compras({
           />
           <KpiCard
             icon={FileText}
-            label="Pendiente factura"
+            label="Pasivo por distribuir"
             value={fmtCurrency(kpis.pendientePago)}
             sub="Recibidas, sin factura aún"
             tone="warning"
@@ -607,7 +607,7 @@ export default function Compras({
           >
             <option value="backlog">Backlog (pendiente)</option>
             <option value="pendienteRecibir">Pendiente de recibir</option>
-            <option value="pendienteFactura">Pendiente factura (pasivo)</option>
+            <option value="pendienteFactura">Pasivo por distribuir</option>
             <option value="facturada">Facturadas</option>
             <option value="cerrada">Cerradas en JDE</option>
             <option value="cancelada">Canceladas</option>
@@ -670,7 +670,7 @@ export default function Compras({
                   <Th align="right">Recibido</Th>
                   <Th align="right">Pend. recibir</Th>
                   <Th align="right">Pend. factura</Th>
-                  <Th>Antigüedad</Th>
+                  <Th>Antigüedad (pedido)</Th>
                   <Th>Estado</Th>
                 </tr>
               </thead>
@@ -1245,7 +1245,7 @@ function EstadoChip({ estado, edoSig }: { estado: ReturnType<typeof compraEstado
     case 'cerradaWorkflow':
       return <StatusChip style={STATUS_CERRADA_WF} icon={Archive} title={title}>Cerrada en JDE</StatusChip>;
     case 'porPagar':
-      return <StatusChip style={STATUS_POR_PAGAR} icon={FileText} title={title}>Pendiente factura</StatusChip>;
+      return <StatusChip style={STATUS_POR_PAGAR} icon={FileText} title={title}>Pasivo por distribuir</StatusChip>;
     default:
       return <StatusChip style={STATUS_SIN_ENTRADA} icon={Calendar} title={title}>Sin entrada</StatusChip>;
   }
