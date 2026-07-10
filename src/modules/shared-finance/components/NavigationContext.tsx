@@ -24,7 +24,13 @@ export type AppTabId =
   | 'bancos'
   | 'kpisObjectives'
   | 'users'
-  | 'permisos';
+  | 'permisos'
+  // TEMPORAL fuentes-datos (2026-07-10): sub-tabs del tab de diagnóstico
+  // "Fuentes y Datos" (src/modules/data-sources/). Quitar al retirar el módulo.
+  | 'fuentesBancos'
+  | 'fuentesJde'
+  | 'fuentesTress'
+  | 'fuentesRol';
 
 /**
  * Deep-link target for a cross-module jump. The `tab` is required; `focus`

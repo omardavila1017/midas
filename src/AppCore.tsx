@@ -98,6 +98,9 @@ const KpisObjectivesDashboard = lazy(() => import('./modules/kpis-objectives/pag
 const UsersDashboard = lazy(() => import('./modules/users/pages/UsersDashboard'));
 const PermissionsDashboard = lazy(() => import('./modules/users/pages/PermissionsDashboard'));
 const SalesCalendarDashboard = lazy(() => import('./modules/sales/pages/SalesCalendarDashboard'));
+// TEMPORAL fuentes-datos (2026-07-10): dashboard del tab de diagnóstico
+// "Fuentes y Datos". Quitar junto con src/modules/data-sources/.
+const DataSourcesDashboard = lazy(() => import('./modules/data-sources/pages/DataSourcesDashboard'));
 import ErrorBoundary from './components/ErrorBoundary';
 import MidasSplash, { type BootTask, type BootTaskStatus } from './components/MidasSplash';
 import ChangePasswordModal from './components/ChangePasswordModal';
@@ -121,6 +124,7 @@ import {
   Target, KeyRound,
   ShoppingCart, SlidersHorizontal,
   Menu, X, Activity,
+  Database, Truck,
   type LucideIcon,
 } from 'lucide-react';
 import { filterActiveCompanies, matchesExclusionIdentity } from './domain/companyExclusion';
@@ -408,12 +412,25 @@ const TAB_DATASETS: Partial<Record<TabId, DatasetKey[]>> = {
   // nomina feed the auto-calculated KPIs) so a kpis-scoped user gets complete
   // numbers, not just the admin who happens to hold every permission.
   kpisObjectives: ['cxp', 'cobranza', 'banks', 'compras', 'nomina', 'rol', 'auxiliar'],
+  // TEMPORAL fuentes-datos: cada sub-tab declara solo lo que su vista lee,
+  // para no obligar a un usuario con un solo sub-tab a bajar todo el lake.
+  fuentesBancos: ['banks'],
+  fuentesJde: ['cxp', 'cobranza', 'compras', 'pagos', 'banks', 'auxiliar'],
+  fuentesTress: ['nomina'],
+  fuentesRol: ['rol'],
 };
 
 const KEEP_ALIVE_TABS = new Set<TabId>(['financialProjection', 'financialPlanning']);
 
 
-type SectionId = 'catalogos' | 'porPagar' | 'cobranza' | 'proyeccion' | 'objetivos' | 'admin';
+// TEMPORAL fuentes-datos (2026-07-10): la sección `fuentes` es un tab de
+// diagnóstico de frescura por fuente (Bancos/JDE/TRESS/ROL). Se retira
+// completo poniendo el flag en `false` (lo oculta de la navegación) y después
+// borrando los puntos marcados "TEMPORAL fuentes-datos" en este archivo,
+// `types.ts`, `NavigationContext.tsx`, `appTabs.ts` y `src/modules/data-sources/`.
+const FUENTES_DATOS_TEMP_ENABLED = true;
+
+type SectionId = 'catalogos' | 'porPagar' | 'cobranza' | 'proyeccion' | 'objetivos' | 'fuentes' | 'admin';
 
 /**
  * Section + tab order is the canonical sidebar ordering, grouped by money flow.
@@ -434,6 +451,10 @@ const SECTIONS: { id: SectionId; label: string; icon: LucideIcon; description: s
   { id: 'porPagar',   label: 'Egresos',             icon: CreditCard, description: 'CXP, órdenes, pagos, nómina e impuestos' },
   { id: 'catalogos',  label: 'Catálogos',           icon: BookUser,   description: 'Clientes, proveedores y bancos' },
   { id: 'objetivos',  label: 'Objetivos',           icon: Target,     description: 'KPIs y metas con seguimiento' },
+  // TEMPORAL fuentes-datos: se quita de la navegación con el flag.
+  ...(FUENTES_DATOS_TEMP_ENABLED
+    ? [{ id: 'fuentes' as SectionId, label: 'Fuentes y Datos', icon: Database, description: 'Qué tan actualizada está cada fuente' }]
+    : []),
   { id: 'admin',      label: 'Administración',      icon: UserCog,    description: 'Usuarios y permisos' },
 ];
 
@@ -465,6 +486,13 @@ const SUB_TABS: Record<SectionId, { id: TabId; label: string; icon: LucideIcon }
   objetivos: [
     { id: 'kpisObjectives', label: 'KPIs y Objetivos', icon: Target },
   ],
+  // TEMPORAL fuentes-datos: un sub-tab por fuente externa.
+  fuentes: [
+    { id: 'fuentesBancos', label: 'Bancos',      icon: Landmark },
+    { id: 'fuentesJde',    label: 'JDE',         icon: Database },
+    { id: 'fuentesTress',  label: 'TRESS',       icon: Users },
+    { id: 'fuentesRol',    label: 'ROL (CITI)',  icon: Truck },
+  ],
   admin: [
     { id: 'users',    label: 'Usuarios', icon: UserCog },
     { id: 'permisos', label: 'Permisos', icon: SlidersHorizontal },
@@ -478,6 +506,8 @@ const SECTION_FOR_TAB: Partial<Record<TabId, SectionId>> = {
   financialProjection: 'proyeccion', financialPlanning: 'proyeccion',
   concursoMercantil: 'proyeccion', fideicomiso: 'proyeccion',
   kpisObjectives: 'objetivos',
+  // TEMPORAL fuentes-datos
+  fuentesBancos: 'fuentes', fuentesJde: 'fuentes', fuentesTress: 'fuentes', fuentesRol: 'fuentes',
   users: 'admin', permisos: 'admin',
 };
 
@@ -487,6 +517,7 @@ const DEFAULT_TAB: Record<SectionId, TabId> = {
   cobranza: 'netflow',
   proyeccion: 'financialProjection',
   objetivos: 'kpisObjectives',
+  fuentes: 'fuentesBancos', // TEMPORAL fuentes-datos
   admin: 'users',
 };
 
@@ -6061,6 +6092,49 @@ export default function App() {
             {activeTab === 'permisos' && (
               <Suspense fallback={<LazyTabFallback label="Permisos" />}>
                 <PermissionsDashboard />
+              </Suspense>
+            )}
+            {/* TEMPORAL fuentes-datos (2026-07-10): diagnóstico de frescura
+                por fuente. Quitar junto con src/modules/data-sources/. */}
+            {activeTab === 'fuentesBancos' && (
+              <Suspense fallback={<LazyTabFallback label="Fuentes y Datos" />}>
+                <DataSourcesDashboard
+                  source="bancos"
+                  bankStatements={bankStatements}
+                  companies={companies}
+                />
+              </Suspense>
+            )}
+            {activeTab === 'fuentesJde' && (
+              <Suspense fallback={<LazyTabFallback label="Fuentes y Datos" />}>
+                <DataSourcesDashboard
+                  source="jde"
+                  companies={companies}
+                  cxpRecords={cxpRecords}
+                  cobranzaRecords={cobranzaRecords}
+                  comprasRecords={comprasRecords}
+                  pagoProveedorRecords={pagoProveedorRecords}
+                  bankJdeStatements={bankJdeStatements}
+                  auxiliarRecords={auxiliarContableRecords}
+                />
+              </Suspense>
+            )}
+            {activeTab === 'fuentesTress' && (
+              <Suspense fallback={<LazyTabFallback label="Fuentes y Datos" />}>
+                <DataSourcesDashboard
+                  source="tress"
+                  nominaRecords={nominaRecords}
+                  companies={companies}
+                />
+              </Suspense>
+            )}
+            {activeTab === 'fuentesRol' && (
+              <Suspense fallback={<LazyTabFallback label="Fuentes y Datos" />}>
+                <DataSourcesDashboard
+                  source="rol"
+                  rolRecords={rolRecords}
+                  viajesEspecialesRecords={viajesEspecialesRecords}
+                />
               </Suspense>
             )}
             {/* Forecast tab fused into Dashboard — no longer standalone */}

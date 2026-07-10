@@ -28,7 +28,13 @@ export type TabId =
   | 'netflow'
   | 'kpisObjectives'
   | 'users'
-  | 'permisos';
+  | 'permisos'
+  // TEMPORAL fuentes-datos (2026-07-10): sub-tabs del tab de diagnóstico
+  // "Fuentes y Datos" (src/modules/data-sources/). Quitar al retirar el módulo.
+  | 'fuentesBancos'
+  | 'fuentesJde'
+  | 'fuentesTress'
+  | 'fuentesRol';
 
 export type ForecastGranularity = 'monthly' | 'weekly' | 'daily';
 

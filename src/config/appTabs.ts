@@ -32,6 +32,11 @@ export const APP_TAB_LABELS: Record<AppTabId, string> = {
   kpisObjectives: 'KPIs y Objetivos',
   users: 'Usuarios',
   permisos: 'Permisos',
+  // TEMPORAL fuentes-datos (2026-07-10): tab de diagnóstico "Fuentes y Datos".
+  fuentesBancos: 'Fuentes · Bancos',
+  fuentesJde: 'Fuentes · JDE',
+  fuentesTress: 'Fuentes · TRESS',
+  fuentesRol: 'Fuentes · ROL (CITI)',
 };
 
 export function tabLabel(tab: AppTabId): string {
@@ -60,6 +65,9 @@ export const PERMISSION_GROUPS: { section: string; tabs: AppTabId[] }[] = [
   { section: 'Egresos', tabs: ['cxp', 'compras', 'pasivoDistribuir', 'pagos', 'payroll', 'taxes'] },
   { section: 'Catálogos', tabs: ['clients', 'providers', 'bancos'] },
   { section: 'Objetivos', tabs: ['kpisObjectives'] },
+  // TEMPORAL fuentes-datos (2026-07-10): grantable para que un admin pueda
+  // dárselo a finanzas/dirección. Quitar el grupo completo al retirar el módulo.
+  { section: 'Fuentes y Datos', tabs: ['fuentesBancos', 'fuentesJde', 'fuentesTress', 'fuentesRol'] },
 ];
 
 /** Lista plana de todos los tabs habilitables por permiso (orden de sidebar). */
