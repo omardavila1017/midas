@@ -157,6 +157,7 @@ import {
 import {
   planCobranzaRefresh,
   mergeCobranzaRevalidationWindow,
+  mergeCobranzaBackfillRange,
   COBRANZA_LOOKBACK_DAYS,
   COBRANZA_REVALIDATE_DAYS,
 } from './domain/cobranzaRefreshWindow';
@@ -1060,6 +1061,17 @@ export default function App() {
     // El año ya cae dentro de la ventana por defecto → nada que bajar.
     if (target >= dataWindowDefaultFloor) return;
     const allowed = allowedDatasetsRef.current;
+    // Un rango que FALLÓ (marcado por el controlador de backfill) se
+    // desbloquea cuando la vista vuelve a pedir el año — reintento deliberado.
+    let clearedFailure = false;
+    for (const ds of datasets) {
+      if (!allowed.has(ds as DatasetKey)) continue;
+      if (backfillFailedFloorRef.current[ds] !== undefined) {
+        delete backfillFailedFloorRef.current[ds];
+        clearedFailure = true;
+      }
+    }
+    if (clearedFailure) setBackfillTick(t => t + 1);
     setHistoricalFloorByDataset(prev => {
       let changed = false;
       const next = { ...prev };
@@ -3704,11 +3716,16 @@ export default function App() {
           if (recordsResult.status === 'fulfilled') {
             const stamped = recordsResult.value.map(r => ({ ...r, cia: r.cia || cia }));
             totalRecords += stamped.length;
-            // `full` REEMPLAZA el histórico de la cía; `revalidate` hace un
-            // merge date-particionado de la ventana sobre lo ya hidratado.
-            const next = mode === 'revalidate'
-              ? mergeCobranzaRevalidationWindow(recordsByCia.get(cia) ?? [], stamped, from)
-              : stamped;
+            // AMBOS modos hacen merge date-particionado sobre lo ya cargado:
+            // `full` reemplaza en bloque SU ventana [fullFrom, hoy] (purga
+            // cancelaciones/fantasmas dentro de ella) pero CONSERVA la
+            // historia anterior al piso — los años previos backfilleados por
+            // DataWindowContext viven antes de `fullFrom` y un REPLACE seco
+            // los borraba de estado + IDB mientras el controlador de backfill
+            // seguía creyéndolos cubiertos (el año navegado quedaba vacío el
+            // resto de la sesión). Con el heavy-store vacío (default
+            // clear-on-entry) el merge sobre [] es idéntico al replace.
+            const next = mergeCobranzaRevalidationWindow(recordsByCia.get(cia) ?? [], stamped, from);
             recordsByCia.set(cia, next);
             const snapshot = flattenRecords();
             // Commit this cia's records immediately; React 18 batches the
@@ -4107,8 +4124,8 @@ export default function App() {
   }, [clients, viajesEspecialesRecords]);
 
   // Si JDE no devuelve compañías (companies en error), CXP/cobranza/compras/
-  // pagos/nómina nunca se dispararon — marcamos los slots como error para
-  // destrabar el boot. ROL no depende de companies (es global CITI).
+  // pagos/nómina/auxiliar nunca se dispararon — marcamos los slots como error
+  // para destrabar el boot. ROL no depende de companies (es global CITI).
   useEffect(() => {
     if (bootStatus.companies !== 'error') return;
     if (bootStatus.cxp === 'pending') setBootSlot('cxp', 'error');
@@ -4116,7 +4133,11 @@ export default function App() {
     if (bootStatus.compras === 'pending') setBootSlot('compras', 'error');
     if (bootStatus.pagos === 'pending') setBootSlot('pagos', 'error');
     if (bootStatus.nomina === 'pending') setBootSlot('nomina', 'error');
-  }, [bootStatus.companies, bootStatus.cxp, bootStatus.cobranza, bootStatus.compras, bootStatus.pagos, bootStatus.nomina, setBootSlot]);
+    // El loader de auxiliar también exige companies.length > 0; sin esta
+    // propagación su slot (ahora en GATING_BOOT_IDS) giraba en 'pending'
+    // para siempre y su fila no aparecía en el panel de boot bloqueado.
+    if (bootStatus.auxiliar === 'pending') setBootSlot('auxiliar', 'error');
+  }, [bootStatus.companies, bootStatus.cxp, bootStatus.cobranza, bootStatus.compras, bootStatus.pagos, bootStatus.nomina, bootStatus.auxiliar, setBootSlot]);
 
   // ── Nómina (TRESS): boot fetch del mes en curso ──
   // 1 request con `idEmpresa=99, tipoNomina=99` cubre todas las cías y ambos
@@ -4148,6 +4169,9 @@ export default function App() {
     setBootSlot('nomina', 'loading');
     setDatasetSlot('nomina', 'loading');
     (async () => {
+      // true una vez que el fast path reportó 'done' — a partir de ahí el
+      // resto del try es backfill de FONDO y no debe re-abrir el gate.
+      let bootReleased = false;
       try {
         // Re-refine pass sobre records persistidos. La tabla de clasificación
         // de `cashTreatment` evolucionó; refinar ahora actualiza sin refetch.
@@ -4362,6 +4386,7 @@ export default function App() {
         }
         setBootSlot('nomina', 'done');
         setDatasetSlot('nomina', 'ready');
+        bootReleased = true;
 
         // BACKGROUND: meses previos hasta el piso de la ventana por defecto
         // (`defaultWindowMonths`: año en curso + 12 meses atrás = 13 meses).
@@ -4414,7 +4439,17 @@ export default function App() {
         // Persist final tras el backfill — inmune al starvation del debounce
         // y a la pérdida del flush async de unload.
         await persistNomina();
-      } catch {
+      } catch (err) {
+        // No degradar un boot ya liberado: el slot reportó 'done' con el fast
+        // path y el splash (que ahora bloquea en 'error') pudo estar aún
+        // arriba esperando rol/auxiliar — un fallo del backfill histórico de
+        // fondo (p.ej. write de IDB) reescribía 'done'→'error' y bloqueaba la
+        // app con los datos del boot ya cargados.
+        if (bootReleased) {
+          // eslint-disable-next-line no-console
+          console.warn('[nomina] backfill histórico de fondo falló (boot ya liberado; queda visible en Salud de datos)', err);
+          return;
+        }
         setBootSlot('nomina', 'error');
         setDatasetSlot('nomina', 'error');
       }
@@ -4432,12 +4467,25 @@ export default function App() {
   // facturas multi-línea); el resto hace upsert por su llave única.
   const backfilledFloorRef = useRef<Record<string, string>>({});
   const backfillInFlightRef = useRef<Set<string>>(new Set());
+  // Piso cuyo backfill FALLÓ (fetch rechazado / cía incompleta). Bloquea el
+  // auto-reintento inmediato del tick (con JDE caído sería un hot-loop);
+  // `ensureYearLoaded` lo limpia cuando la vista vuelve a pedir el año
+  // (re-navegación / remonta) → reintento deliberado, acotado por acción
+  // del usuario.
+  const backfillFailedFloorRef = useRef<Record<string, string>>({});
 
-  const backfillCobranza = useCallback(async (from: string, to: string) => {
+  // Cada backfiller regresa `true` si TODOS sus fetches respondieron; `false`
+  // si alguno falló (el controlador hace rollback del claim para permitir
+  // reintento — antes los fallos se tragaban en allSettled/catch internos y
+  // el rango fallido quedaba "cubierto" para siempre: el año navegado se
+  // pintaba como $0 legítimo sin reintento posible).
+  const backfillCobranza = useCallback(async (from: string, to: string): Promise<boolean> => {
     const activeCias = filterActiveCompanies(companies).map(c => c.cia);
-    if (activeCias.length === 0) return;
+    if (activeCias.length === 0) return true;
     const olderRecords: CobranzaRecord[] = [];
     const olderPayments: CobranzaPayment[] = [];
+    const fetchedCias = new Set<string>();
+    let anyFailed = false;
     let cursor = 0;
     const concurrency = Math.min(10, activeCias.length);
     const worker = async () => {
@@ -4450,17 +4498,25 @@ export default function App() {
           fetchIndicadoresCobranzaRange(cia, from, to, { concurrency: 10 }),
         ]);
         if (recordsResult.status === 'fulfilled') {
+          fetchedCias.add(cia);
           for (const r of recordsResult.value) olderRecords.push({ ...r, cia: r.cia || cia });
+        } else {
+          anyFailed = true;
         }
         if (paymentsResult.status === 'fulfilled') {
           for (const p of paymentsResult.value) olderPayments.push(p);
+        } else {
+          anyFailed = true;
         }
       }
     };
     await Promise.all(Array.from({ length: concurrency }, worker));
-    if (olderRecords.length > 0) {
+    if (fetchedCias.size > 0) {
       setCobranzaRecords(prev => {
-        const merged = [...prev, ...olderRecords]; // ventana disjunta → append
+        // Merge acotado al rango (no append ciego): dedup de facturas que el
+        // upstream cuele fuera de [from, to] + REPLACE por cía fetcheada para
+        // que un reintento tras fallo parcial no duplique. Ver el helper.
+        const merged = mergeCobranzaBackfillRange(prev, olderRecords, fetchedCias, from, to);
         void saveHeavyRecords('cobranzaRecords', merged);
         return merged;
       });
@@ -4475,9 +4531,10 @@ export default function App() {
         return merged;
       });
     }
+    return !anyFailed;
   }, [companies]);
 
-  const backfillRol = useCallback(async (from: string, to: string) => {
+  const backfillRol = useCallback(async (from: string, to: string): Promise<boolean> => {
     const rolKey = (r: RolRecord) =>
       `${r.cia}::${r.kCliente}::${r.anio}::${r.semana}::${r.ruta}::${r.tipoViaje}`;
     const [rolResult, viajesResult] = await Promise.allSettled([
@@ -4504,13 +4561,16 @@ export default function App() {
         return merged;
       });
     }
+    // Merge por llave (upsert) → un reintento del rango es idempotente.
+    return rolResult.status === 'fulfilled' && viajesResult.status === 'fulfilled';
   }, []);
 
-  const backfillCompras = useCallback(async (from: string, to: string) => {
+  const backfillCompras = useCallback(async (from: string, to: string): Promise<boolean> => {
     const activeCias = filterActiveCompanies(companies).map(c => c.cia);
-    if (activeCias.length === 0) return;
+    if (activeCias.length === 0) return true;
     await primeDailyCache();
     const fetchedAll: ComprasRecord[] = [];
+    let anyFailed = false;
     let cursor = 0;
     const concurrency = Math.min(10, activeCias.length);
     const worker = async () => {
@@ -4521,7 +4581,7 @@ export default function App() {
         try {
           const fetched = await fetchComprasRange(cia, from, to, { concurrency: 4 });
           for (const r of fetched) fetchedAll.push(r);
-        } catch { /* best-effort; el resto de cías sigue */ }
+        } catch { anyFailed = true; /* best-effort; el resto de cías sigue */ }
       }
     };
     await Promise.all(Array.from({ length: concurrency }, worker));
@@ -4535,9 +4595,10 @@ export default function App() {
         return merged;
       });
     }
+    return !anyFailed;
   }, [companies]);
 
-  const backfillPagos = useCallback(async (from: string, to: string) => {
+  const backfillPagos = useCallback(async (from: string, to: string): Promise<boolean> => {
     await primeDailyCache();
     const fetched = await fetchPagoProveedorRange(from, to, { concurrency: 10 });
     if (fetched.length > 0) {
@@ -4550,17 +4611,21 @@ export default function App() {
         return merged;
       });
     }
+    // fetchPagoProveedorRange traga fallos por día internamente (quedan en
+    // Salud de datos vía reportDataGap); aquí no hay señal barata de fallo.
+    return true;
   }, []);
 
-  const backfillAuxiliar = useCallback(async (from: string, to: string) => {
+  const backfillAuxiliar = useCallback(async (from: string, to: string): Promise<boolean> => {
     const activeCias = companies
       .filter(c => c.activa !== false && isAuxiliarAllowlistedCia(c.cia))
       .map(c => c.cia);
-    if (activeCias.length === 0) return;
+    if (activeCias.length === 0) return true;
     await primeDailyCache();
     const keyOf = (r: AuxiliarContableRecord) =>
       `${r.cia}::${r.idCuenta}::${r.noDocto}::${r.tipoDocto}`;
     const fetchedAll: AuxiliarContableRecord[] = [];
+    let anyFailed = false;
     let cursor = 0;
     const concurrency = Math.min(10, activeCias.length);
     const worker = async () => {
@@ -4571,7 +4636,7 @@ export default function App() {
         try {
           const fetched = await fetchAuxiliarContableRange(cia, from, to, AUX_RECON_PARAMS, { concurrency: 4 });
           for (const r of fetched) fetchedAll.push(r);
-        } catch { /* best-effort */ }
+        } catch { anyFailed = true; /* best-effort */ }
       }
     };
     await Promise.all(Array.from({ length: concurrency }, worker));
@@ -4585,9 +4650,10 @@ export default function App() {
         return merged;
       });
     }
+    return !anyFailed;
   }, [companies]);
 
-  const backfillBanks = useCallback(async (from: string, to: string) => {
+  const backfillBanks = useCallback(async (from: string, to: string): Promise<boolean> => {
     await primeDailyCache();
     const defaultFormat: BankStatementFormat = 'SWIFT';
     const fetched = await fetchBankStatementsRange(from, to, defaultFormat, { concurrency: 10 });
@@ -4595,9 +4661,12 @@ export default function App() {
       // El effect de persistencia (debounced) escribe bankJdeStatements a IDB.
       setBankJdeStatements(prev => mergeBankStatements(prev, fetched));
     }
+    // fetchBankStatementsRange traga fallos por día internamente (quedan en
+    // Salud de datos vía reportDataGap); aquí no hay señal barata de fallo.
+    return true;
   }, []);
 
-  const backfillNomina = useCallback(async (from: string, to: string) => {
+  const backfillNomina = useCallback(async (from: string, to: string): Promise<boolean> => {
     const months: Array<{ anio: number; mes: number }> = [];
     let y = Number(from.slice(0, 4));
     let m = Number(from.slice(5, 7));
@@ -4607,7 +4676,7 @@ export default function App() {
       months.push({ anio: y, mes: m });
       m += 1; if (m > 12) { m = 1; y += 1; }
     }
-    if (months.length === 0) return;
+    if (months.length === 0) return true;
     const results = await Promise.allSettled(
       months.map(({ anio, mes }) => fetchNomina({ idEmpresa: 99, tipoNomina: 99, anio, mes })),
     );
@@ -4631,9 +4700,11 @@ export default function App() {
     if (Object.keys(keys).length > 0) {
       setNominaLoadedKeys(prev => ({ ...prev, ...keys }));
     }
+    // mergeNominaBatch reemplaza por llave → reintento idempotente.
+    return !results.some(r => r.status === 'rejected');
   }, []);
 
-  const runBackfill = useCallback(async (ds: string, from: string, to: string): Promise<void> => {
+  const runBackfill = useCallback(async (ds: string, from: string, to: string): Promise<boolean> => {
     switch (ds) {
       case 'cobranza': return backfillCobranza(from, to);
       case 'rol': return backfillRol(from, to);
@@ -4642,7 +4713,7 @@ export default function App() {
       case 'auxiliar': return backfillAuxiliar(from, to);
       case 'banks': return backfillBanks(from, to);
       case 'nomina': return backfillNomina(from, to);
-      default: return;
+      default: return true;
     }
   }, [backfillCobranza, backfillRol, backfillCompras, backfillPagos, backfillAuxiliar, backfillBanks, backfillNomina]);
 
@@ -4678,6 +4749,7 @@ export default function App() {
       const coveredFloor = backfilledFloorRef.current[ds];
       const requestedFloor = historicalFloorByDataset[ds];
       if (requestedFloor >= coveredFloor) continue; // ya cubierto
+      if (backfillFailedFloorRef.current[ds] === requestedFloor) continue; // falló; reintento vía ensureYearLoaded
       const from = requestedFloor;
       const to = previousIsoDay(coveredFloor);
       backfilledFloorRef.current[ds] = requestedFloor; // reclama el rango (evita reentrada)
@@ -4685,11 +4757,22 @@ export default function App() {
       setHistoricalLoadingByDataset(prev => ({ ...prev, [ds]: true }));
       void (async () => {
         try {
-          await runBackfill(ds, from, to);
+          const ok = await runBackfill(ds, from, to);
+          if (!ok) {
+            // Fallo parcial/total reportado por el backfiller (los fetchers
+            // internos no lanzan — allSettled / catch por cía). Sin este
+            // rollback el rango quedaba reclamado como cubierto para siempre
+            // y el año se pintaba vacío el resto de la sesión.
+            // eslint-disable-next-line no-console
+            console.warn(`[backfill] ${ds} ${from}..${to} incompleto — rollback para permitir reintento`);
+            backfilledFloorRef.current[ds] = coveredFloor;
+            backfillFailedFloorRef.current[ds] = requestedFloor;
+          }
         } catch (err) {
           // eslint-disable-next-line no-console
           console.warn(`[backfill] ${ds} ${from}..${to} falló`, err);
           backfilledFloorRef.current[ds] = coveredFloor; // rollback → un re-intento puede volver
+          backfillFailedFloorRef.current[ds] = requestedFloor;
         } finally {
           backfillInFlightRef.current.delete(ds);
           setHistoricalLoadingByDataset(prev => ({ ...prev, [ds]: false }));

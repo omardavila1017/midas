@@ -747,11 +747,19 @@ export interface EnrichedBankMovement {
  * @param bankStatements   Estados de cuenta año a la fecha (merge del range).
  * @param year             Año a filtrar (YYYY).
  * @param startingBalance  Saldo inicial para el cálculo acumulado.
+ * @param options.classificationStatements  Set COMPLETO de estados de cuenta
+ *   para sembrar la clasificación de traspasos internos cuando
+ *   `bankStatements` viene acotado (p.ej. filtro por empresa). El pareo
+ *   CARGO↔ABONO ±3d (`buildPairMatchedKeys`) necesita la contraparte del
+ *   traspaso, que vive en OTRA cuenta/cía: clasificar sólo con el subset
+ *   filtrado degrada ese tier y los traspasos cross-cía cuentan como flujo
+ *   real (los números de una cía cambiarían según el filtro).
  */
 export function computeBankOnlyCashFlow(
   bankStatements: readonly BankAccountStatement[] | undefined,
   year: number,
   startingBalance: number = 0,
+  options: { classificationStatements?: readonly BankAccountStatement[] } = {},
 ): {
   daily: DailyFlow[];
   abonosByDate: Map<string, EnrichedBankMovement[]>;
@@ -769,8 +777,9 @@ export function computeBankOnlyCashFlow(
   }
 
   const yearStr = String(year);
-  const ownAccountDetector = buildOwnAccountDetector(buildOwnAccountsIndex(bankStatements));
-  const pairedKeys = buildPairMatchedKeys(bankStatements);
+  const classificationStatements = options.classificationStatements ?? bankStatements;
+  const ownAccountDetector = buildOwnAccountDetector(buildOwnAccountsIndex(classificationStatements));
+  const pairedKeys = buildPairMatchedKeys(classificationStatements);
   const ctx: ClassificationContext = { ownAccountDetector, pairedKeys };
 
   for (const acc of bankStatements) {

@@ -385,6 +385,34 @@ describe('computeBankOnlyCashFlow exposes internal buckets and excludes them fro
     expect(internalAb.kind).toBe('internal');
     expect(internalAb.internalReason).toBe('pair-matched');
   });
+
+  it('conserva el neteo de un traspaso cross-cía cuando los statements vienen filtrados por empresa (classificationStatements)', () => {
+    // Traspaso entre cías del grupo: el CARGO vive en la cía 00011 y su
+    // contraparte ABONO en la 00022. El filtro por empresa acota los
+    // statements a UNA cía, así que el pareo ±3d perdería la contraparte y
+    // reclasificaría el CARGO como flujo real — a menos que la clasificación
+    // se siembre del set completo vía `classificationStatements`.
+    const all: BankAccountStatement[] = [
+      acc('00011', '0190000001', [
+        mov({ tipoMovimiento: 'CARGO', importe: 3_000_000, concepto: 'traspaso a filial' }),
+        mov({ tipoMovimiento: 'CARGO', importe: 100, concepto: 'pago real' }),
+      ]),
+      acc('00022', '0190000002', [
+        mov({ tipoMovimiento: 'ABONO', importe: 3_000_000, concepto: 'entrada de filial' }),
+      ]),
+    ];
+    const scoped = all.filter(s => s.cia === '00011');
+
+    // Sin el set completo: el CARGO interno cuenta como egreso real (el bug).
+    const degraded = computeBankOnlyCashFlow(scoped, 2026, 0);
+    expect(degraded.daily[0].outflows).toBe(3_000_100);
+
+    // Con classificationStatements: el traspaso se netea igual que sin filtro.
+    const result = computeBankOnlyCashFlow(scoped, 2026, 0, { classificationStatements: all });
+    expect(result.daily[0].outflows).toBe(100);
+    expect(result.internalCargosByDate.get('2026-04-22')?.length).toBe(1);
+    expect(result.internalCargosByDate.get('2026-04-22')![0].internalReason).toBe('pair-matched');
+  });
 });
 
 describe('buildOwnAccountsIndex (sanity)', () => {

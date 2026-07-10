@@ -168,3 +168,47 @@ export function mergeCobranzaRevalidationWindow(
   });
   return [...kept, ...windowRecords];
 }
+
+/**
+ * Merge del backfill de años previos (DataWindowContext) sobre el set ya
+ * cargado. Espejo acotado-por-ambos-lados de `mergeCobranzaRevalidationWindow`
+ * con las mismas dos defensas, que el append ciego previo no tenía:
+ *
+ * 1. Sólo entran records fechados DENTRO de `[from, to]` (por `fechaFactura`).
+ *    El upstream puede filtrar por una fecha distinta y colar en la respuesta
+ *    facturas que ya viven en la ventana cargada — un append las duplicaba
+ *    (doble conteo en Venta/CXC y en los `cxc:` de MOTOR 2).
+ * 2. Para cada cía cuyo fetch SÍ respondió (`fetchedCias`), el rango se
+ *    REEMPLAZA en bloque en vez de appendear: un reintento tras un fallo
+ *    parcial (algunas cías fallaron, otras ya commitearon) no duplica lo ya
+ *    appendeado. Las cías que fallaron no se tocan.
+ *
+ * Igual que el merge de revalidación, NO llavea por folio para partir (las
+ * facturas multi-línea / folio vacío no se colapsan), pero SÍ supersede del
+ * "conservado" los folios que reaparecen en el fetch (update/boundary).
+ */
+export function mergeCobranzaBackfillRange(
+  existing: CobranzaRecord[],
+  fetched: CobranzaRecord[],
+  fetchedCias: ReadonlySet<string>,
+  from: string,
+  to: string,
+): CobranzaRecord[] {
+  const inRange = fetched.filter(r => {
+    const d = r.fechaFactura || '';
+    return d >= from && d <= to;
+  });
+  const folios = new Set<string>();
+  for (const r of inRange) {
+    const key = cobranzaRecordFolioKey(r);
+    if (key) folios.add(key);
+  }
+  const kept = existing.filter(r => {
+    const d = r.fechaFactura || '';
+    if (fetchedCias.has(r.cia) && d >= from && d <= to) return false; // rango re-fetcheado → lo manda el fetch
+    const key = cobranzaRecordFolioKey(r);
+    if (key && folios.has(key)) return false;                          // supersedida por el fetch
+    return true;
+  });
+  return [...kept, ...inRange];
+}

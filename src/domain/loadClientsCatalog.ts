@@ -148,6 +148,15 @@ function writeClientsCatalogCache(hash: string, clients: Client[]): void {
  * `[]`, indistinguible de un catálogo legítimamente vacío → el boot reportaba
  * "listo" con cero clientes y sin señal de error).
  */
+/**
+ * Timeout por candidato. El slot de boot `catalog` gatea el splash y —a
+ * diferencia de los datasets JDE, acotados por el timeout de `jdeClient`—
+ * este fetch era ilimitado: un request que nunca responde (proxy que acepta
+ * y se cuelga) dejaba el splash en 'loading' para siempre, sin panel de
+ * error ni retry. Con el abort, el fallo aterriza como `'error'` visible.
+ */
+const CATALOG_FETCH_TIMEOUT_MS = 30_000;
+
 async function fetchClientsCatalogText(): Promise<string> {
   const candidates = Array.from(
     new Set([
@@ -158,8 +167,10 @@ async function fetchClientsCatalogText(): Promise<string> {
   );
   let lastError: unknown;
   for (const url of candidates) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), CATALOG_FETCH_TIMEOUT_MS);
     try {
-      const res = await fetch(url);
+      const res = await fetch(url, { signal: controller.signal });
       if (!res.ok) {
         lastError = new Error(`clientes-db.json: HTTP ${res.status} en ${url}`);
         continue;
@@ -167,6 +178,8 @@ async function fetchClientsCatalogText(): Promise<string> {
       return await res.text();
     } catch (err) {
       lastError = err;
+    } finally {
+      clearTimeout(timer);
     }
   }
   throw lastError instanceof Error

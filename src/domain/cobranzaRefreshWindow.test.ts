@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   planCobranzaRefresh,
   mergeCobranzaRevalidationWindow,
+  mergeCobranzaBackfillRange,
   isFreshTimestamp,
   COBRANZA_AUTO_REFRESH_TTL_MS,
   COBRANZA_LOOKBACK_DAYS,
@@ -179,6 +180,28 @@ describe('mergeCobranzaRevalidationWindow', () => {
     expect(merged.map(r => r.importePendientePesos)).toEqual([10, 20]);
   });
 
+  it('modo FULL (ventana = [fullFrom, hoy]): conserva la historia backfilleada anterior al piso', () => {
+    // AppCore usa este mismo merge para el modo `full` con from=fullFrom
+    // (defaultWindowFloor). La historia de años previos que DataWindowContext
+    // backfilleó vive ANTES del piso y debe sobrevivir el REPLACE del full —
+    // antes un replace seco la borraba de estado + IDB y el año navegado
+    // quedaba vacío el resto de la sesión (el claim de backfill seguía
+    // creyéndolo cubierto).
+    const fullFrom = '2025-07-01';
+    const existing = [
+      rec({ cia: '00001', noFactura: 'HIST-2024', fechaFactura: '2024-03-10' }), // backfilleada
+      rec({ cia: '00001', noFactura: 'RI-600', fechaFactura: '2026-01-05' }),    // dentro de la ventana full
+    ];
+    const fullRecords = [
+      rec({ cia: '00001', noFactura: 'RI-600', fechaFactura: '2026-01-05', importePendientePesos: 0 }),
+      rec({ cia: '00001', noFactura: 'RI-700', fechaFactura: '2026-07-01' }),
+    ];
+    const merged = mergeCobranzaRevalidationWindow(existing, fullRecords, fullFrom);
+    expect(merged.map(r => r.noFactura).sort()).toEqual(['HIST-2024', 'RI-600', 'RI-700']);
+    // La ventana manda dentro del rango (RI-600 actualizada, no duplicada).
+    expect(merged.find(r => r.noFactura === 'RI-600')?.importePendientePesos).toBe(0);
+  });
+
   it('remueve del set una factura que estaba en la ventana pero JDE ya no devuelve', () => {
     const existing = [
       rec({ cia: '00001', noFactura: 'VIEJA', fechaFactura: '2025-02-01' }), // fuera de ventana → se conserva
@@ -190,5 +213,88 @@ describe('mergeCobranzaRevalidationWindow', () => {
     ];
     const merged = mergeCobranzaRevalidationWindow(existing, windowRecords, REVALIDATE_FROM);
     expect(merged.map(r => r.noFactura).sort()).toEqual(['RI-500', 'VIEJA']);
+  });
+});
+
+describe('mergeCobranzaBackfillRange', () => {
+  const FROM = '2024-01-01';
+  const TO = '2025-06-30';
+
+  it('agrega el rango backfilleado y conserva la ventana ya cargada', () => {
+    const existing = [
+      rec({ cia: '00001', noFactura: 'RI-900', fechaFactura: '2026-01-10' }), // ventana cargada
+    ];
+    const fetched = [
+      rec({ cia: '00001', noFactura: 'HIST-1', fechaFactura: '2024-05-01' }),
+      rec({ cia: '00001', noFactura: 'HIST-2', fechaFactura: '2025-02-15' }),
+    ];
+    const merged = mergeCobranzaBackfillRange(existing, fetched, new Set(['00001']), FROM, TO);
+    expect(merged.map(r => r.noFactura).sort()).toEqual(['HIST-1', 'HIST-2', 'RI-900']);
+  });
+
+  it('descarta del fetch las facturas FUERA del rango (el server filtra por otra fecha) — no duplica la ventana cargada', () => {
+    const existing = [
+      rec({ cia: '00001', noFactura: 'RI-900', fechaFactura: '2026-01-10', importePendientePesos: 100 }),
+    ];
+    // Factura abierta que el server coló en la respuesta del rango viejo pero
+    // cuya fechaFactura vive en la ventana ya cargada.
+    const fetched = [
+      rec({ cia: '00001', noFactura: 'RI-900', fechaFactura: '2026-01-10', importePendientePesos: 50 }),
+      rec({ cia: '00001', noFactura: 'HIST-1', fechaFactura: '2024-05-01' }),
+    ];
+    const merged = mergeCobranzaBackfillRange(existing, fetched, new Set(['00001']), FROM, TO);
+    expect(merged).toHaveLength(2);
+    // La existente se conserva tal cual (el fetch fuera de rango se descarta).
+    expect(merged.find(r => r.noFactura === 'RI-900')?.importePendientePesos).toBe(100);
+  });
+
+  it('REEMPLAZA el rango de una cía re-fetcheada — un reintento tras fallo parcial no duplica', () => {
+    // Primer intento: cía 00001 OK (records commiteados), cía 00011 falló →
+    // rollback del claim. Reintento: ambas cías responden.
+    const afterFirstAttempt = [
+      rec({ cia: '00001', noFactura: 'HIST-1', fechaFactura: '2024-05-01' }),
+      rec({ cia: '00001', noFactura: 'RI-900', fechaFactura: '2026-01-10' }), // ventana cargada
+    ];
+    const retryFetched = [
+      rec({ cia: '00001', noFactura: 'HIST-1', fechaFactura: '2024-05-01' }),
+      rec({ cia: '00011', noFactura: 'HIST-9', fechaFactura: '2024-08-01' }),
+    ];
+    const merged = mergeCobranzaBackfillRange(
+      afterFirstAttempt, retryFetched, new Set(['00001', '00011']), FROM, TO,
+    );
+    expect(merged.map(r => r.noFactura).sort()).toEqual(['HIST-1', 'HIST-9', 'RI-900']);
+  });
+
+  it('NO toca los records de una cía cuyo fetch falló', () => {
+    const existing = [
+      rec({ cia: '00011', noFactura: 'HIST-PREVIA', fechaFactura: '2024-03-01' }),
+    ];
+    const fetched = [
+      rec({ cia: '00001', noFactura: 'HIST-1', fechaFactura: '2024-05-01' }),
+    ];
+    // Sólo 00001 respondió; 00011 falló → sus records previos se conservan.
+    const merged = mergeCobranzaBackfillRange(existing, fetched, new Set(['00001']), FROM, TO);
+    expect(merged.map(r => r.noFactura).sort()).toEqual(['HIST-1', 'HIST-PREVIA']);
+  });
+
+  it('no colapsa facturas multi-línea con folio vacío dentro del rango', () => {
+    const fetched = [
+      rec({ cia: '00001', noFactura: '', fechaFactura: '2024-05-01', importePendientePesos: 10 }),
+      rec({ cia: '00001', noFactura: '', fechaFactura: '2024-05-02', importePendientePesos: 20 }),
+    ];
+    const merged = mergeCobranzaBackfillRange([], fetched, new Set(['00001']), FROM, TO);
+    expect(merged).toHaveLength(2);
+  });
+
+  it('supersede por folio una factura existente que el fetch re-fecha dentro del rango', () => {
+    const existing = [
+      rec({ cia: '00001', noFactura: 'RI-800', fechaFactura: '2025-08-01', importePendientePesos: 100 }),
+    ];
+    const fetched = [
+      rec({ cia: '00001', noFactura: 'RI-800', fechaFactura: '2025-06-01', importePendientePesos: 0 }),
+    ];
+    const merged = mergeCobranzaBackfillRange(existing, fetched, new Set(['00001']), FROM, TO);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].importePendientePesos).toBe(0);
   });
 });

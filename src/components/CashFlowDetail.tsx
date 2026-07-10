@@ -106,12 +106,15 @@ export default function CashFlowDetail({
         // Siempre número + nombre; sin nombre en catálogo → "Cia 33".
         return { cia, nombre: name ? `${displayCia(cia)} · ${name}` : `Cia ${displayCia(cia)}` };
       })
-      .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es-MX'));
+      .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es-MX', { numeric: true }));
   }, [bankStatements, ciaName]);
 
-  // Estados de cuenta acotados por el filtro de empresa. La detección de
-  // traspasos internos se siembra del catálogo (no de las cuentas cargadas),
-  // así que filtrar por cía no rompe el neteo interno.
+  // Estados de cuenta acotados por el filtro de empresa. La clasificación de
+  // traspasos internos se computa SIEMPRE sobre el set completo (ver
+  // `classificationStatements` abajo): el detector de cuentas propias se
+  // siembra del catálogo, pero el tier de pareo CARGO↔ABONO ±3d necesita la
+  // contraparte del traspaso, que vive en otra cía — filtrar antes de parear
+  // reclasificaría traspasos cross-cía como flujo real.
   const scopedStatements = useMemo(
     () => (companyFilter === 'all' ? bankStatements : bankStatements.filter(s => s.cia === companyFilter)),
     [bankStatements, companyFilter],
@@ -128,8 +131,10 @@ export default function CashFlowDetail({
     [scopedStatements, startingBalance],
   );
   const { daily, abonosByDate, cargosByDate, internalAbonosByDate, internalCargosByDate } = useMemo(
-    () => computeBankOnlyCashFlow(scopedStatements, assumptions.year, initialCash),
-    [scopedStatements, assumptions.year, initialCash],
+    () => computeBankOnlyCashFlow(scopedStatements, assumptions.year, initialCash, {
+      classificationStatements: bankStatements,
+    }),
+    [scopedStatements, assumptions.year, initialCash, bankStatements],
   );
 
   // Flujo Neto POR EMPRESA (B2.5): abonos/cargos reales (ya sin traspasos
