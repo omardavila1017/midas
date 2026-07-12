@@ -65,6 +65,9 @@ export type FreshnessTone = 'fresh' | 'stale' | 'old' | 'none';
 
 export function freshnessTone(days: number | null): FreshnessTone {
   if (days === null) return 'none';
+  // Fecha futura = anomalía de captura, no "al día": en un tab de
+  // diagnóstico pintarla verde enmascara justo lo que se quiere detectar.
+  if (days < 0) return 'stale';
   if (days <= 1) return 'fresh';
   if (days <= 7) return 'stale';
   return 'old';

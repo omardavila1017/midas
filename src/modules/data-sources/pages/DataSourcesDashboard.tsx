@@ -284,7 +284,14 @@ function BancosView({ statements, companies, today }: { statements: BankAccountS
 
 function JdeView(props: Required<Pick<DataSourcesDashboardProps,
   'companies' | 'cxpRecords' | 'cobranzaRecords' | 'comprasRecords' | 'pagoProveedorRecords' | 'bankJdeStatements' | 'auxiliarRecords'>> & { today: string }) {
-  const rows = useMemo(() => buildJdeEntityRows(props), [props]);
+  const { companies, cxpRecords, cobranzaRecords, comprasRecords, pagoProveedorRecords, bankJdeStatements, auxiliarRecords } = props;
+  // Deps individuales: JdeView se instancia con props inline, así que el
+  // objeto `props` es nuevo en cada render y un memo keyeado por él nunca
+  // cachea (recorrería ~100k records por re-render de AppCore).
+  const rows = useMemo(
+    () => buildJdeEntityRows({ companies, cxpRecords, cobranzaRecords, comprasRecords, pagoProveedorRecords, bankJdeStatements, auxiliarRecords }),
+    [companies, cxpRecords, cobranzaRecords, comprasRecords, pagoProveedorRecords, bankJdeStatements, auxiliarRecords],
+  );
   const latest = useMemo(() => maxIsoDay(rows.map((r) => r.latestDate)), [rows]);
   return (
     <div className="space-y-4">

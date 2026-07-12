@@ -3707,31 +3707,19 @@ export default function App() {
       // `useHeavySaver` debouncea 3.4s. Si el usuario refresca a media carga
       // (28 cías × 2 años, decenas de minutos), las payments/records ya
       // commiteados en React se pierden del heavy-store al recargar — mismo
-      // síntoma que aux/rol antes del fix 88746b5 (cobranzaindicadores
-      // ausente del heavy-store screenshot 2026-05-26). Acumulamos por cía
-      // en Maps locales y disparamos `saveHeavyRecords` tras cada cía. El
-      // saveQueues interno de heavyStoreIDB serializa los writes, así que
-      // 28 cías × 2 keys no compiten.
-      const recordsByCia = new Map<string, CobranzaRecord[]>();
-      for (const r of cobranzaRecords) {
-        const arr = recordsByCia.get(r.cia);
-        if (arr) arr.push(r); else recordsByCia.set(r.cia, [r]);
-      }
-      const paymentsByCia = new Map<string, CobranzaPayment[]>();
-      for (const p of cobranzaPayments) {
-        const arr = paymentsByCia.get(p.cia);
-        if (arr) arr.push(p); else paymentsByCia.set(p.cia, [p]);
-      }
-      const flattenRecords = () => {
-        const out: CobranzaRecord[] = [];
-        for (const arr of recordsByCia.values()) out.push(...arr);
-        return out;
-      };
-      const flattenPayments = () => {
-        const out: CobranzaPayment[] = [];
-        for (const arr of paymentsByCia.values()) out.push(...arr);
-        return out;
-      };
+      // síntoma que aux/rol antes del fix 88746b5. Disparamos
+      // `saveHeavyRecords` tras cada cía; el saveQueues interno de
+      // heavyStoreIDB serializa los writes, así que 28 cías × 2 keys no
+      // compiten.
+      //
+      // Commits FUNCIONALES sobre `prev` (2026-07-11): antes se sembraba un
+      // Map local del estado al ARRANCAR y cada cía commiteaba el flatten
+      // completo (`setX(snapshot)` no-funcional) — un backfill de años
+      // históricos (DataWindowContext) que commiteara mientras este refresh
+      // estaba en vuelo era pisado por el siguiente snapshot y PERSISTIDO
+      // fuera de IDB. Mergear dentro del updater (mismo patrón que
+      // backfillCobranza) hace ambos flujos conmutativos y preserva el
+      // commit per-cía del hardening OOM.
       let completed = 0;
       let cursor = 0;
       const concurrency = Math.min(10, plans.length);
@@ -3756,13 +3744,17 @@ export default function App() {
             // seguía creyéndolos cubiertos (el año navegado quedaba vacío el
             // resto de la sesión). Con el heavy-store vacío (default
             // clear-on-entry) el merge sobre [] es idéntico al replace.
-            const next = mergeCobranzaRevalidationWindow(recordsByCia.get(cia) ?? [], stamped, from);
-            recordsByCia.set(cia, next);
-            const snapshot = flattenRecords();
             // Commit this cia's records immediately; React 18 batches the
             // setState calls across the concurrency pool, so 30 calls don't
             // turn into 30 renders.
-            setCobranzaRecords(snapshot);
+            setCobranzaRecords(prev => {
+              const rest: CobranzaRecord[] = [];
+              const base: CobranzaRecord[] = [];
+              for (const r of prev) (r.cia === cia ? base : rest).push(r);
+              const merged = rest.concat(mergeCobranzaRevalidationWindow(base, stamped, from));
+              void saveHeavyRecords('cobranzaRecords', merged);
+              return merged;
+            });
             // Sólo `full` re-estampa el watermark: si `revalidate` lo tocara,
             // la cía quedaría "fresca" para siempre y el REPLACE correctivo
             // (que sanea cancelaciones/pagos de facturas viejas fuera de la
@@ -3771,31 +3763,33 @@ export default function App() {
               const ts = new Date().toISOString();
               setCobranzaLoadedCias(prev => ({ ...prev, [cia]: ts }));
             }
-            void saveHeavyRecords('cobranzaRecords', snapshot);
           } else {
             const msg = recordsResult.reason instanceof Error ? recordsResult.reason.message : String(recordsResult.reason);
             errors.push(`${cia}: ${msg}`);
           }
           if (paymentsResult.status === 'fulfilled') {
             const payments = paymentsResult.value;
-            // Merge por idPago (lo fetcheado gana) en vez de replace:
+            // Merge por cia::idPago (lo fetcheado gana) en vez de replace:
             // fetchIndicadoresCobranzaRange tolera ventanas mensuales fallidas
             // y regresa un set PARCIAL — un replace destruía (y persistía vía
             // saveHeavyRecords) los meses de pagos que sí teníamos, rompiendo
-            // el invariante "nunca degrada" de la capa de revalidación.
-            const mergedPayments = new Map<string, CobranzaPayment>();
-            for (const p of paymentsByCia.get(cia) ?? []) mergedPayments.set(p.idPago, p);
-            for (const p of payments) mergedPayments.set(p.idPago, p);
-            paymentsByCia.set(cia, Array.from(mergedPayments.values()));
-            const snapshot = flattenPayments();
-            setCobranzaPayments(snapshot);
+            // el invariante "nunca degrada" de la capa de revalidación. La
+            // llave lleva `cia` porque idPago NO es único global (JDE lo
+            // secuencia por compañía; taxes ya llavea `cia:idPago`).
+            setCobranzaPayments(prev => {
+              const mergedPayments = new Map<string, CobranzaPayment>();
+              for (const p of prev) mergedPayments.set(`${p.cia}::${p.idPago}`, p);
+              for (const p of payments) mergedPayments.set(`${p.cia}::${p.idPago}`, p);
+              const merged = Array.from(mergedPayments.values());
+              void saveHeavyRecords('cobranzaPayments', merged);
+              return merged;
+            });
             // Mismo criterio que records: sólo `full` re-estampa (el merge de
             // pagos es aditivo por idPago y se refresca al expirar el TTL).
             if (mode === 'full') {
               const ts = new Date().toISOString();
               setCobranzaPaymentsLoadedCias(prev => ({ ...prev, [cia]: ts }));
             }
-            void saveHeavyRecords('cobranzaPayments', snapshot);
           } else {
             const msg = paymentsResult.reason instanceof Error ? paymentsResult.reason.message : String(paymentsResult.reason);
             errors.push(`indicadores ${cia}: ${msg}`);
@@ -3944,9 +3938,19 @@ export default function App() {
           if (!force && now - lastFlushAt < 3000) return;
           dirty = false;
           lastFlushAt = now;
-          const snapshot = Array.from(mergedByKey.values());
-          setRolRecords(snapshot);
-          void saveHeavyRecords('rolRecords', snapshot);
+          // Commit funcional (2026-07-11): overlay del Map local sobre `prev`
+          // en vez de reemplazar el estado con el snapshot — un backfill de
+          // años previos (backfillRol) que commitee mientras este refresh
+          // está en vuelo aportaba llaves que el Map (sembrado al arrancar)
+          // no conoce y el snapshot las pisaba y las persistía fuera de IDB.
+          setRolRecords(prev => {
+            const byKey = new Map<string, RolRecord>();
+            for (const r of prev) byKey.set(rolKey(r), r);
+            for (const [k, r] of mergedByKey) byKey.set(k, r);
+            const snapshot = Array.from(byKey.values());
+            void saveHeavyRecords('rolRecords', snapshot);
+            return snapshot;
+          });
         };
 
         const records = await fetchRolRange(fechaInicial, fechaFinal, {
@@ -4071,9 +4075,16 @@ export default function App() {
           if (!force && now - lastFlushAt < 3000) return;
           dirty = false;
           lastFlushAt = now;
-          const snapshot = Array.from(mergedByKey.values());
-          setViajesEspecialesRecords(snapshot);
-          void saveHeavyRecords('viajesEspecialesRecords', snapshot);
+          // Commit funcional (espejo de ROL, 2026-07-11): overlay sobre
+          // `prev` para no pisar el backfill de años previos en vuelo.
+          setViajesEspecialesRecords(prev => {
+            const byKey = new Map<number, ViajeEspecialRecord>();
+            for (const v of prev) byKey.set(v.kRenta, v);
+            for (const [k, v] of mergedByKey) byKey.set(k, v);
+            const snapshot = Array.from(byKey.values());
+            void saveHeavyRecords('viajesEspecialesRecords', snapshot);
+            return snapshot;
+          });
         };
         const records = await fetchViajesEspecialesRange(fechaInicial, fechaFinal, {
           onPartialBatch: (batch) => {
@@ -4554,9 +4565,11 @@ export default function App() {
     }
     if (olderPayments.length > 0) {
       setCobranzaPayments(prev => {
+        // Llave cia::idPago — idPago NO es único global (misma razón que el
+        // merge del loader de cobranza).
         const map = new Map<string, CobranzaPayment>();
-        for (const p of prev) map.set(p.idPago, p);
-        for (const p of olderPayments) map.set(p.idPago, p);
+        for (const p of prev) map.set(`${p.cia}::${p.idPago}`, p);
+        for (const p of olderPayments) map.set(`${p.cia}::${p.idPago}`, p);
         const merged = Array.from(map.values());
         void saveHeavyRecords('cobranzaPayments', merged);
         return merged;

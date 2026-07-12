@@ -62,6 +62,7 @@ describe('date helpers', () => {
     expect(daysSince('2026-07-08', '2026-07-10')).toBe(2);
     expect(daysSince('2026-07-12', '2026-07-10')).toBe(-2); // fecha futura
     expect(freshnessTone(0)).toBe('fresh');
+    expect(freshnessTone(-2)).toBe('stale'); // fecha futura = anomalía, no verde
     expect(freshnessTone(5)).toBe('stale');
     expect(freshnessTone(30)).toBe('old');
     expect(freshnessTone(null)).toBe('none');
