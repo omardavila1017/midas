@@ -2050,6 +2050,15 @@ export default function App() {
     }
   }, [allowedDatasets, setBootSlot]);
 
+  // El slot `projection` es una señal de RENDER (first-paint del dashboard de
+  // Proyección), no un dataset: sólo se emite si el tab se monta. Un `user`
+  // sin acceso a `financialProjection` nunca lo monta (el guard lo redirige a
+  // su primer tab permitido), así que sin este escape su splash esperaba el
+  // timeout de 60s del slot con los datos ya listos.
+  useEffect(() => {
+    if (!canAccessTab('financialProjection')) setBootSlot('projection', 'done');
+  }, [canAccessTab, setBootSlot]);
+
   useEffect(() => {
     if (bankCacheLoaded) setDatasetSlot('banks', 'ready');
   }, [bankCacheLoaded, setDatasetSlot]);
