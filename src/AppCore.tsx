@@ -3930,9 +3930,14 @@ export default function App() {
         // El callback `onPartialBatch` dispara tras cada ventana exitosa;
         // mergeamos al Map compartido, setState y saveHeavyRecords. El
         // saveQueues interno de heavyStoreIDB serializa los writes.
+        // Sólo llaves tocadas por ESTE refresh (2026-07-13): sembrar el Map
+        // del estado inicial hacía que cada flush re-aplicara ese snapshot
+        // stale COMPLETO sobre `prev`, pisando llaves que backfillRol hubiera
+        // refrescado (estado + IDB) mientras este fetch estaba en vuelo —
+        // clobber inverso al corregido el 2026-07-11. Las llaves no tocadas
+        // las conserva el overlay funcional sobre `prev`.
         const mergedByKey = new Map<string, RolRecord>();
-        for (const r of rolRecords) mergedByKey.set(rolKey(r), r);
-        const initialSize = mergedByKey.size;
+        const initialSize = rolRecords.length;
         // Flush con throttle temporal: en un refresh force sobre datos ya
         // hidratados TODO record refetcheado es un objeto nuevo (referencia
         // distinta) — persistir el array completo por cada ventana (~185 en
@@ -3997,7 +4002,7 @@ export default function App() {
           setRolLoadedKeys(prev => ({ ...prev, [cacheKey]: new Date().toISOString() }));
         }
         // eslint-disable-next-line no-console
-        console.info(`[rol] sync · fetched=${records.length} viajes ${fechaInicial}..${fechaFinal} · total persisted=${mergedByKey.size} (delta=${mergedByKey.size - initialSize})`);
+        console.info(`[rol] sync · fetched=${records.length} viajes ${fechaInicial}..${fechaFinal} · llaves tocadas=${mergedByKey.size} · estado previo=${initialSize}`);
         return { totalRecords: records.length, totalCias: 1, failedCias: 0 };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -4070,9 +4075,12 @@ export default function App() {
         return { totalRecords: viajesEspecialesRecords.length };
       }
       try {
+        // Sólo llaves tocadas por ESTE refresh (espejo de ROL, 2026-07-13):
+        // sembrar del estado inicial re-aplicaba un snapshot stale sobre
+        // llaves refrescadas por el backfill en vuelo; el overlay funcional
+        // sobre `prev` ya conserva las llaves no tocadas.
         const mergedByKey = new Map<number, ViajeEspecialRecord>();
-        for (const v of viajesEspecialesRecords) mergedByKey.set(v.kRenta, v);
-        const initialSize = mergedByKey.size;
+        const initialSize = viajesEspecialesRecords.length;
         // Flush con throttle temporal (espejo de ROL): en refresh force todo
         // record refetcheado es referencia nueva — sin throttle cada ventana
         // no vacía persistía el array completo (tormenta IDB + setState).
@@ -4127,7 +4135,7 @@ export default function App() {
           setViajesEspecialesLoadedKeys(prev => ({ ...prev, [cacheKey]: new Date().toISOString() }));
         }
         // eslint-disable-next-line no-console
-        console.info(`[viajes-esp] sync · fetched=${records.length} ${fechaInicial}..${fechaFinal} · total persisted=${mergedByKey.size} (delta=${mergedByKey.size - initialSize})`);
+        console.info(`[viajes-esp] sync · fetched=${records.length} ${fechaInicial}..${fechaFinal} · llaves tocadas=${mergedByKey.size} · estado previo=${initialSize}`);
         return { totalRecords: records.length };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
