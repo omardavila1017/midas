@@ -532,6 +532,10 @@ Petición: el arranque no debe bajar historia vieja "por si acaso"; los años pa
 - **UI cableada:** Venta (`SalesCalendarDashboard`, datasets `['cobranza','rol']`) y Cobranza (`CobranzaRealCalendar` en `CollectionProjection`, datasets `['cobranza','rol','banks']`) llaman `ensureYearLoaded` en un effect keyed por el año navegado y pintan un pill "Cargando {año}…" mientras `isLoadingHistorical`. Clientes NO tiene navegación por año (historial fijo de 12 meses → nada que diferir); Nómina ya auto-fetchea el mes seleccionado en su vista snapshot (`refresh()`), así que su selector de año no requiere el mecanismo.
 - **Notas:** bajo el default `clear-on-entry` el heavy-store se borra en cada ingreso, así que el boot siempre baja la ventana default fresca (no hay hueco backward que reparar); el piso solicitado es session-scoped (no se persiste). El backfill sólo corre para datasets en `allowedDatasets` (un `user` sin acceso no dispara la API).
 
+## Fuentes y Datos: tab TEMPORAL de diagnóstico (2026-07-10)
+
+Módulo de diagnóstico de frescura de fuentes (`src/modules/data-sources/`), sección de nav nueva `fuentes` con 4 sub-tabs (`fuentesBancos`/`fuentesJde`/`fuentesTress`/`fuentesRol`). **Marcado TEMPORAL en código** — al retirarlo, quitar: los 4 `TabId` (`types.ts`), labels + grupo de permisos (`appTabs.ts`), wiring de `AppCore.tsx` (SUB_TABS/SECTION_FOR_TAB/DEFAULT_TAB/TAB_DATASETS/render) y el directorio del módulo. Read-only: agrega sobre records ya en memoria (cero fetches, cero localStorage). `dataSourcesService.ts` (puro, testeado) clasifica frescura por fecha máxima de captura por fuente (`fresh`/`aging`/`stale`; fecha futura → `stale`, no verde). Grantable por permisos (no admin-only). `TAB_DATASETS` por sub-tab acota los datasets que fuerza a cargar. Doc de auditoría relacionada: `docs/AUDITORIA-CONEXIONES-APIS-2026-07.md`.
+
 ## Corrida de mantenimiento 2026-07-10 (auditoría PRs #182–#186)
 
 Auditoría con 5 pasadas paralelas sobre los PRs recientes + invariantes transversales. Correcciones quirúrgicas aplicadas (cada una con test o typecheck en verde; detalle en los commits):
