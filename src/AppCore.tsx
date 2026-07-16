@@ -4977,7 +4977,12 @@ export default function App() {
       for (let i = 0; i < settled.length; i++) {
         const entry = settled[i];
         if (entry.status === 'fulfilled' && entry.value.res.length > 0) {
-          setBankJdeStatements(entry.value.res);
+          // Merge, nunca replace: con force=true este paso corre aunque el
+          // histórico (incl. años backfilleados) ya esté hidratado — un
+          // replace lo pisaba con UN día y el Step 2 sólo re-mergea desde el
+          // piso default, perdiendo lo anterior (mismo clobber corregido en
+          // cobranza/rol/viajes).
+          setBankJdeStatements(prev => mergeBankStatements(prev, entry.value.res));
           setBankLastQuery({
             fechaEstadoCuenta: entry.value.fecha,
             formatoElectronico: defaultFormat,
