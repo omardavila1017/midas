@@ -1234,6 +1234,9 @@ const KEPT_COBRANZA_FIELDS = new Set<string>([
   // conservar el campo crudo para que `mapCobranza` lo pueda leer.
   'tiposervicio', 'tipo_servicio', 'tipo_de_servicio', 'servicio',
   'segmento', 'segmento_cliente', 'unidad_negocio', 'unidadnegocio',
+  // Fecha promesa de pago del cliente (campo nuevo 2026-07, QA primero).
+  'fechapromesapagocliente', 'fecha_promesa_pago_cliente',
+  'fechapromesapago', 'fecha_promesa_pago', 'fechapromesa', 'fecha_promesa',
 ]);
 
 function mapCobranza(raw: RawRecord): CobranzaRecord {
@@ -1353,6 +1356,14 @@ function mapCobranza(raw: RawRecord): CobranzaRecord {
     'unidad_negocio', 'Unidad_Negocio', 'unidadNegocio',
   ])) || undefined;
 
+  // ── Fecha promesa de pago del cliente ── (campo nuevo 2026-07, QA primero)
+  // Informativo: NO alimenta la fecha proyectada de cobro (motor intacto).
+  const fechaPromesaPago = trimIsoDate(pick(raw, [
+    'fechaPromesaPago', 'fecha_promesa_pago', 'Fecha_Promesa_Pago',
+    'fechaPromesaPagoCliente', 'fecha_promesa_pago_cliente', 'Fecha_Promesa_Pago_Cliente',
+    'fechaPromesa', 'fecha_promesa', 'Fecha_Promesa',
+  ])) || undefined;
+
   return {
     cia:                     normalizeCia(pick(raw, ['cia', 'compania', 'company', 'Cia'])),
     noCliente:               toStr(pick(raw, ['noCliente', 'no_cliente', 'No_Cliente', 'noCte', 'cliente', 'customerNo', 'customer'])),
@@ -1393,6 +1404,7 @@ function mapCobranza(raw: RawRecord): CobranzaRecord {
     frecuenciaFacturacionClave,
     frecuenciaFacturacionNombre,
     tipoServicio,
+    fechaPromesaPago,
     // INTENCIONALMENTE NO persistimos `raw` aquí: con 10k+ facturas y ~30
     // campos cada una, el JSON.stringify del store excedía el quota de
     // 5 MB de localStorage y la app crasheaba al intentar guardar. Si se
@@ -1512,6 +1524,8 @@ const KEPT_INDICADORES_FIELDS = new Set<string>([
   'importe original factura', 'importe_original_factura', 'importeoriginalfactura',
   'tasa iva', 'tasa_iva', 'tasaiva',
   'importe iva factura original', 'importe_iva_factura_original', 'importeivafacturaoriginal',
+  // Tipo de servicio / segmento (nuevo SP JDE 2026-07, QA primero).
+  'tipo servicio', 'tipo_servicio', 'tiposervicio',
 ]);
 
 function mapCobranzaPaymentApplication(raw: RawRecord, idPago: string, cia: string): CobranzaPaymentApplication | null {
@@ -1569,6 +1583,7 @@ function mapCobranzaPaymentHeader(rows: RawRecord[], idPago: string, ciaFallback
     cliente: toStr(pick(header, ['Cliente', 'cliente'])),
     noBatch: toStr(pick(header, ['no batch', 'no_batch', 'noBatch', 'No_Batch'])),
     tipoCambio: toNum(pick(header, ['tipo cambio', 'tipo_cambio', 'tipoCambio'])),
+    tipoServicio: toStr(pick(header, ['Tipo Servicio', 'Tipo_Servicio', 'tipoServicio', 'tipo_servicio'])) || undefined,
     applications: rows
       .map(row => mapCobranzaPaymentApplication(row, idPago, cia))
       .filter((app): app is CobranzaPaymentApplication => app !== null),
@@ -2470,6 +2485,8 @@ const KEPT_NOMINA_FIELDS = new Set<string>([
   'fechapago', 'fecha_pago',
   'anio', 'year',
   'mes_num', 'nummes', 'monthnumber',
+  // Columna nueva TRESS 2026-07 (QA primero): turno del grupo de empleados.
+  'turno', 'id_turno', 'idturno',
 ]);
 
 /**
@@ -2507,6 +2524,11 @@ function mapNominaRow(raw: RawRecord): PayrollCostRecord {
   );
   const fechaFinal = trimIsoDate(pick(raw, ['FechaFinal', 'fechaFinal', 'fecha_final']));
   const fechaPago = trimIsoDate(pick(raw, ['FechaPago', 'fechaPago', 'fecha_pago']));
+
+  // Columna nueva TRESS 2026-07 (QA primero). Puro pass-through informativo:
+  // el merge por huella (year|month|cia|payrollType) reemplaza el batch
+  // completo, así que filas partidas por turno no colapsan ni doble-cuentan.
+  const turno = toStr(pick(raw, ['Turno', 'turno', 'IDTurno', 'id_turno'])) || undefined;
 
   // Año/mes derivados de la fecha de pago (la fuente más confiable para
   // alinear el evento de cash con el calendario fiscal). Si falta, intentamos
@@ -2551,6 +2573,7 @@ function mapNominaRow(raw: RawRecord): PayrollCostRecord {
     conceptType,
     cashTreatment,
     amount: monto,
+    turno,
   };
 }
 

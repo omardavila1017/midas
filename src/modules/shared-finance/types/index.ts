@@ -156,6 +156,8 @@ export interface PayrollCostRecord {
   cashTreatment: PayrollCashTreatment;
   amount: number;
   costCenter?: string;
+  /** Turno del grupo de empleados (columna nueva TRESS 2026-07). Informativo. */
+  turno?: string;
 }
 
 export type FinancialScenarioKind = 'BASE' | 'APPROVED' | 'DRAFT';

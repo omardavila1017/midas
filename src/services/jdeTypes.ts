@@ -298,6 +298,14 @@ export interface CobranzaRecord {
    * modelo el 2026-07-09 (B2.3).
    */
   tipoServicio?: string;
+  /**
+   * Fecha en que el cliente prometió pagar la factura (ISO `YYYY-MM-DD`).
+   * Campo agregado al endpoint /cobranza el 2026-07 (`Fecha_Promesa_Pago_Cliente`,
+   * publicado primero en QA). Mapeo tolerante; `undefined` si no viene.
+   * Solo informativo por ahora — NO alimenta la fecha proyectada de cobro
+   * (eso requiere aprobación explícita por tocar el motor).
+   */
+  fechaPromesaPago?: string;
 }
 
 // ───────────────────────────────────────────────────────────────
@@ -342,6 +350,12 @@ export interface CobranzaPayment {
   cliente: string;
   noBatch: string;
   tipoCambio: number;
+  /**
+   * Tipo de servicio / segmento comercial (nuevo SP JDE, columna
+   * `Tipo_Servicio` agregada a /cobranzaindicadores el 2026-07, QA primero;
+   * histórico reprocesado). Mapeo tolerante; `undefined` si no viene.
+   */
+  tipoServicio?: string;
   applications: CobranzaPaymentApplication[];
 }
 

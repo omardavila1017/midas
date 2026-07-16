@@ -206,6 +206,18 @@ describe('mapCobranza — tipoServicio (B2.3)', () => {
   });
 });
 
+describe('mapCobranza — fechaPromesaPago (campo nuevo 2026-07)', () => {
+  const base = { CIA: '00011', No_Cliente: '1', Nombre_Cliente: 'X', Factura: 'RI-1', Fecha_Factura: '2026-01-10' };
+
+  it('reads Fecha_Promesa_Pago_Cliente and trims to ISO date', () => {
+    expect(__internal.mapCobranza({ ...base, Fecha_Promesa_Pago_Cliente: '2026-08-15T00:00:00' }).fechaPromesaPago).toBe('2026-08-15');
+  });
+
+  it('is tolerant: undefined when the field is absent', () => {
+    expect(__internal.mapCobranza(base).fechaPromesaPago).toBeUndefined();
+  });
+});
+
 describe('normalizeCobranzaPayments', () => {
   it('agrupa filas repetidas por Id Pago y mantiene importes en el nivel correcto', () => {
     const payments = normalizeCobranzaPayments([
@@ -232,6 +244,7 @@ describe('normalizeCobranzaPayments', () => {
         'tasa iva': 'IVA16',
         'Importe Iva Factura original': '160.00',
         'no batch': 'B-1',
+        'Tipo Servicio': 'Dedicado',
       },
       {
         'Id Pago': 'PAY-1',
@@ -263,6 +276,8 @@ describe('normalizeCobranzaPayments', () => {
       // (últimos 8 si hubiese más) para cruzar con el banco.
       noRecibo: '90829',
       importeRecibo: 1740,
+      // Columna nueva del SP 2026-07: viaja en el header del pago.
+      tipoServicio: 'Dedicado',
     });
     expect(payments[0].applications).toHaveLength(2);
     expect(payments[0].applications.map(app => app.importeCobrado)).toEqual([1160, 580]);
@@ -833,6 +848,11 @@ describe('Nómina (TRESS) — mapNominaRow', () => {
     expect(r.conceptId).toBe(1);
     expect(r.conceptName).toBe('SUELDO ORDINARIO');
     expect(r.conceptType).toBe('Percepción');
+  });
+
+  it('mapea la columna nueva `Turno` (2026-07) y tolera su ausencia', () => {
+    expect(mapNominaRow({ ...baseRow, Turno: 'Nocturno' }).turno).toBe('Nocturno');
+    expect(mapNominaRow(baseRow).turno).toBeUndefined();
   });
 
   describe('cashTreatment table cubre todos los TipoConcepto esperados', () => {
