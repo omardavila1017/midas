@@ -70,9 +70,14 @@ interface Props {
    */
   backfillProgress?: { loaded: number; total: number };
   syncStatus?: 'idle' | 'loading' | 'ready' | 'stale' | 'error';
-  /** Callback al merge exitoso — App.tsx persiste en MidasStore. */
+  /**
+   * Callback al fetch exitoso. Recibe SOLO los records recién bajados (no el
+   * merge completo): el padre mergea sobre su estado vivo con un updater
+   * funcional — pasar el merge computado desde el prop (snapshot) pisaba lo
+   * que el boot loader / backfill hubieran commiteado en vuelo.
+   */
   onNominaFetched: (
-    merged: PayrollCostRecord[],
+    batch: PayrollCostRecord[],
     cacheKeys: Record<string, string>,
   ) => void;
 }
@@ -193,7 +198,7 @@ export default function PayrollDashboard({
       );
 
       const fetchedAt = new Date().toISOString();
-      let merged = nominaRecords;
+      let batch: PayrollCostRecord[] = [];
       const freshKeys: Record<string, string> = {};
       const failures: string[] = [];
 
@@ -201,7 +206,7 @@ export default function PayrollDashboard({
         const p = window[i];
         const key = nominaCacheKey({ idEmpresa, tipoNomina, anio: p.anio, mes: p.mes });
         if (res.status === 'fulfilled') {
-          merged = mergeNominaBatch(merged, res.value);
+          batch = mergeNominaBatch(batch, res.value);
           freshKeys[key] = fetchedAt;
         } else {
           const reason = res.reason;
@@ -215,7 +220,7 @@ export default function PayrollDashboard({
       });
 
       if (Object.keys(freshKeys).length > 0) {
-        onNominaFetched(merged, freshKeys);
+        onNominaFetched(batch, freshKeys);
       }
       if (failures.length > 0) {
         setErrMsg(`Fallaron ${failures.length}/${window.length} meses → ${failures.join(' · ')}`);
@@ -230,7 +235,7 @@ export default function PayrollDashboard({
     } finally {
       setLoading(false);
     }
-  }, [idEmpresa, tipoNomina, anio, mes, nominaRecords, onNominaFetched]);
+  }, [idEmpresa, tipoNomina, anio, mes, onNominaFetched]);
 
   const visibleMonthIsPartial = useMemo(
     () => findSuspectMonths(monthSnapshot).some((item) => item.year === anio && item.month === mes),

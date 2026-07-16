@@ -3282,32 +3282,40 @@ export default function App() {
         // 28 cías × 520 días × 1 write c/u sería ~14k writes — el throttler
         // colapsa ráfagas a 1 write por intervalo, así que en práctica son
         // pocas decenas durante toda la carga.
-        const mergedByKey = new Map<string, AuxiliarContableRecord>();
+        // Sólo llaves NUEVAS de este fetch en el Map + commit FUNCIONAL
+        // (2026-07-15, espejo del fix de rol/cobranza): sembrar el Map del
+        // estado y commitear el snapshot completo pisaba (estado + IDB) las
+        // llaves que backfillAuxiliar hubiera commiteado mientras este loader
+        // seguía en vuelo. `seenKeys` conserva el dedup contra lo ya
+        // hidratado; el overlay funcional sobre `prev` conserva lo ajeno.
         const keyOf = (r: AuxiliarContableRecord) =>
           `${r.cia}::${r.idCuenta}::${r.noDocto}::${r.tipoDocto}`;
+        const seenKeys = new Set<string>();
         for (const r of auxiliarContableRecords) {
-          mergedByKey.set(keyOf(r), r);
+          seenKeys.add(keyOf(r));
         }
-        const initialSize = mergedByKey.size;
+        const mergedByKey = new Map<string, AuxiliarContableRecord>();
         let dirty = false;
-        let lastFlushedSize = initialSize;
         const flush = (label: string) => {
           if (!dirty) return;
           dirty = false;
-          const snapshot = Array.from(mergedByKey.values());
-          if (snapshot.length === lastFlushedSize) return;
-          lastFlushedSize = snapshot.length;
           // eslint-disable-next-line no-console
-          console.info(`[auxiliarcontable] flush (${label}) · persisting snapshot=${snapshot.length}`);
-          setAuxiliarContableRecords(snapshot);
-          void saveHeavyRecords('auxiliarContableRecords', snapshot);
+          console.info(`[auxiliarcontable] flush (${label}) · merging ${mergedByKey.size} new keys`);
+          setAuxiliarContableRecords(prev => {
+            const byKey = new Map<string, AuxiliarContableRecord>();
+            for (const r of prev) byKey.set(keyOf(r), r);
+            for (const [k, r] of mergedByKey) byKey.set(k, r);
+            const snapshot = Array.from(byKey.values());
+            void saveHeavyRecords('auxiliarContableRecords', snapshot);
+            return snapshot;
+          });
         };
         const flushInterval = window.setInterval(() => flush('throttle'), 3000);
 
         const onDay = (batch: AuxiliarContableRecord[]) => {
           for (const r of batch) {
             const k = keyOf(r);
-            if (!mergedByKey.has(k)) {
+            if (!seenKeys.has(k) && !mergedByKey.has(k)) {
               mergedByKey.set(k, r);
               dirty = true;
             }
@@ -3342,7 +3350,7 @@ export default function App() {
               totalLines += fetched.length;
               const timestamp = new Date().toISOString();
               // eslint-disable-next-line no-console
-              console.info(`[auxiliarcontable] ${cia} · ${fetched.length} líneas · acumulado=${mergedByKey.size}`);
+              console.info(`[auxiliarcontable] ${cia} · ${fetched.length} líneas · nuevas acumuladas=${mergedByKey.size}`);
               setAuxiliarContableLoadedCias(prev => ({ ...prev, [cia]: timestamp }));
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err);
@@ -3360,7 +3368,7 @@ export default function App() {
         }
 
         // eslint-disable-next-line no-console
-        console.info(`[auxiliarcontable] boot sync · ${ciasToFetch.length} cías · ${totalLines} líneas nuevas · ${errors.length} errores · total persisted=${mergedByKey.size}`);
+        console.info(`[auxiliarcontable] boot sync · ${ciasToFetch.length} cías · ${totalLines} líneas nuevas · ${errors.length} errores · llaves nuevas=${mergedByKey.size}`);
         if (errors.length > 0 && successCount === 0) {
           auxiliarAutoFetchDone.current = false;
           setBootSlot('auxiliar', 'error');
@@ -4389,22 +4397,21 @@ export default function App() {
           });
           if (commit && mergedBatch.length > 0) {
             workingRecords = mergeNominaBatch(workingRecords, mergedBatch);
-            setNominaRecords(workingRecords);
+            // Commit FUNCIONAL (2026-07-15): mergear el batch sobre `prev` en
+            // vez de commitear el snapshot `workingRecords` — un writer
+            // concurrente (onNominaFetched del tab de Nómina, backfillNomina)
+            // que haya commiteado durante el await del fetch aportó records
+            // que el snapshot no conoce y el commit los pisaba (estado + IDB
+            // vía el saver reactivo). `workingRecords` sigue como bookkeeping
+            // local para shouldSkip/presentMonths.
+            const batch = mergedBatch;
+            setNominaRecords(prev => {
+              const merged = mergeNominaBatch(prev, batch);
+              void saveHeavyRecords('nominaRecords', merged);
+              return merged;
+            });
           }
           return { keys, merged: mergedBatch };
-        };
-
-        // El saver reactivo (`useHeavySaver`) se resetea con CADA
-        // setNominaRecords; el backfill histórico dispara decenas a lo largo
-        // de minutos, así que el debounce casi nunca cierra durante el boot, y
-        // el flush de unload escribe IDB async (se pierde si la pestaña muere
-        // antes del commit) → localStorage guarda nominaLoadedKeys pero IDB se
-        // queda sin nominaRecords. Un await explícito tras el fast path y tras
-        // el histórico garantiza IDB aunque el usuario recargue a mitad.
-        const persistNomina = async (): Promise<void> => {
-          if (workingRecords.length > 0) {
-            await saveHeavyRecords('nominaRecords', workingRecords);
-          }
         };
 
         // FAST PATH: TODO el año-a-la-fecha (enero→mes actual), mínimo 4 meses
@@ -4436,12 +4443,14 @@ export default function App() {
         const recentToFetch = recent;
         if (recentToFetch.length > 0) {
           // Fast path: commit inmediato (UX — los 4 meses recientes pintan ya).
+          // IDB se escribe dentro del updater funcional de fetchAndMerge (el
+          // antiguo `await persistNomina()` snapshot ya no hace falta y podía
+          // pisar en IDB lo que un writer concurrente hubiera persistido).
           const { keys: recentKeys } = await fetchAndMerge(recentToFetch);
           if (Object.keys(recentKeys).length > 0) {
             workingLoadedKeys = { ...workingLoadedKeys, ...recentKeys };
             setNominaLoadedKeys(workingLoadedKeys);
           }
-          await persistNomina();
         }
         setBootSlot('nomina', 'done');
         setDatasetSlot('nomina', 'ready');
@@ -4481,6 +4490,10 @@ export default function App() {
             // → loop infinito. Con esta save sincrónica, IDB y localStorage
             // quedan en sync después de cada chunk. setState sigue coalescido
             // al final (preserva la optimización de RAM, ver comment arriba).
+            // Limitación aceptada: este save es un snapshot (no ve commits
+            // concurrentes de onNominaFetched/backfillNomina); una pisada
+            // transitoria en IDB se repara con el commit funcional final del
+            // loop y, si la pestaña muere antes, shouldSkip refetchea el mes.
             await saveHeavyRecords(
               'nominaRecords',
               mergeNominaBatch(workingRecords, histAccum),
@@ -4492,12 +4505,18 @@ export default function App() {
           }
         }
         if (histAccum.length > 0) {
-          workingRecords = mergeNominaBatch(workingRecords, histAccum);
-          setNominaRecords(workingRecords);
+          // Commit + persist FUNCIONAL final: mergear histAccum sobre `prev`
+          // (no el snapshot `workingRecords`) conserva lo que onNominaFetched /
+          // backfillNomina hayan commiteado durante los ~5-10 min del loop, y
+          // re-persiste el merge real (repara cualquier pisada transitoria de
+          // los saves per-chunk snapshot de arriba).
+          const batch = histAccum;
+          setNominaRecords(prev => {
+            const merged = mergeNominaBatch(prev, batch);
+            void saveHeavyRecords('nominaRecords', merged);
+            return merged;
+          });
         }
-        // Persist final tras el backfill — inmune al starvation del debounce
-        // y a la pérdida del flush async de unload.
-        await persistNomina();
       } catch (err) {
         // No degradar un boot ya liberado: el slot reportó 'done' con el fast
         // path y el splash (que ahora bloquea en 'error') pudo estar aún
@@ -5868,10 +5887,17 @@ export default function App() {
                     loaded: Object.keys(nominaLoadedKeys).length,
                     total: 24,
                   }}
-                  onNominaFetched={(merged, freshKeys) => {
-                    setNominaRecords(merged);
+                  onNominaFetched={(batch, freshKeys) => {
+                    // Merge funcional del batch recién bajado sobre el estado
+                    // vivo — el hijo ya no manda un merge computado desde su
+                    // prop (snapshot que pisaba commits concurrentes del boot
+                    // loader / backfillNomina, estado + IDB).
+                    setNominaRecords(prev => {
+                      const merged = mergeNominaBatch(prev, batch);
+                      void saveHeavyRecords('nominaRecords', merged);
+                      return merged;
+                    });
                     setNominaLoadedKeys(prev => ({ ...prev, ...freshKeys }));
-                    void saveHeavyRecords('nominaRecords', merged);
                   }}
                 />
               </Suspense>

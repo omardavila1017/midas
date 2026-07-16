@@ -27,7 +27,10 @@ import type { PayrollCostRecord } from '../../shared-finance/types';
 
 // ── Helpers de fecha (tolerantes a basura del API) ─────────────────────────
 
-const ISO_DAY_RE = /^(\d{4}-\d{2}-\d{2})/;
+// Valida mes 01-12 y día 01-31: sin la validación, basura tipo "2026-13-99"
+// pasaba el regex y ganaba como máximo lexicográfico en maxIsoDay, pintando
+// la fila "Sin datos" (fmtDate/daysSince fallan) aunque hubiera fecha real.
+const ISO_DAY_RE = /^(\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01]))/;
 
 /** Normaliza a "YYYY-MM-DD" o null si el valor no parece fecha ISO. */
 export function normalizeIsoDay(value: string | null | undefined): string | null {
@@ -191,7 +194,11 @@ export function buildJdeEntityRows(input: JdeFreshnessInput): JdeEntityFreshness
   for (const st of bancos) {
     for (const mov of st.movimientos ?? []) {
       bancosCount += 1;
-      bancosMovs.push(mov.fechaOperacion);
+      // Mismo fallback a fechaValor que buildBankFreshnessRows: hay feeds que
+      // sólo pueblan fechaValor y sin él esta fila reportaba más atraso que
+      // el tab de Bancos sobre los mismos datos.
+      const d = normalizeIsoDay(mov.fechaOperacion) ?? normalizeIsoDay(mov.fechaValor);
+      if (d) bancosMovs.push(d);
     }
   }
 

@@ -51,10 +51,16 @@ describe('date helpers', () => {
     expect(normalizeIsoDay('0000-00-00')).toBeNull();
     expect(normalizeIsoDay('')).toBeNull();
     expect(normalizeIsoDay('no-date')).toBeNull();
+    // Mes/día imposibles: pasaban el regex viejo y ganaban como máximo
+    // lexicográfico, enmascarando la fecha real más reciente.
+    expect(normalizeIsoDay('2026-13-99')).toBeNull();
+    expect(normalizeIsoDay('2026-00-15')).toBeNull();
+    expect(normalizeIsoDay('2026-07-32')).toBeNull();
   });
 
   it('maxIsoDay toma el máximo ignorando inválidos', () => {
     expect(maxIsoDay(['2026-01-01', 'garbage', '2026-07-08', null])).toBe('2026-07-08');
+    expect(maxIsoDay(['2026-07-08', '2026-13-99'])).toBe('2026-07-08');
     expect(maxIsoDay([])).toBeNull();
   });
 
@@ -125,6 +131,22 @@ describe('buildJdeEntityRows', () => {
     expect(byId.compras.latestDate).toBe('2026-07-02');
     expect(byId.bancos.latestDate).toBe('2026-07-04');
     expect(byId.auxiliar.latestDate).toBe('2026-07-06');
+  });
+
+  it('bancos cae a fechaValor cuando fechaOperacion viene vacía (paridad con el tab Bancos)', () => {
+    const rows = buildJdeEntityRows({
+      bankJdeStatements: [
+        statement({
+          movimientos: [
+            { ...mov(''), fechaValor: '2026-07-10' } as never,
+            mov('2026-07-04'),
+          ],
+        }),
+      ],
+    });
+    const bancos = rows.find((r) => r.id === 'bancos');
+    expect(bancos?.latestDate).toBe('2026-07-10');
+    expect(bancos?.registros).toBe(2);
   });
 });
 
