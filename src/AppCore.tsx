@@ -3474,27 +3474,35 @@ export default function App() {
           perCiaFechaInicial.set(cia, clamped);
         }
 
-        const mergedByKey = new Map<string, AuxiliarContableRecord>();
+        // Sólo llaves NUEVAS de este fetch en el Map + commit FUNCIONAL
+        // (espejo del fix del auxiliar de conciliación): sembrar el Map del
+        // estado y commitear el snapshot completo pisaría (estado + IDB) lo
+        // que cualquier escritor concurrente commitee mientras este loader
+        // sigue en vuelo. `seenKeys` conserva el dedup contra lo hidratado.
         const keyOf = (r: AuxiliarContableRecord) =>
           `${r.cia}::${r.idCuenta}::${r.noDocto}::${r.tipoDocto}`;
-        for (const r of auxiliarIvaRecords) mergedByKey.set(keyOf(r), r);
+        const seenKeys = new Set<string>();
+        for (const r of auxiliarIvaRecords) seenKeys.add(keyOf(r));
+        const mergedByKey = new Map<string, AuxiliarContableRecord>();
         let dirty = false;
-        let lastFlushedSize = mergedByKey.size;
         const flush = () => {
           if (!dirty) return;
           dirty = false;
-          const snapshot = Array.from(mergedByKey.values());
-          if (snapshot.length === lastFlushedSize) return;
-          lastFlushedSize = snapshot.length;
-          setAuxiliarIvaRecords(snapshot);
-          void saveHeavyRecords('auxiliarIvaRecords', snapshot);
-          publishDiagnostic(snapshot);
+          setAuxiliarIvaRecords(prev => {
+            const byKey = new Map<string, AuxiliarContableRecord>();
+            for (const r of prev) byKey.set(keyOf(r), r);
+            for (const [k, r] of mergedByKey) byKey.set(k, r);
+            const snapshot = Array.from(byKey.values());
+            void saveHeavyRecords('auxiliarIvaRecords', snapshot);
+            publishDiagnostic(snapshot);
+            return snapshot;
+          });
         };
         const flushInterval = window.setInterval(flush, 3000);
         const onDay = (batch: AuxiliarContableRecord[]) => {
           for (const r of batch) {
             const k = keyOf(r);
-            if (!mergedByKey.has(k)) {
+            if (!seenKeys.has(k) && !mergedByKey.has(k)) {
               mergedByKey.set(k, r);
               dirty = true;
             }
@@ -3541,17 +3549,21 @@ export default function App() {
             }
           }
         };
+        // Vista local hidratado+nuevo para diagnóstico/logs (no toca estado;
+        // el flush funcional ya publicó el snapshot real via el updater).
+        const finalByKey = new Map<string, AuxiliarContableRecord>();
         try {
           await Promise.all(Array.from({ length: concurrency }, worker));
         } finally {
           window.clearInterval(flushInterval);
-          dirty = true;
           flush();
-          publishDiagnostic(Array.from(mergedByKey.values()));
+          for (const r of auxiliarIvaRecords) finalByKey.set(keyOf(r), r);
+          for (const [k, r] of mergedByKey) finalByKey.set(k, r);
+          publishDiagnostic(Array.from(finalByKey.values()));
         }
         // eslint-disable-next-line no-console
-        console.info(`[iva-ledger] boot sync · ${ciasToFetch.length} cías · total=${mergedByKey.size} · window.__midas__.ivaLedger`);
-        const accounts = summarizeIvaAccounts(Array.from(mergedByKey.values()));
+        console.info(`[iva-ledger] boot sync · ${ciasToFetch.length} cías · total=${finalByKey.size} · nuevas=${mergedByKey.size} · window.__midas__.ivaLedger`);
+        const accounts = summarizeIvaAccounts(Array.from(finalByKey.values()));
         const hasCreditableByCia = new Set(accounts.filter((account) => account.kind === 'creditable').map((account) => account.cia));
         const missing = missingIvaKindsByCia(accounts);
         for (const [cia, kinds] of Object.entries(missing)) {
