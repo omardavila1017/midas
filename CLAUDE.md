@@ -60,7 +60,7 @@ Operational context for any agent or new dev touching `midas` (formerly `flowsen
 
 This is the handoff snapshot for delivering Midas in its current state. **`CLAUDE.md` is the single source of truth** for code/architecture; `AGENTS.md` intentionally points here (no second copy to drift). `DOCS.md` is the index of every doc in the repo (what is current vs. an archived historical snapshot under `docs/archive/`).
 
-- **Verified baseline (run after `npm install`, re-verified 2026-07-16):** `npm run typecheck` clean · `npm test` → 1440 passed / 12 skipped / 0 failed (145 files) · `npm run build` passes with the expected ~810 kB main-chunk warning. See "Before you ship".
+- **Verified baseline (run after `npm install`, re-verified 2026-07-19):** `npm run typecheck` clean · `npm test` → 1444 passed / 12 skipped / 0 failed (145 files) · `npm run build` passes with the expected ~810 kB main-chunk warning. See "Before you ship".
 - **Auth posture:** real backend session at `/api/auth/*` (HttpOnly cookie); the frontend RBAC is **UX only, not a security boundary** — the proxy/backend authorizes `/api/*`. No tokens/passwords in the bundle. See `AUTH.md` + `SECURITY-AUDIT.md` (rotate any historically-exposed secret + purge git history before going live — that operational step is still owned by the deploying team).
 - **Known intentional artifacts shipped (not bugs):**
   - Company exclusion catalog is **empty** (nothing excluded; mechanism preserved). See Risk #9 + `EXCLUSION_RULES.md`.
@@ -553,6 +553,14 @@ Auditoría con 5 pasadas paralelas sobre los PRs recientes + invariantes transve
 6. **Retry del boot bloqueado = reload total:** con clear-on-entry, un dataset fallido al minuto 25 reinicia TODO; un retry por-slot (los loaders ya resetean sus `*AutoFetchDone` en error) sería mucho más barato.
 7. **Catálogo de compensaciones:** la regla TLJ no empata ningún nombre del catálogo bundleado y no trae `clientKeys` — hasta confirmar la clave JDE real, TLJ sigue saliendo `sin-banco` (el catálogo ya lo marca "pendiente de confirmar").
 
+## Corrida de mantenimiento 2026-07-19 (auditoría, sin cambios de código)
+
+Auditoría sobre los cambios del 2026-07-14 al 16 (cierres de la clase clobber en `AppCore.tsx` + mapeo de columnas QA `bc35840`). Baseline verde (typecheck limpio · 1444 pass / 12 skip · build OK). Barrido completo de setters de datasets en `AppCore.tsx`: todos los loaders/backfillers commitean funcional; los commits directos restantes son hidratación pre-concurrencia (seguros) o la excepción documentada de nómina per-chunk. **Sin correcciones aplicadas** — hallazgos latentes/de diseño, documentados para decisión:
+
+1. **`replaceAllCxp` (`AppCore.tsx:5301`) es reemplazo wholesale:** el import CSV de CXP hace `setCxpRecords(records)` seco — nuke de las cías NO incluidas en el CSV (records + timestamps). Internamente consistente con su nombre/semántica, pero comparte la forma del clobber corregido en los loaders; confirmar con producto si el import debe reemplazar sólo las cías del CSV (`prev => merge por cia`) o todo.
+2. **`fechaPromesaPago` sin filtro de fecha centinela JDE** (`1899-12-31`): mismo gap que `fechaCobro`/`fechaVence`; hoy sin consumidores (cero impacto). Si se cablea a UI/motor, aplicar `isSentinelJdeDate` como en Compras.
+3. **Test de `mapCobranzaPaymentHeader` + `tipoServicio`** depende del tie-break (`rows[0]`) en vez de probar que el campo sobrevive cuando la fila max-importe no es la primera — gap de cobertura menor.
+
 ## API client tuning
 
 `src/services/jdeClient.ts` (post 2026-05-14 retune):
@@ -669,7 +677,7 @@ Locale and currency are hardcoded `es-MX` / `MXN` in `formatters.ts`. If you eve
 ## Before you ship
 
 - `npm install` first — the repo ships no `node_modules`. (Note: invoking a *global* `tsc`/`vitest` instead of the project's pinned ones can produce false errors, e.g. `TS5101 baseUrl deprecated` from a TS 7.x preview — the project pins TypeScript `^5.5.2` + `ignoreDeprecations` in `tsconfig.json`, so always run via `npm`/`npx` against installed deps.)
-- `npm test` — **baseline 2026-07-16: 145 files, 1440 passed, 12 skipped, 0 failed** (~48s). The 12 skips are intentional and spread across 3 files (each carries its inline reason): 5 in `canonicalProjection.test.ts` (long-term projection removed), 6 in `CollectionProjection.test.tsx` (removed UI: source-filter chips / cruce-banco banner), 1 in `TaxDashboard.test.tsx`. Any new failure is yours.
+- `npm test` — **baseline 2026-07-19: 145 files, 1444 passed, 12 skipped, 0 failed** (~48s). The 12 skips are intentional and spread across 3 files (each carries its inline reason): 5 in `canonicalProjection.test.ts` (long-term projection removed), 6 in `CollectionProjection.test.tsx` (removed UI: source-filter chips / cruce-banco banner), 1 in `TaxDashboard.test.tsx`. Any new failure is yours.
 - `npm run typecheck` — clean as of 2026-07-07. Any error is yours.
 - `npm run build` — passes as of 2026-07-16, with one expected warning: the `AppCoreWithProviders` chunk is ~810 kB (>500 kB Vite threshold). Code is already split into vendor-react / vendor-charts / per-tab chunks; the main app chunk is the remaining floor. Not a blocker.
 - Dev-dependency audit debt (no prod impact — `npm audit --omit=dev` is clean): the remaining `npm audit` findings require major upgrades of `vite` (5→8) and `vitest` (2→4); deferred deliberately. Do NOT run `npm audit fix --force`.
