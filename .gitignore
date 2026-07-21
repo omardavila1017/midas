@@ -56,3 +56,6 @@ _rebuild_backup/
 .claude/
 .gstack/
 coverage
+
+# Reporte del refresh de clasificación de proveedores (scripts/refresh-provider-classification.mjs).
+scripts/out/

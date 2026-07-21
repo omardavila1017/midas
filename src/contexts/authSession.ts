@@ -1,4 +1,5 @@
 import type { Role } from '../config/roles';
+import type { AppTabId } from '../modules/shared-finance/components/NavigationContext';
 
 export const AUTH_LAST_EMAIL_KEY = 'midas.auth.lastEmail.v1';
 export const LEGACY_AUTH_SESSION_KEY = 'midas.auth.session.v1';
@@ -7,6 +8,12 @@ export interface CurrentAuthSession {
   email: string;
   role: Role;
   expiresAt?: string;
+  /**
+   * Módulos concedidos por la sesión. Solo poblado en el modo ONLINE
+   * (WS/midas/usuarios), donde los permisos los manda la API (no el registro
+   * local). En modo local queda `undefined` y el gate usa `accessControlStore`.
+   */
+  permissions?: AppTabId[];
 }
 
 let currentSession: CurrentAuthSession | null = null;

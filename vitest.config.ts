@@ -18,7 +18,11 @@ export default defineConfig({
     // el corrimiento de un día en prorateMinimumExpense sólo reproducía en
     // zonas UTC-negativas. Fijarla hace los tests deterministas y fieles al
     // entorno real del usuario.
-    env: { TZ: 'America/Mexico_City' },
+    // El modo ONLINE de usuarios (WS/midas) es el default en producción
+    // (`VITE_MIDAS_USERS_ENABLED` ausente → true). En tests lo apagamos para que
+    // la suite existente corra en el modo local/backend previo; las pruebas del
+    // modo online lo prenden por-test con `__setMidasUsersEnabledForTests(true)`.
+    env: { TZ: 'America/Mexico_City', VITE_MIDAS_USERS_ENABLED: 'false' },
     exclude: [...configDefaults.exclude, '.claude/**', 'tests-e2e/**', '**/tests-e2e/**'],
     coverage: {
       provider: 'v8',

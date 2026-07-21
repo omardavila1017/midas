@@ -274,6 +274,22 @@ export function canAccess(email: string | null, sessionRole: Role, tab: AppTabId
   return false;
 }
 
+/**
+ * Decisión de visibilidad para el modo ONLINE (WS/midas): el rol y los permisos
+ * vienen de la SESIÓN (API), no del registro local. No consulta `localStorage`
+ * ni el roster hardcodeado — es una función pura testeable.
+ *   - admin → todo (incluidos los tabs admin-only).
+ *   - tab admin-only → solo admin.
+ *   - user → solo los tabs de `permissions`.
+ *   - none → nada.
+ */
+export function canAccessWithPermissions(role: Role, permissions: AppTabId[], tab: AppTabId): boolean {
+  if (role === 'admin') return true;
+  if (isAdminOnlyTab(tab)) return false;
+  if (role === 'user') return permissions.includes(tab);
+  return false;
+}
+
 // ── Escrituras ──────────────────────────────────────────────────────────────
 
 /** Alta o actualización de rol de un usuario. Permisos nuevos arrancan vacíos. */

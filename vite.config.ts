@@ -2,6 +2,7 @@ import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
 import { visualizer } from 'rollup-plugin-visualizer'
+import { resolveVersion } from './scripts/resolveVersion.mjs'
 
 function lucideIconPath(iconName: string): string {
   const fileName = iconName
@@ -120,6 +121,11 @@ export default defineConfig(({ mode }) => {
   // a otro entorno (p.ej. productivo) cuando se publique.
   const viajesEspUp = parseUpstream(env.VITE_VIAJES_ESPECIALES_UPSTREAM || env.VIAJES_ESPECIALES_UPSTREAM || 'https://appqa.gruposenda.com/WS/sentur/ViajesEspeciales')
   const viajesEspToken = env.VIAJES_ESPECIALES_TOKEN || jdeToken || env.VITE_VIAJES_ESPECIALES_TOKEN
+  // Usuarios/Seguridad ONLINE (WS/midas). El browser llama `/api/midas/usuarios`;
+  // aquí inyectamos el Bearer (MIDAS_TOKEN con fallback JDE_TOKEN). Upstream QA
+  // por defecto; ajustar MIDAS_UPSTREAM para producción.
+  const midasUp = parseUpstream(env.MIDAS_UPSTREAM || env.VITE_MIDAS_UPSTREAM || 'https://appqa.gruposenda.com/WS/midas')
+  const midasToken = env.MIDAS_TOKEN || jdeToken || env.VITE_MIDAS_TOKEN
   // Shared server-side store (Omar Dávila's deployment). Sin STORE_UPSTREAM no
   // se registra el proxy `/api/store` (target vacío rompería la config de Vite);
   // en ese caso remoteStore queda OFF y la app corre solo con localStorage/IDB.
@@ -131,6 +137,11 @@ export default defineConfig(({ mode }) => {
   const analyze = env.ANALYZE === '1' || process.env.ANALYZE === '1'
 
   return {
+    // Versión automática del login (MAJOR.MINOR.<#PRs> desde git). Ver
+    // scripts/resolveVersion.mjs. En tests (vitest) no se define → 'dev'.
+    define: {
+      __APP_VERSION__: JSON.stringify(resolveVersion()),
+    },
     plugins: [
       react({
         babel: {
@@ -192,6 +203,13 @@ export default defineConfig(({ mode }) => {
           secure: false,
           rewrite: (p) => p.replace(/^\/api\/viajes-especiales/, viajesEspUp.path),
           configure: (proxy) => configureProxy(proxy, { token: viajesEspToken }),
+        },
+        '/api/midas': {
+          target: midasUp.origin,
+          changeOrigin: true,
+          secure: false,
+          rewrite: (p) => p.replace(/^\/api\/midas/, midasUp.path),
+          configure: (proxy) => configureProxy(proxy, { token: midasToken }),
         },
         ...(storeUp.origin
           ? {

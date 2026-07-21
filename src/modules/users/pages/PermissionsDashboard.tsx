@@ -12,6 +12,7 @@ import { Info, ShieldCheck, User as UserIcon } from 'lucide-react';
 import PageHeader from '../../../components/ui/PageHeader';
 import { useAuth } from '../../../contexts/AuthContext';
 import { PERMISSION_GROUPS, GRANTABLE_TABS, tabLabel } from '../../../config/appTabs';
+import { isPermissionModule } from '../../../config/permissionModules';
 import {
   getHardcodedFloorTabs,
   listManagedUsers,
@@ -20,6 +21,13 @@ import {
   subscribeAccessChanged,
   type ManagedUser,
 } from '../services/accessControlStore';
+import { isMidasUsersEnabled } from '../../../config/midasUsers';
+import {
+  fetchManagedUsers,
+  managementErrorMessage,
+  setManagedUserPermission,
+  setManagedUserPermissions,
+} from '../services/userManagement';
 import PermissionToggle from '../components/PermissionToggle';
 import AccessNotEnforcedBanner from '../components/AccessNotEnforcedBanner';
 import LocalRegistryNote from '../components/LocalRegistryNote';
@@ -29,12 +37,29 @@ export default function PermissionsDashboard() {
   const { role } = useAuth();
   const toast = useToast();
   const canEdit = role === 'admin';
+  // Modo ONLINE (WS/midas): los switches le pegan a la API. Local: registro.
+  const midas = isMidasUsersEnabled();
 
-  const [users, setUsers] = useState<ManagedUser[]>(() => listManagedUsers());
+  const [users, setUsers] = useState<ManagedUser[]>(() => (midas ? [] : listManagedUsers()));
   const reload = useCallback(() => setUsers(listManagedUsers()), []);
-  useEffect(() => subscribeAccessChanged(reload), [reload]);
+  const reloadFromApi = useCallback(async () => {
+    try {
+      setUsers(await fetchManagedUsers());
+    } catch (error) {
+      toast.error(managementErrorMessage(error, 'No se pudo cargar el listado de usuarios.'));
+    }
+  }, [toast]);
+  useEffect(() => {
+    if (midas) {
+      void reloadFromApi();
+      return;
+    }
+    return subscribeAccessChanged(reload);
+  }, [midas, reload, reloadFromApi]);
 
-  const [selectedEmail, setSelectedEmail] = useState<string | null>(() => listManagedUsers()[0]?.email ?? null);
+  const [selectedEmail, setSelectedEmail] = useState<string | null>(() =>
+    midas ? null : listManagedUsers()[0]?.email ?? null,
+  );
 
   // Mantén una selección válida cuando cambia la lista de usuarios.
   useEffect(() => {
@@ -52,6 +77,23 @@ export default function PermissionsDashboard() {
     [users, selectedEmail],
   );
 
+  // En modo ONLINE (WS/midas) los permisos se sirven del contrato CSV de 17
+  // módulos; los tabs temporales fuera de contrato (`fuentes*`) no son
+  // persistibles, así que ocultamos su grupo para no mostrar switches muertos.
+  const permissionGroups = useMemo(
+    () =>
+      midas
+        ? PERMISSION_GROUPS.map((g) => ({ ...g, tabs: g.tabs.filter(isPermissionModule) })).filter(
+            (g) => g.tabs.length > 0,
+          )
+        : PERMISSION_GROUPS,
+    [midas],
+  );
+  const allGrantableTabs = useMemo(
+    () => permissionGroups.flatMap((g) => g.tabs),
+    [permissionGroups],
+  );
+
   // Piso hardcodeado del JSON (`authLocalUsers.json`): módulos que este usuario
   // SIEMPRE ve, en todos los navegadores. Se muestran forzados ON y no editables
   // aquí (para quitarlos se edita el JSON) — mismo trato que un admin.
@@ -67,12 +109,36 @@ export default function PermissionsDashboard() {
 
   const handleToggle = (tab: (typeof GRANTABLE_TABS)[number], enabled: boolean) => {
     if (!selected || !canEdit || selected.role === 'admin') return;
+    if (midas) {
+      void (async () => {
+        try {
+          await setManagedUserPermission(selected.email, tab, enabled);
+          await reloadFromApi();
+        } catch (error) {
+          toast.error(managementErrorMessage(error, 'No se pudo actualizar el permiso.'));
+        }
+      })();
+      return;
+    }
     setPermission(selected.email, tab, enabled);
     reload();
   };
 
   const handleSetAll = (enabled: boolean) => {
     if (!selected || !canEdit || selected.role === 'admin') return;
+    if (midas) {
+      const target = selected.email;
+      void (async () => {
+        try {
+          await setManagedUserPermissions(target, enabled ? [...allGrantableTabs] : []);
+          toast.success(enabled ? 'Se habilitaron todos los módulos.' : 'Se quitaron todos los módulos.');
+          await reloadFromApi();
+        } catch (error) {
+          toast.error(managementErrorMessage(error, 'No se pudieron actualizar los permisos.'));
+        }
+      })();
+      return;
+    }
     setPermissions(selected.email, enabled ? [...GRANTABLE_TABS] : []);
     reload();
     toast.success(enabled ? 'Se habilitaron todos los módulos.' : 'Se quitaron todos los módulos.');
@@ -206,7 +272,7 @@ export default function PermissionsDashboard() {
                 </div>
               ) : (
                 <div className="space-y-5">
-                  {PERMISSION_GROUPS.map((group) => (
+                  {permissionGroups.map((group) => (
                     <div key={group.section}>
                       <p
                         className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em]"

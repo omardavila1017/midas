@@ -30,6 +30,14 @@ import AccessNotEnforcedBanner from '../components/AccessNotEnforcedBanner';
 import LocalRegistryNote from '../components/LocalRegistryNote';
 import { adminSetPassword, sendUserPasswordReset } from '../../../services/authApi';
 import { isLocalAuthEnabled } from '../../../services/localAuth';
+import { isMidasUsersEnabled } from '../../../config/midasUsers';
+import {
+  createManagedUser,
+  fetchManagedUsers,
+  managementErrorMessage,
+  removeManagedUser,
+  updateManagedUserRole,
+} from '../services/userManagement';
 import { useToast } from '../../../components/Toast';
 
 function looksLikeEmail(value: string): boolean {
@@ -40,18 +48,35 @@ export default function UsersDashboard() {
   const { role, email } = useAuth();
   const toast = useToast();
   const canEdit = role === 'admin';
-  // En modo local (sin backend de correo) la "liga de reset" es no-op, así que
-  // ofrecemos el cambio directo de contraseña en su lugar; en backend mostramos
-  // ambos: cambio directo + envío de liga.
+  // Modo ONLINE (WS/midas): el CRUD le pega a la API. Modo local: registro
+  // sincrónico en `accessControlStore`.
+  const midas = isMidasUsersEnabled();
+  // En modo local u online (sin backend de correo) la "liga de reset" es no-op,
+  // así que ofrecemos el cambio directo de contraseña; solo el backend legacy
+  // `/api/auth` muestra el envío de liga.
   const localMode = isLocalAuthEnabled();
-  const canSendReset = canManagePasswordReset(role) && !localMode;
+  const canSendReset = canManagePasswordReset(role) && !localMode && !midas;
   const [resettingEmail, setResettingEmail] = useState<string | null>(null);
   const [passwordTarget, setPasswordTarget] = useState<string | null>(null);
   const [savingPassword, setSavingPassword] = useState(false);
 
-  const [users, setUsers] = useState<ManagedUser[]>(() => listManagedUsers());
+  const [users, setUsers] = useState<ManagedUser[]>(() => (midas ? [] : listManagedUsers()));
   const reload = useCallback(() => setUsers(listManagedUsers()), []);
-  useEffect(() => subscribeAccessChanged(reload), [reload]);
+  // ONLINE: recarga el listado desde `GET /usuarios`. Local: lo lee del registro.
+  const reloadFromApi = useCallback(async () => {
+    try {
+      setUsers(await fetchManagedUsers());
+    } catch (error) {
+      toast.error(managementErrorMessage(error, 'No se pudo cargar el listado de usuarios.'));
+    }
+  }, [toast]);
+  useEffect(() => {
+    if (midas) {
+      void reloadFromApi();
+      return;
+    }
+    return subscribeAccessChanged(reload);
+  }, [midas, reload, reloadFromApi]);
 
   const [newEmail, setNewEmail] = useState('');
   const [newRole, setNewRole] = useState<ManagedRole>('user');
@@ -70,6 +95,20 @@ export default function UsersDashboard() {
       toast.info('Ese correo ya está registrado.');
       return;
     }
+    if (midas) {
+      void (async () => {
+        try {
+          await createManagedUser(value, newRole);
+          setNewEmail('');
+          setNewRole('user');
+          toast.success(`Usuario ${value} registrado.`);
+          await reloadFromApi();
+        } catch (error) {
+          toast.error(managementErrorMessage(error, 'No se pudo registrar el usuario.'));
+        }
+      })();
+      return;
+    }
     upsertUser(value, newRole);
     reload();
     setNewEmail('');
@@ -78,11 +117,34 @@ export default function UsersDashboard() {
   };
 
   const handleRoleChange = (targetEmail: string, nextRole: ManagedRole) => {
+    if (midas) {
+      void (async () => {
+        try {
+          await updateManagedUserRole(targetEmail, nextRole);
+          await reloadFromApi();
+        } catch (error) {
+          toast.error(managementErrorMessage(error, 'No se pudo cambiar el rol.'));
+        }
+      })();
+      return;
+    }
     setUserRole(targetEmail, nextRole);
     reload();
   };
 
   const handleRemove = (targetEmail: string) => {
+    if (midas) {
+      void (async () => {
+        try {
+          await removeManagedUser(targetEmail);
+          toast.success(`Usuario ${targetEmail} eliminado.`);
+          await reloadFromApi();
+        } catch (error) {
+          toast.error(managementErrorMessage(error, 'No se pudo eliminar el usuario.'));
+        }
+      })();
+      return;
+    }
     removeUser(targetEmail);
     reload();
     toast.success(`Usuario ${targetEmail} eliminado.`);

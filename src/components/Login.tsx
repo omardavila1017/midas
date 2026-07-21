@@ -20,6 +20,7 @@ import {
   rememberLastEmail,
   setCurrentAuthSession,
 } from '../contexts/authSession';
+import { APP_VERSION } from '../config/appVersion';
 
 const sendaLogoUrl = `${import.meta.env.BASE_URL}logos/senda-corporativo.svg`;
 
@@ -117,6 +118,12 @@ function LoginShell({ children }: { children: ReactNode }) {
           }}
         />
         {children}
+        <p
+          className="mt-6 text-center text-[10px] font-medium uppercase tracking-[0.12em] text-[var(--gray-400)]"
+          title="Versión automática (MAJOR.MINOR.#PRs)"
+        >
+          Midas v{APP_VERSION}
+        </p>
       </div>
     </div>
   );
@@ -832,6 +839,7 @@ export default function AuthGate({ children }: AuthGateProps) {
             email: session.email,
             role: session.role,
             expiresAt: session.expiresAt,
+            permissions: session.permissions,
           });
           setAuthed(true);
           return;
@@ -858,6 +866,7 @@ export default function AuthGate({ children }: AuthGateProps) {
       email: session.email,
       role: session.role,
       expiresAt: session.expiresAt,
+      permissions: session.permissions,
     });
     setAuthed(true);
   };

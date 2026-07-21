@@ -1,7 +1,12 @@
 import { apiConfig } from '../config/api.config';
 import { coerceRole, type Role } from '../config/roles';
+import type { AppTabId } from '../modules/shared-finance/components/NavigationContext';
 import { getRegistryRole } from '../modules/users/services/accessControlStore';
 import { AuthApiError, type AuthErrorCode } from './authError';
+import { isMidasUsersEnabled } from '../config/midasUsers';
+import { hashPassword } from './passwordHash';
+import { clearMidasSession, readMidasSession, writeMidasSession } from './midasSession';
+import { getUsuario, updateUsuario, validateUsuario } from './usuariosApi';
 import {
   clearLocalSession,
   getLocalUserRole,
@@ -23,6 +28,8 @@ export interface AuthSessionResponse {
   email: string | null;
   role: Role;
   expiresAt?: string;
+  /** Módulos concedidos (solo modo ONLINE WS/midas; `undefined` en modo local). */
+  permissions?: AppTabId[];
 }
 
 export interface LoginResponse {
@@ -30,6 +37,8 @@ export interface LoginResponse {
   role: Role;
   expiresAt?: string;
   passwordExpired?: boolean;
+  /** Módulos concedidos (solo modo ONLINE WS/midas; `undefined` en modo local). */
+  permissions?: AppTabId[];
 }
 
 // Base del backend de auth, resuelta desde `VITE_AUTH_BASE_URL` (api.config).
@@ -113,6 +122,21 @@ async function request(path: string, init: RequestInit = {}): Promise<unknown> {
 }
 
 export async function getAuthSession(): Promise<AuthSessionResponse> {
+  if (isMidasUsersEnabled()) {
+    // Modo ONLINE: no hay endpoint de sesión; la identidad vive en el marcador
+    // local `midas.auth.session.v2` (con TTL). Sin marcador vigente → anónimo.
+    const marker = readMidasSession();
+    if (marker) {
+      return {
+        authenticated: true,
+        email: marker.email,
+        role: marker.role,
+        expiresAt: marker.expiresAt,
+        permissions: marker.permissions,
+      };
+    }
+    return { authenticated: false, email: null, role: 'none' };
+  }
   if (isLocalAuthEnabled()) {
     const session = readLocalSession();
     if (session) {
@@ -239,6 +263,22 @@ export async function completeFirstLogin(email: string, newPassword: string): Pr
 }
 
 export async function login(email: string, password: string): Promise<LoginResponse> {
+  if (isMidasUsersEnabled()) {
+    // Modo ONLINE: hash SHA-256 en el cliente → POST /usuarios/validate.
+    const hash = await hashPassword(password);
+    const validated = await validateUsuario(email, hash); // 401 → invalid_credentials
+    if (validated.role === 'none') {
+      throw new AuthApiError('forbidden', 'Tu cuenta no tiene un rol asignado para Midas.', 403);
+    }
+    const marker = writeMidasSession(validated.usuario, validated.role, validated.permissions);
+    return {
+      email: marker.email,
+      role: marker.role,
+      expiresAt: marker.expiresAt,
+      permissions: marker.permissions,
+      passwordExpired: false,
+    };
+  }
   if (isLocalAuthEnabled()) {
     const normalized = localNormalize(email);
     if (!isKnownLocalUser(normalized)) {
@@ -269,6 +309,10 @@ export async function login(email: string, password: string): Promise<LoginRespo
 }
 
 export async function logout(): Promise<void> {
+  if (isMidasUsersEnabled()) {
+    clearMidasSession();
+    return;
+  }
   if (isLocalAuthEnabled()) {
     clearLocalSession();
     return;
@@ -277,6 +321,25 @@ export async function logout(): Promise<void> {
 }
 
 export async function changePassword(currentPassword: string, newPassword: string): Promise<void> {
+  if (isMidasUsersEnabled()) {
+    // Modo ONLINE: verifica la contraseña actual (POST /validate) y guarda el
+    // hash nuevo (PUT /usuarios con el registro completo).
+    const marker = readMidasSession();
+    if (!marker) throw new AuthApiError('forbidden', 'No hay una sesión activa.', 403);
+    const currentHash = await hashPassword(currentPassword);
+    try {
+      await validateUsuario(marker.email, currentHash);
+    } catch (error) {
+      if (error instanceof AuthApiError && error.code === 'invalid_credentials') {
+        throw new AuthApiError('invalid_credentials', 'La contraseña actual no es correcta.', 401);
+      }
+      throw error;
+    }
+    const record = await getUsuario(marker.email);
+    if (!record) throw new AuthApiError('not_found', 'El usuario no existe.', 404);
+    await updateUsuario({ ...record, contrasena: await hashPassword(newPassword) });
+    return;
+  }
   if (isLocalAuthEnabled()) {
     await localChangePassword(currentPassword, newPassword);
     return;
@@ -288,9 +351,10 @@ export async function changePassword(currentPassword: string, newPassword: strin
 }
 
 export async function requestPasswordReset(email: string): Promise<void> {
-  if (isLocalAuthEnabled()) {
-    // En modo local no hay envío de correo; resolvemos sin filtrar si el correo
-    // existe (mismo contrato que el backend: respuesta genérica).
+  if (isMidasUsersEnabled() || isLocalAuthEnabled()) {
+    // Sin endpoint de reset por liga (WS/midas solo expone /validate). El admin
+    // fija la contraseña directamente. Resolvemos genérico (no filtra existencia).
+    void email;
     return;
   }
   await request('/password/reset/request', {
@@ -300,6 +364,15 @@ export async function requestPasswordReset(email: string): Promise<void> {
 }
 
 export async function completePasswordReset(token: string, newPassword: string): Promise<void> {
+  if (isMidasUsersEnabled()) {
+    void token;
+    void newPassword;
+    throw new AuthApiError(
+      'validation',
+      'El restablecimiento por liga no aplica. Pide a un administrador que cambie tu contraseña.',
+      400,
+    );
+  }
   if (isLocalAuthEnabled()) {
     throw new AuthApiError(
       'validation',
@@ -315,9 +388,15 @@ export async function completePasswordReset(token: string, newPassword: string):
 
 /**
  * Un admin fija directamente la contraseña de otro usuario (sin liga de correo).
- * En modo local escribe el overlay; en backend hace POST al endpoint de admin.
+ * Modo ONLINE: PUT /usuarios con el hash nuevo. Local: overlay. Backend: POST.
  */
 export async function adminSetPassword(email: string, newPassword: string): Promise<void> {
+  if (isMidasUsersEnabled()) {
+    const record = await getUsuario(email);
+    if (!record) throw new AuthApiError('not_found', 'El usuario no existe.', 404);
+    await updateUsuario({ ...record, contrasena: await hashPassword(newPassword) });
+    return;
+  }
   if (isLocalAuthEnabled()) {
     await setLocalPassword(localNormalize(email), newPassword);
     return;
@@ -329,9 +408,9 @@ export async function adminSetPassword(email: string, newPassword: string): Prom
 }
 
 export async function sendUserPasswordReset(email: string): Promise<void> {
-  if (isLocalAuthEnabled()) {
-    // Sin backend de correo en modo local: no-op (el módulo de usuarios muestra
-    // su toast de éxito; las contraseñas se gestionan editando el JSON).
+  if (isMidasUsersEnabled() || isLocalAuthEnabled()) {
+    // Sin backend de correo: no-op. El admin usa "Cambiar contraseña" directo.
+    void email;
     return;
   }
   await request(`/users/${encodeURIComponent(email)}/password-reset`, { method: 'POST' });

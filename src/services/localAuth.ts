@@ -15,6 +15,7 @@
 
 import rawConfig from '../config/authLocalUsers.json';
 import { coerceRole, isRole, type Role } from '../config/roles';
+import { isMidasUsersEnabled } from '../config/midasUsers';
 import { AuthApiError } from './authError';
 
 interface LocalUser {
@@ -64,6 +65,11 @@ export function __setLocalAuthEnabledForTests(value: boolean | null): void {
 
 export function isLocalAuthEnabled(): boolean {
   if (enabledOverride !== null) return enabledOverride;
+  // El modo ONLINE (WS/midas/usuarios) tiene precedencia: cuando está activo, el
+  // modo local queda apagado (la identidad, credenciales y permisos los manda la
+  // API, no el JSON embebido). El kill-switch `VITE_MIDAS_USERS_ENABLED=false`
+  // revierte a este modo local previo sin más cambios.
+  if (isMidasUsersEnabled()) return false;
   return config.enabled === true;
 }
 

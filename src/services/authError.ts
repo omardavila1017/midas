@@ -17,6 +17,10 @@ export type AuthErrorCode =
   // Usuario registrado que aún no define su contraseña (primer ingreso /
   // "register"): la UI debe mandarlo a definirla en vez de tratarlo como error.
   | 'password_setup_required'
+  // Administración de usuarios (API `WS/midas/usuarios`): usuario inexistente
+  // (404) y alta duplicada (406). Ver el mapeo de errores en `usuariosApi.ts`.
+  | 'not_found'
+  | 'duplicate'
   | 'validation'
   | 'network'
   | 'unknown';

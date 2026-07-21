@@ -18,8 +18,10 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { getRoleForEmail } from '../config/userRoles';
 import { isRole, type Role } from '../config/roles';
+import { isMidasUsersEnabled } from '../config/midasUsers';
 import {
   canAccess,
+  canAccessWithPermissions,
   effectiveRole,
   subscribeAccessChanged,
 } from '../modules/users/services/accessControlStore';
@@ -54,7 +56,16 @@ export function AuthProvider({
     emailOverride !== undefined ? emailOverride : session?.email ?? null
   ));
 
-  // Rol de la sesión backend (sin considerar el registro local de permisos).
+  // Modo ONLINE (WS/midas): la identidad y los permisos los manda la sesión de la
+  // API (marcador `midas.auth.session.v2`), NO el registro local ni el roster
+  // hardcodeado. En modo local (kill-switch off) se usa `accessControlStore`.
+  const midas = isMidasUsersEnabled();
+  const sessionPermissions = useMemo<AppTabId[]>(
+    () => session?.permissions ?? [],
+    [session?.permissions],
+  );
+
+  // Rol de la sesión (sin considerar el registro local de permisos).
   const sessionRole = useMemo<Role>(() => {
     if (roleOverride) return roleOverride;
     if (session?.role && isRole(session.role)) return session.role;
@@ -65,20 +76,24 @@ export function AuthProvider({
   const [accessVersion, setAccessVersion] = useState(0);
   useEffect(() => subscribeAccessChanged(() => setAccessVersion((v) => v + 1)), []);
 
-  // Rol efectivo: un admin hardcodeado del roster manda siempre; si no, el
-  // override del registro (p.ej. admin promovió al usuario) y, si tampoco, la
-  // sesión. Ver `effectiveRole` en accessControlStore.
+  // Rol efectivo. ONLINE: el rol de la sesión (API) es autoritativo. Local: un
+  // admin hardcodeado del roster manda; si no, el override del registro; si no,
+  // la sesión. Ver `effectiveRole` en accessControlStore.
   const role = useMemo<Role>(() => {
+    if (midas) return sessionRole;
     return effectiveRole(email, sessionRole);
     // accessVersion fuerza recálculo cuando cambia el registro.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [email, sessionRole, accessVersion]);
+  }, [email, sessionRole, accessVersion, midas]);
 
   const can = useCallback(
-    (tab: AppTabId) => canAccess(email, sessionRole, tab),
+    (tab: AppTabId) =>
+      midas
+        ? canAccessWithPermissions(sessionRole, sessionPermissions, tab)
+        : canAccess(email, sessionRole, tab),
     // accessVersion fuerza un closure nuevo cuando cambian los permisos.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [email, sessionRole, accessVersion],
+    [email, sessionRole, sessionPermissions, accessVersion, midas],
   );
 
   const value = useMemo<AuthContextValue>(

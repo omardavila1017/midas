@@ -23,6 +23,11 @@ const DEFAULT_VIAJES_ESPECIALES_BASE_URL = '/api/viajes-especiales';
 // el backend de auth NO necesariamente vive bajo `/api` (puede ser un SSO u
 // otro host). Default `/api/auth` para dev con proxy/backend local.
 const DEFAULT_AUTH_BASE_URL = '/api/auth';
+// Usuarios/Seguridad ONLINE (`/api/midas/*`): CRUD + validación de credenciales
+// contra el backend `WS/midas/usuarios`. El proxy same-origin (dev: vite; prod:
+// api/midas/[...path].ts) inyecta el Bearer server-side. Base configurable por
+// `VITE_MIDAS_BASE_URL` (default `/api/midas`).
+const DEFAULT_MIDAS_BASE_URL = '/api/midas';
 // Shared server-side store (Omar Dávila's deployment). The browser calls
 // `/api/store/*`; the same-origin proxy (api/store/[...path].ts) injects the
 // token and forwards to STORE_UPSTREAM. `enabled` is an explicit kill switch:
@@ -66,6 +71,11 @@ export const apiConfig = {
   // generar `//` al concatenar los paths (`/login`, `/session`, …).
   auth: {
     baseUrl: import.meta.env.VITE_AUTH_BASE_URL || DEFAULT_AUTH_BASE_URL,
+  },
+  // Usuarios/Seguridad ONLINE (WS/midas/usuarios). El kill-switch del modo vive
+  // en `midasUsers.ts` (`VITE_MIDAS_USERS_ENABLED`); aquí solo la ruta base.
+  midas: {
+    baseUrl: import.meta.env.VITE_MIDAS_BASE_URL || DEFAULT_MIDAS_BASE_URL,
   },
   openai: {
     model: import.meta.env.VITE_OPENAI_MODEL ?? 'gpt-4o-mini',
