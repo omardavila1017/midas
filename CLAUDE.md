@@ -561,6 +561,13 @@ Auditoría sobre los cambios del 2026-07-14 al 16 (cierres de la clase clobber e
 2. **`fechaPromesaPago` sin filtro de fecha centinela JDE** — CERRADO (2026-07-20): `mapCobranza` aplica `isSentinelJdeDate` (1899-/0001- → `undefined`), igual que Compras. `fechaCobro`/`fechaVence` siguen SIN el filtro (tienen consumidores reales — cambiarlos es decisión aparte, no mantenimiento).
 3. **Test de `mapCobranzaPaymentHeader` + `tipoServicio`** — CERRADO (2026-07-20): test nuevo en `jde.test.ts` prueba que el header (incl. `tipoServicio`) sale de la fila con MAYOR `Importe Recibo` aunque no sea la primera (antes sólo cubría el tie-break `rows[0]`).
 
+## Corrida de mantenimiento 2026-07-21 (cia CSV↔JDE en CXP)
+
+Auditoría de los cierres 2026-07-20 (`f33f21d`/`f740193`). Baseline verde (typecheck limpio · 1446 pass / 12 skip · build OK). Un hallazgo corregido, destapado por el propio fix del 07-20:
+
+- **`parseCXP` no normalizaba la cia** (`"150"` cruda vs `"00150"` de los fetchers JDE). Con el `replaceAllCxp` previo (wipe total) el mismatch no mordía; con `replaceCxpForCias` (merge por cia) un CSV de una cía ya cargada de JDE **no la reemplazaba — coexistían ambas llaves** y `sourceRecords.ts` (que compara con SU normalizeCia) doble-contaba la cía en la proyección. Fix: `normalizeCia` ahora es `export` en `jde.ts`, `parseCXP` (CXP.tsx) la aplica, y `replaceCxpForCias` purga además las filas `cia===''` (sólo un CSV previo puede crearlas; nunca entran a `ciaSet` → acumulaban duplicados al re-importar). Test del contrato en `jde.test.ts` (`normalizeCia — contrato compartido`).
+- **Riesgo #4 (backfill sin `onPartialBatch`) evaluado y NO corregido a propósito:** persistir progreso parcial de un backfill profundo agravaría el riesgo #3 (`minLoadedDate` como prueba de cobertura — un reload a media carga dejaría el año "cubierto" con huecos silenciosos y sin reintento), y bajo el default clear-on-entry el progreso se borra al siguiente ingreso de todos modos. Requiere primero un tracking de cobertura real (persistir rangos cubiertos, no inferirlos del min de fechas).
+
 ## API client tuning
 
 `src/services/jdeClient.ts` (post 2026-05-14 retune):

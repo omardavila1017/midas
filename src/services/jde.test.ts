@@ -13,6 +13,7 @@ import {
   fetchIndicadoresCobranza,
   fetchIndicadoresCobranzaRange,
   fetchNomina,
+  normalizeCia,
   normalizeCobranzaPayments,
   normalizeInvoiceRef,
 } from './jde';
@@ -219,6 +220,22 @@ describe('mapCobranza — fechaPromesaPago (campo nuevo 2026-07)', () => {
 
   it('trata el centinela JDE 1899-12-31 como ausencia de promesa', () => {
     expect(__internal.mapCobranza({ ...base, Fecha_Promesa_Pago_Cliente: '1899-12-31T00:00:00' }).fechaPromesaPago).toBeUndefined();
+  });
+});
+
+describe('normalizeCia — contrato compartido JDE ↔ import CSV de CXP', () => {
+  // parseCXP (CXP.tsx) normaliza la cia del CSV con ESTE helper para que
+  // "150" reemplace (no duplique) los records JDE "00150" en replaceCxpForCias.
+  it('pad a 5 dígitos con ceros a la izquierda', () => {
+    expect(normalizeCia('150')).toBe('00150');
+    expect(normalizeCia('00150')).toBe('00150');
+    expect(normalizeCia(150)).toBe('00150');
+  });
+
+  it('vacío → cadena vacía; sin dígitos → head limpio', () => {
+    expect(normalizeCia('')).toBe('');
+    expect(normalizeCia(undefined)).toBe('');
+    expect(normalizeCia('MX - Norte')).toBe('MX');
   });
 });
 

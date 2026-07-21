@@ -17,7 +17,7 @@ import {
   HelpCircle,
   Download,
 } from 'lucide-react';
-import { fetchAgedBalances, JdeApiError, type BankAccountStatement, type BankStatementLine, type Company } from '../services/jde';
+import { fetchAgedBalances, normalizeCia, JdeApiError, type BankAccountStatement, type BankStatementLine, type Company } from '../services/jde';
 import {
   BarChart,
   Bar,
@@ -580,7 +580,10 @@ function parseCXP(text: string): CXPRecord[] {
     const n = (name: string): number => parseNum(g(name));
 
     records.push({
-      cia: g('cia'),
+      // Misma normalización que los fetchers JDE ("150" → "00150"): sin ella,
+      // un CSV de una cía ya cargada de JDE no la REEMPLAZA (llave distinta)
+      // — coexisten ambas y la proyección la doble-cuenta.
+      cia: normalizeCia(g('cia')),
       noProveedor: g('no_prov'),
       nombre: g('nombre'),
       noFactura: g('no_factura'),

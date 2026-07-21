@@ -5303,7 +5303,10 @@ export default function App() {
   // clobber de los loaders automáticos).
   const replaceCxpForCias = useCallback((records: CXPRecord[], cias: string[]) => {
     const ciaSet = new Set(cias);
-    setCxpRecords(prev => [...prev.filter(r => !ciaSet.has(r.cia)), ...records]);
+    // Las filas sin cia (sólo pueden venir de un CSV previo) pertenecen al
+    // último import: se purgan siempre — dejarlas acumulaba duplicados al
+    // re-importar (nunca entran a ciaSet).
+    setCxpRecords(prev => [...prev.filter(r => r.cia !== '' && !ciaSet.has(r.cia)), ...records]);
     const now = new Date().toISOString();
     setCxpLoadedCias(prev => ({ ...prev, ...cias.reduce<Record<string, string>>((acc, c) => { acc[c] = now; return acc; }, {}) }));
   }, []);

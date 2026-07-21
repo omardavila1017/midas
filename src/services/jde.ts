@@ -214,7 +214,7 @@ export function normalizeInvoiceRef(value: unknown): string {
  *   2. Pad a 5 dígitos.
  *   3. Si no hay dígitos (raro, p.ej. cia="MX"), devolver el head limpio.
  */
-function normalizeCia(v: unknown): string {
+export function normalizeCia(v: unknown): string {
   const raw = toStr(v);
   if (!raw) return '';
   const digitMatch = raw.match(/\d+/);
