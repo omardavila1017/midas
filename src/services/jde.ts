@@ -1358,11 +1358,15 @@ function mapCobranza(raw: RawRecord): CobranzaRecord {
 
   // ── Fecha promesa de pago del cliente ── (campo nuevo 2026-07, QA primero)
   // Informativo: NO alimenta la fecha proyectada de cobro (motor intacto).
-  const fechaPromesaPago = trimIsoDate(pick(raw, [
+  // El centinela JDE (1899-12-31) significa "sin promesa", no una fecha real.
+  const fechaPromesaPagoRaw = trimIsoDate(pick(raw, [
     'fechaPromesaPago', 'fecha_promesa_pago', 'Fecha_Promesa_Pago',
     'fechaPromesaPagoCliente', 'fecha_promesa_pago_cliente', 'Fecha_Promesa_Pago_Cliente',
     'fechaPromesa', 'fecha_promesa', 'Fecha_Promesa',
-  ])) || undefined;
+  ]));
+  const fechaPromesaPago = fechaPromesaPagoRaw && !isSentinelJdeDate(fechaPromesaPagoRaw)
+    ? fechaPromesaPagoRaw
+    : undefined;
 
   return {
     cia:                     normalizeCia(pick(raw, ['cia', 'compania', 'company', 'Cia'])),

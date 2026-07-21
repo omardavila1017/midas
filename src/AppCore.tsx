@@ -5298,10 +5298,14 @@ export default function App() {
     setCxpRecords(prev => [...prev.filter(r => r.cia !== cia), ...records]);
     setCxpLoadedCias(prev => ({ ...prev, [cia]: new Date().toISOString() }));
   }, []);
-  const replaceAllCxp = useCallback((records: CXPRecord[], cias: string[]) => {
-    setCxpRecords(records);
+  // Import CSV: sólo reemplaza las cías presentes en el archivo — las demás
+  // (cargadas de JDE) se conservan ("nunca degrada", paridad con el fix de
+  // clobber de los loaders automáticos).
+  const replaceCxpForCias = useCallback((records: CXPRecord[], cias: string[]) => {
+    const ciaSet = new Set(cias);
+    setCxpRecords(prev => [...prev.filter(r => !ciaSet.has(r.cia)), ...records]);
     const now = new Date().toISOString();
-    setCxpLoadedCias(cias.reduce<Record<string, string>>((acc, c) => { acc[c] = now; return acc; }, {}));
+    setCxpLoadedCias(prev => ({ ...prev, ...cias.reduce<Record<string, string>>((acc, c) => { acc[c] = now; return acc; }, {}) }));
   }, []);
   const resetCxp = useCallback(() => {
     setCxpRecords([]);
@@ -6076,7 +6080,7 @@ export default function App() {
                   paymentCoverage={paymentReconciliation.cxpCoverage}
                   budget={null}
                   onMergeCia={mergeCxpForCia}
-                  onReplaceAll={replaceAllCxp}
+                  onReplaceAll={replaceCxpForCias}
                   onReset={resetCxp}
                 />
               </Suspense>

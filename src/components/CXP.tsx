@@ -1967,6 +1967,7 @@ const CXP = ({
                   <FileSpreadsheet className="w-10 h-10 text-[var(--gray-400)] mx-auto mb-3" />
                   <p className="text-[15px] font-bold text-[var(--gray-950)]">Subir CSV</p>
                   <p className="text-[13px] text-[var(--gray-400)] mt-1">Opcional · si JDE no está disponible</p>
+                  <p className="text-[12px] text-[var(--gray-400)] mt-1">Solo actualiza las compañías incluidas en el archivo; las demás se conservan</p>
                   <input
                     ref={csvInput} type="file" accept=".csv" className="hidden"
                     onChange={e => e.target.files?.[0] && handleCsvFile(e.target.files[0])}

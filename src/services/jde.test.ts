@@ -216,6 +216,10 @@ describe('mapCobranza — fechaPromesaPago (campo nuevo 2026-07)', () => {
   it('is tolerant: undefined when the field is absent', () => {
     expect(__internal.mapCobranza(base).fechaPromesaPago).toBeUndefined();
   });
+
+  it('trata el centinela JDE 1899-12-31 como ausencia de promesa', () => {
+    expect(__internal.mapCobranza({ ...base, Fecha_Promesa_Pago_Cliente: '1899-12-31T00:00:00' }).fechaPromesaPago).toBeUndefined();
+  });
 });
 
 describe('normalizeCobranzaPayments', () => {
@@ -282,6 +286,34 @@ describe('normalizeCobranzaPayments', () => {
     expect(payments[0].applications).toHaveLength(2);
     expect(payments[0].applications.map(app => app.importeCobrado)).toEqual([1160, 580]);
     expect(payments[0].applications.map(app => app.noFacturaNormalizada)).toEqual(['RI-90829', 'RI-90830']);
+  });
+
+  it('toma el header (tipoServicio incluido) de la fila con mayor Importe Recibo aunque no sea la primera', () => {
+    const payments = normalizeCobranzaPayments([
+      {
+        'Id Pago': 'PAY-2',
+        CIA: '11',
+        'Fecha Cobro': '2026-03-05T00:00:00',
+        'cta bancaria': '11.1020.0011302',
+        'No Recibo': 'RI - 90900',
+        'Importe Recibo': '100.00',
+        'Importe Cobrado': '100.00',
+      },
+      {
+        'Id Pago': 'PAY-2',
+        CIA: '11',
+        'Fecha Cobro': '2026-03-05T00:00:00',
+        'cta bancaria': '11.1020.0011302',
+        'No Recibo': 'RI - 90900',
+        'Importe Recibo': '900.00',
+        'Importe Cobrado': '900.00',
+        'Tipo Servicio': 'Spot',
+      },
+    ]);
+
+    expect(payments).toHaveLength(1);
+    expect(payments[0].importeRecibo).toBe(900);
+    expect(payments[0].tipoServicio).toBe('Spot');
   });
 
   it('normaliza referencias de factura con espacios alrededor del guion', () => {

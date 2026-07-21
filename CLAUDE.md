@@ -557,9 +557,9 @@ Auditoría con 5 pasadas paralelas sobre los PRs recientes + invariantes transve
 
 Auditoría sobre los cambios del 2026-07-14 al 16 (cierres de la clase clobber en `AppCore.tsx` + mapeo de columnas QA `bc35840`). Baseline verde (typecheck limpio · 1444 pass / 12 skip · build OK). Barrido completo de setters de datasets en `AppCore.tsx`: todos los loaders/backfillers commitean funcional; los commits directos restantes son hidratación pre-concurrencia (seguros) o la excepción documentada de nómina per-chunk. **Sin correcciones aplicadas** — hallazgos latentes/de diseño, documentados para decisión:
 
-1. **`replaceAllCxp` (`AppCore.tsx:5301`) es reemplazo wholesale:** el import CSV de CXP hace `setCxpRecords(records)` seco — nuke de las cías NO incluidas en el CSV (records + timestamps). Internamente consistente con su nombre/semántica, pero comparte la forma del clobber corregido en los loaders; confirmar con producto si el import debe reemplazar sólo las cías del CSV (`prev => merge por cia`) o todo.
-2. **`fechaPromesaPago` sin filtro de fecha centinela JDE** (`1899-12-31`): mismo gap que `fechaCobro`/`fechaVence`; hoy sin consumidores (cero impacto). Si se cablea a UI/motor, aplicar `isSentinelJdeDate` como en Compras.
-3. **Test de `mapCobranzaPaymentHeader` + `tipoServicio`** depende del tie-break (`rows[0]`) en vez de probar que el campo sobrevive cuando la fila max-importe no es la primera — gap de cobertura menor.
+1. **`replaceAllCxp` wholesale** — CERRADO (2026-07-20, decisión de Santiago: "nunca degrada" aplica también a la ruta manual): renombrado `replaceCxpForCias` (`AppCore.tsx`); el import CSV de CXP ahora reemplaza SOLO las cías presentes en el archivo (update funcional `prev => filter + concat`, timestamps por cía preservados — mismo patrón que `mergeCxpForCia`). La UI del uploader avisa la semántica.
+2. **`fechaPromesaPago` sin filtro de fecha centinela JDE** — CERRADO (2026-07-20): `mapCobranza` aplica `isSentinelJdeDate` (1899-/0001- → `undefined`), igual que Compras. `fechaCobro`/`fechaVence` siguen SIN el filtro (tienen consumidores reales — cambiarlos es decisión aparte, no mantenimiento).
+3. **Test de `mapCobranzaPaymentHeader` + `tipoServicio`** — CERRADO (2026-07-20): test nuevo en `jde.test.ts` prueba que el header (incl. `tipoServicio`) sale de la fila con MAYOR `Importe Recibo` aunque no sea la primera (antes sólo cubría el tie-break `rows[0]`).
 
 ## API client tuning
 
