@@ -5,10 +5,15 @@ import {
   aggregateByDay,
   aggregateByMonth,
   aggregateByCompany,
+  aggregateBySegment,
   entriesForMonth,
+  filterEntriesBySegment,
+  listVentaSegments,
   saleSourceAttribution,
+  SEGMENT_POR_FACTURAR,
   toCsv,
 } from './salesCalendarService';
+import { SEGMENT_UNCLASSIFIED } from '../../../domain/cobranzaSegment';
 import type { CobranzaRecord, RolRecord, ViajeEspecialRecord } from '../../../services/jde';
 
 function cobranza(partial: Partial<CobranzaRecord>): CobranzaRecord {
@@ -265,6 +270,58 @@ describe('aggregateByCompany', () => {
     );
     expect(result.map((r) => r.cia)).toEqual(['00038', '00011']);
     expect(result[0].total).toBe(3000);
+  });
+});
+
+describe('segmento / tipo de servicio (C.1)', () => {
+  const entries = () =>
+    buildSaleEntries({
+      cobranza: [
+        cobranza({ noFactura: 'RI-1', subTotal: 1000, tipoServicio: 'Contrato' }),
+        cobranza({ noFactura: 'RI-2', subTotal: 2000, tipoServicio: 'Viaje Especial' }),
+        cobranza({ noFactura: 'RI-3', subTotal: 500 }), // sin dato → Sin clasificar
+      ],
+      rol: [rol({ subTotal: 300 })], // por facturar: sin segmento
+      viajesEspeciales: [],
+    });
+
+  it('sets segmento on the facturado layer only (ROL/Especiales have none)', () => {
+    const all = entries();
+    const facturado = all.filter((e) => e.status === 'facturado');
+    expect(facturado.map((e) => e.segmento).sort()).toEqual(['Contrato', 'Sin clasificar', 'Viaje Especial']);
+    const porFacturar = all.filter((e) => e.status === 'por-facturar');
+    expect(porFacturar.every((e) => e.segmento === undefined)).toBe(true);
+  });
+
+  it('listVentaSegments returns distinct segments with Sin clasificar last', () => {
+    expect(listVentaSegments(entries())).toEqual(['Contrato', 'Viaje Especial', SEGMENT_UNCLASSIFIED]);
+    expect(listVentaSegments([])).toEqual([]);
+  });
+
+  it('filterEntriesBySegment keeps only the matching facturado entries (por-facturar drops)', () => {
+    const filtered = filterEntriesBySegment(entries(), 'Contrato');
+    expect(filtered).toHaveLength(1);
+    expect(filtered[0].referencia).toBe('RI-1');
+    expect(filterEntriesBySegment(entries(), null)).toHaveLength(4);
+  });
+
+  it('aggregateBySegment groups totals with por-facturar bucketed last', () => {
+    const rows = aggregateBySegment(entries());
+    expect(rows.map((r) => r.segment)).toEqual([
+      'Viaje Especial',
+      'Contrato',
+      SEGMENT_UNCLASSIFIED,
+      SEGMENT_POR_FACTURAR,
+    ]);
+    expect(rows.find((r) => r.segment === SEGMENT_POR_FACTURAR)?.porFacturar).toBe(300);
+    expect(rows.find((r) => r.segment === 'Contrato')?.facturado).toBe(1000);
+  });
+
+  it('toCsv includes the Segmento column', () => {
+    const csv = toCsv(entries());
+    expect(csv.split('\n')[0]).toContain('Segmento');
+    expect(csv).toContain('Contrato');
+    expect(csv).toContain('Viaje Especial');
   });
 });
 

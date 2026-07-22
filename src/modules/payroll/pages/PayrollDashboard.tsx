@@ -42,6 +42,7 @@ import {
   filterRecords,
   findSuspectMonths,
   lastNMonths,
+  listTurnos,
   mergeNominaBatch,
   nominaCacheKey,
 } from '../services/payrollModuleService';
@@ -147,6 +148,7 @@ export default function PayrollDashboard({
   const [tipoNomina, setTipoNomina] = useState<number>(99);
   const [anio, setAnio] = useState<number>(now.getFullYear());
   const [mes, setMes] = useState<number>(now.getMonth() + 1);
+  const [turno, setTurno] = useState<string>('all');
   const [activeTab, setActiveTab] = useState<SubTabId>('resumen');
   const [loading, setLoading] = useState(false);
   const [errMsg, setErrMsg] = useState<string | null>(null);
@@ -166,6 +168,11 @@ export default function PayrollDashboard({
   const tipoClassFilter: 'semanal' | 'quincenal' | undefined =
     tipoNomina === 99 ? undefined : (tipoNomina === 1 ? 'semanal' : 'quincenal');
 
+  // Turno TRESS (columna nueva 2026-07): el filtro sólo se pinta cuando el API
+  // realmente manda el dato (espejo del gate hasSegments de Cobranza).
+  const turnoOptions = useMemo(() => listTurnos(nominaRecords), [nominaRecords]);
+  const turnoFilter = turno === 'all' ? undefined : turno;
+
   // Snapshot del mes: alimenta Resumen / Comparativo / Conceptos / Periodos / Detalle.
   const monthSnapshot = useMemo(
     () => filterRecords(nominaRecords, {
@@ -173,15 +180,16 @@ export default function PayrollDashboard({
       year: anio,
       month: mes,
       payrollTypeClass: tipoClassFilter,
+      turno: turnoFilter,
     }),
-    [nominaRecords, ciaFilter, anio, mes, tipoClassFilter],
+    [nominaRecords, ciaFilter, anio, mes, tipoClassFilter, turnoFilter],
   );
 
   // Historia completa (cía + tipo, todos los meses): Tendencia / Predictivo /
   // Alertas. No filtra por año/mes a propósito.
   const historyFiltered = useMemo(
-    () => filterRecords(nominaRecords, { cia: ciaFilter, payrollTypeClass: tipoClassFilter }),
-    [nominaRecords, ciaFilter, tipoClassFilter],
+    () => filterRecords(nominaRecords, { cia: ciaFilter, payrollTypeClass: tipoClassFilter, turno: turnoFilter }),
+    [nominaRecords, ciaFilter, tipoClassFilter, turnoFilter],
   );
 
   /**
@@ -399,6 +407,20 @@ export default function PayrollDashboard({
               {MONTHS.map((label, i) => <option key={i} value={i + 1}>{label}</option>)}
             </select>
           </label>
+          {turnoOptions.length > 0 && (
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="text-[11px] uppercase tracking-wide" style={{ color: 'var(--gray-500)' }}>Turno</span>
+              <select
+                value={turno}
+                onChange={(e) => setTurno(e.target.value)}
+                className="rounded-md border px-2 py-1.5"
+                style={{ borderColor: 'var(--gray-300)', background: 'var(--surface)' }}
+              >
+                <option value="all">Todos los turnos</option>
+                {turnoOptions.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </label>
+          )}
         </div>
         {activeScope === 'history' && (
           <p className="mt-2 text-xs" style={{ color: 'var(--gray-500)' }}>

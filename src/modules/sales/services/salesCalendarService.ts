@@ -15,6 +15,7 @@
 
 import type { CobranzaRecord, RolRecord, ViajeEspecialRecord } from '../../../services/jde';
 import { buildRolCobranzaCross, normFactura } from '../../../domain/rolCobranzaMatch';
+import { segmentOf, SEGMENT_UNCLASSIFIED } from '../../../domain/cobranzaSegment';
 import { csvDate } from '../../../utils/export';
 import { sourceOf, type SourceAttribution, type SourceId } from '../../../domain/sourceAttribution';
 
@@ -54,6 +55,11 @@ export interface SaleEntry {
   referencia: string;
   cia: string;
   source: SaleSource;
+  /**
+   * Segmento / tipo de servicio (C.1, sólo capa facturado): `segmentOf` de la
+   * factura de cobranza. ROL/Especiales aún no traen el dato → `undefined`.
+   */
+  segmento?: string;
 }
 
 export interface DayTotal {
@@ -139,6 +145,7 @@ export function buildSaleEntries({ cobranza, rol, viajesEspeciales }: SaleSource
       referencia: cleanString(r.noFactura),
       cia: cleanString(r.cia),
       source: 'cobranza',
+      segmento: segmentOf(r),
     });
   }
 
@@ -252,6 +259,72 @@ export interface CompanyTotal {
   count: number;
 }
 
+/**
+ * Bucket del desglose por segmento para lo aún no facturado: los viajes
+ * ROL/Especiales no traen tipo de servicio hasta que se facturan.
+ */
+export const SEGMENT_POR_FACTURAR = 'Por facturar (sin segmento)';
+
+export interface SegmentVentaTotal {
+  segment: string;
+  facturado: number;
+  porFacturar: number;
+  total: number;
+  count: number;
+}
+
+/**
+ * Segmentos presentes en la capa facturado (distintos), clasificados en orden
+ * alfabético con "Sin clasificar" al final. Para poblar el filtro; vacío de
+ * clasificados ⇒ el API aún no manda el dato y el filtro no se pinta.
+ */
+export function listVentaSegments(entries: SaleEntry[]): string[] {
+  const seen = new Map<string, string>();
+  for (const e of entries) {
+    if (!e.segmento) continue;
+    const key = e.segmento.toUpperCase();
+    if (!seen.has(key)) seen.set(key, e.segmento);
+  }
+  return Array.from(seen.values()).sort((a, b) => {
+    const aUn = a === SEGMENT_UNCLASSIFIED;
+    const bUn = b === SEGMENT_UNCLASSIFIED;
+    if (aUn !== bUn) return aUn ? 1 : -1;
+    return a.localeCompare(b, 'es');
+  });
+}
+
+/**
+ * Filtra por segmento. `null` ⇒ sin filtro. Un segmento específico sólo puede
+ * empatar la capa FACTURADO (los por-facturar no traen segmento y se caen) —
+ * la UI lo advierte cuando el filtro está activo.
+ */
+export function filterEntriesBySegment(entries: SaleEntry[], segment: string | null): SaleEntry[] {
+  if (!segment) return entries;
+  return entries.filter((e) => e.segmento === segment);
+}
+
+/**
+ * Desglose por segmento: clasificados por total desc, "Sin clasificar" después
+ * y el bucket "Por facturar (sin segmento)" siempre al final.
+ */
+export function aggregateBySegment(entries: SaleEntry[]): SegmentVentaTotal[] {
+  const map = new Map<string, SegmentVentaTotal>();
+  for (const entry of entries) {
+    const segment = entry.segmento ?? SEGMENT_POR_FACTURAR;
+    let row = map.get(segment.toUpperCase());
+    if (!row) {
+      row = { segment, facturado: 0, porFacturar: 0, total: 0, count: 0 };
+      map.set(segment.toUpperCase(), row);
+    }
+    if (entry.status === 'facturado') row.facturado += entry.amount;
+    else row.porFacturar += entry.amount;
+    row.total += entry.amount;
+    row.count += 1;
+  }
+  const rank = (s: string) => (s === SEGMENT_POR_FACTURAR ? 2 : s === SEGMENT_UNCLASSIFIED ? 1 : 0);
+  return Array.from(map.values()).sort((a, b) => rank(a.segment) - rank(b.segment) || b.total - a.total);
+}
+
 /** Suma por compañía (cia), ordenada por total desc. */
 export function aggregateByCompany(entries: SaleEntry[]): CompanyTotal[] {
   const map = new Map<string, CompanyTotal>();
@@ -277,7 +350,7 @@ function csvCell(value: string | number): string {
 
 /** Serializa entradas a CSV (es-MX: encabezados legibles, importe con 2 decimales). */
 export function toCsv(entries: SaleEntry[]): string {
-  const header = ['Fecha', 'Estatus', 'Cliente', 'Referencia', 'Compañía', 'Fuente', 'Importe sin IVA'];
+  const header = ['Fecha', 'Estatus', 'Cliente', 'Referencia', 'Compañía', 'Fuente', 'Segmento', 'Importe sin IVA'];
   const rows = entries
     .slice()
     .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
@@ -289,6 +362,7 @@ export function toCsv(entries: SaleEntry[]): string {
         e.referencia,
         e.cia,
         saleSourceAttribution(e.source).label,
+        e.segmento ?? '',
         e.amount.toFixed(2),
       ]
         .map(csvCell)

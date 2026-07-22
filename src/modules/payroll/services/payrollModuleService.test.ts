@@ -9,6 +9,7 @@ import {
   filterRecords,
   isCacheFresh,
   lastNMonths,
+  listTurnos,
   mergeNominaBatch,
   nominaCacheKey,
   payrollTypeClass,
@@ -472,5 +473,29 @@ describe('filterRecords', () => {
     expect(filterRecords(scoped, { payrollPeriod: 22 })).toHaveLength(1);
     expect(filterRecords(scoped, { payrollPeriod: '22' })).toHaveLength(1);
     expect(filterRecords(scoped, { paymentDate: '2026-06-11' })).toHaveLength(1);
+  });
+  it('filtra por turno TRESS (columna nueva 2026-07) y tolera records sin turno', () => {
+    const scoped = [
+      rec({ turno: 'Diurno' }),
+      rec({ turno: ' Diurno ' }), // whitespace del API no rompe el empate
+      rec({ turno: 'Nocturno' }),
+      rec({}), // sin turno — sólo pasa sin filtro
+    ];
+    expect(filterRecords(scoped, { turno: 'Diurno' })).toHaveLength(2);
+    expect(filterRecords(scoped, { turno: 'Nocturno' })).toHaveLength(1);
+    expect(filterRecords(scoped, {})).toHaveLength(4);
+  });
+});
+
+describe('listTurnos', () => {
+  it('lista turnos distintos no vacíos, ordenados; vacío cuando el API no manda la columna', () => {
+    expect(listTurnos([
+      rec({ turno: 'Nocturno' }),
+      rec({ turno: 'Diurno' }),
+      rec({ turno: 'Diurno' }),
+      rec({ turno: '  ' }),
+      rec({}),
+    ])).toEqual(['Diurno', 'Nocturno']);
+    expect(listTurnos([rec({}), rec({})])).toEqual([]);
   });
 });

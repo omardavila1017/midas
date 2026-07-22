@@ -9,19 +9,24 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { ChevronLeft, ChevronRight, ShoppingCart, FileText, Clock, Info, Download, Building2, Loader2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ShoppingCart, FileText, Clock, Info, Download, Building2, Loader2, Tag } from 'lucide-react';
 import PageHeader from '../../../components/ui/PageHeader';
 import { fmtCurrency, fmtCompact, fmtKpi, todayISO } from '../../../formatters';
 import { MONTHS } from '../../../types';
 import { useDataWindow } from '../../../contexts/DataWindowContext';
 import type { CobranzaRecord, RolRecord, ViajeEspecialRecord, Company } from '../../../services/jde';
+import { SEGMENT_UNCLASSIFIED } from '../../../domain/cobranzaSegment';
 import {
   aggregateByCompany,
   aggregateByDay,
   aggregateByMonth,
+  aggregateBySegment,
   buildSaleEntries,
   entriesForMonth,
+  filterEntriesBySegment,
+  listVentaSegments,
   saleSourceAttribution,
+  SEGMENT_POR_FACTURAR,
   toCsv,
 } from '../services/salesCalendarService';
 import SourceInfo from '../../../components/ui/SourceInfo';
@@ -37,6 +42,7 @@ const WEEKDAYS = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
 const FACTURADO_COLOR = 'var(--success)';
 const POR_FACTURAR_COLOR = '#d97706';
 const ALL_COMPANIES = '__all__';
+const ALL_SEGMENTS = '__all__';
 // Datasets que Venta necesita para pintar un año (viajes especiales viajan con
 // el slot 'rol' en el backfill).
 const VENTA_DATASETS = ['cobranza', 'rol'];
@@ -111,11 +117,21 @@ export default function SalesCalendarDashboard({
     return Array.from(set).sort();
   }, [allEntries]);
 
-  const [companyFilter, setCompanyFilter] = useState<string>(ALL_COMPANIES);
-  const entries = useMemo(
-    () => (companyFilter === ALL_COMPANIES ? allEntries : allEntries.filter((e) => e.cia === companyFilter)),
-    [allEntries, companyFilter],
+  // Segmento / tipo de servicio (C.1): sólo la capa facturado lo trae. El
+  // filtro se pinta cuando el API manda ≥1 segmento clasificado (espejo del
+  // gate hasSegments de Cobranza).
+  const segmentOptions = useMemo(() => listVentaSegments(allEntries), [allEntries]);
+  const hasSegments = useMemo(
+    () => segmentOptions.some((s) => s !== SEGMENT_UNCLASSIFIED),
+    [segmentOptions],
   );
+  const [segmentFilter, setSegmentFilter] = useState<string>(ALL_SEGMENTS);
+
+  const [companyFilter, setCompanyFilter] = useState<string>(ALL_COMPANIES);
+  const entries = useMemo(() => {
+    const byCompany = companyFilter === ALL_COMPANIES ? allEntries : allEntries.filter((e) => e.cia === companyFilter);
+    return filterEntriesBySegment(byCompany, segmentFilter === ALL_SEGMENTS ? null : segmentFilter);
+  }, [allEntries, companyFilter, segmentFilter]);
 
   const byDay = useMemo(() => aggregateByDay(entries), [entries]);
   const byMonth = useMemo(() => aggregateByMonth(entries), [entries]);
@@ -162,6 +178,9 @@ export default function SalesCalendarDashboard({
 
   // Desglose por compañía del mes seleccionado.
   const companyBreakdown = useMemo(() => aggregateByCompany(monthEntries).slice(0, 8), [monthEntries]);
+
+  // Desglose por segmento del mes seleccionado (C.1).
+  const segmentBreakdown = useMemo(() => aggregateBySegment(monthEntries), [monthEntries]);
 
   // Celdas del calendario del mes seleccionado.
   const grid = useMemo(() => {
@@ -234,6 +253,37 @@ export default function SalesCalendarDashboard({
                   ))}
                 </select>
               </div>
+            )}
+            {hasSegments && (
+              <div className="relative">
+                <Tag
+                  className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2"
+                  strokeWidth={1.75}
+                  style={{ color: 'var(--gray-400)' }}
+                />
+                <select
+                  value={segmentFilter}
+                  onChange={(e) => { setSegmentFilter(e.target.value); setSelectedDay(null); }}
+                  className="h-9 max-w-[220px] rounded-[var(--radius-md)] border pl-8 pr-2 text-[13px]"
+                  style={{ borderColor: 'var(--gray-200)', background: 'var(--input)', color: 'var(--gray-950)' }}
+                  aria-label="Filtrar por segmento"
+                  title="Segmento / tipo de servicio — aplica sólo a lo facturado; los viajes por facturar aún no traen segmento."
+                >
+                  <option value={ALL_SEGMENTS}>Todos los segmentos</option>
+                  {segmentOptions.map((s) => (
+                    <option key={s} value={s}>{s}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+            {segmentFilter !== ALL_SEGMENTS && (
+              <span
+                className="inline-flex items-center gap-1.5 rounded-[var(--radius-md)] px-2.5 py-1 text-[12px] font-medium"
+                style={{ background: 'rgba(217,119,6,0.12)', color: POR_FACTURAR_COLOR }}
+                title="Un segmento específico sólo puede empatar facturas; los viajes ROL/Especiales por facturar no traen segmento y quedan fuera."
+              >
+                Sólo facturado
+              </span>
             )}
             <button
               type="button"
@@ -429,6 +479,45 @@ export default function SalesCalendarDashboard({
                         <span className="font-semibold" style={{ color: 'var(--gray-900)' }}>{fmtCompact(c.total)}</span>
                       </li>
                     ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Desglose por segmento (mes) — C.1. Sólo cuando el API manda
+                  segmentos; el bucket "Por facturar (sin segmento)" agrupa los
+                  viajes aún sin factura (no traen tipo de servicio). */}
+              {hasSegments && segmentFilter === ALL_SEGMENTS && segmentBreakdown.length > 0 && (
+                <div className="mt-4 border-t pt-3" style={{ borderColor: 'var(--gray-100)' }}>
+                  <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em]" style={{ color: 'var(--gray-400)' }}>
+                    Por segmento · {MONTHS[month]}
+                  </p>
+                  <ul className="space-y-1.5">
+                    {segmentBreakdown.map((s) => {
+                      const muted = s.segment === SEGMENT_UNCLASSIFIED || s.segment === SEGMENT_POR_FACTURAR;
+                      const filterable = s.segment !== SEGMENT_POR_FACTURAR;
+                      return (
+                        <li key={s.segment} className="flex items-center justify-between gap-2 text-[12px]">
+                          {filterable ? (
+                            <button
+                              type="button"
+                              onClick={() => { setSegmentFilter(s.segment); setSelectedDay(null); }}
+                              className="min-w-0 flex-1 truncate text-left hover:underline"
+                              style={{ color: muted ? 'var(--gray-500)' : 'var(--gray-700)' }}
+                              title={s.segment}
+                            >
+                              {s.segment}
+                            </button>
+                          ) : (
+                            <span className="min-w-0 flex-1 truncate" style={{ color: 'var(--gray-500)' }} title={s.segment}>
+                              {s.segment}
+                            </span>
+                          )}
+                          <span className="font-semibold" style={{ color: muted ? 'var(--gray-600)' : 'var(--gray-900)' }}>
+                            {fmtCompact(s.total)}
+                          </span>
+                        </li>
+                      );
+                    })}
                   </ul>
                 </div>
               )}

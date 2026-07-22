@@ -193,6 +193,44 @@ describe('buildCollectionCalendar', () => {
     expect(event?.statusLabel).toContain('JDE');
   });
 
+  it('propaga fechaPromesaPago (informativa) a la factura del evento sin alterar el fechado', () => {
+    const conPromesa = makeFactura({
+      cia: '00011',
+      noFactura: 'F-PROM',
+      noCliente: '9001',
+      nombreCliente: 'CLIENTE ALFA',
+      importeBrutoPesos: 1000,
+      fechaFactura: '2026-01-01',
+      fechaVence: '2026-01-31',
+      fechaPromesaPago: '2026-02-20',
+    });
+    const sinPromesa = makeFactura({
+      cia: '00011',
+      noFactura: 'F-SINP',
+      noCliente: '9001',
+      nombreCliente: 'CLIENTE ALFA',
+      importeBrutoPesos: 500,
+    });
+    const client = makeClient({
+      creditDays: 30,
+      paymentDay: { kind: 'DOW', days: [5] },
+      paymentDayRaw: 'Viernes',
+    });
+    const calendar = buildCollectionCalendar({
+      clients: [client],
+      assumptions: ASSUMPTIONS,
+      cobranzaRecords: [conPromesa, sinPromesa],
+      reconciliation: reconcileRealCollections([conPromesa, sinPromesa], []),
+    });
+
+    const event = calendar.events.find(e => e.noFactura === 'F-PROM');
+    expect(event?.facturas[0]?.fechaPromesaPago).toBe('2026-02-20');
+    // Informativa: el fechado sigue saliendo de la regla del cliente, no de la promesa.
+    expect(event?.date).toBe('2026-02-06');
+    const otro = calendar.events.find(e => e.noFactura === 'F-SINP');
+    expect(otro?.facturas[0]?.fechaPromesaPago).toBeUndefined();
+  });
+
   it('usa la regla del API (Nombre_Dia_Pago_CC13 + Dias_Credito) sobre el catálogo', () => {
     const factura = makeFactura({
       cia: '00011',

@@ -175,6 +175,7 @@ function renderRealCobranzaView() {
       fechaFactura: isoForCurrentMonthDay(1),
       fechaVence: isoForCurrentMonthDay(28),
       fechaCobro: jdeDate,
+      fechaPromesaPago: isoForCurrentMonthDay(20),
       importePendientePesos: 0,
       estatus: 'PAGADA',
     }),
@@ -380,6 +381,8 @@ describe('<CollectionProjection />', () => {
     expect(screen.getAllByText(/Ingreso/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/JDE reporta Fecha_Pago/i)).toBeTruthy();
     expect(screen.getByText(/Fecha confirmada por JDE/i)).toBeTruthy();
+    // Promesa de pago JDE (C.2) — informativa en el drilldown del día.
+    expect(screen.getByText(new RegExp(`Promesa de pago: ${isoForCurrentMonthDay(20)}`))).toBeTruthy();
   });
 
   // "COBRANZA CRUZADA CON BANCO" copy was removed in the redesign. The auto-
@@ -491,6 +494,10 @@ describe('<CollectionProjection />', () => {
     expect(csv).toContain('ReglaAplicada');
     expect(csv).toContain('MotivoFecha');
     expect(csv).toContain('Ingreso');
+    // Promesa de pago JDE (C.2) en dd/mm/aaaa.
+    expect(csv).toContain('FechaPromesaPago');
+    const [y, m, d] = isoForCurrentMonthDay(20).split('-');
+    expect(csv).toContain(`${d}/${m}/${y}`);
   });
 
   it('muestra el panel de cuadre cobranza-aplicada vs banco (cuadre/descuadre por cliente)', () => {

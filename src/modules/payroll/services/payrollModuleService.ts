@@ -573,6 +573,8 @@ export interface PayrollFilter {
   /** Empata la fecha de pago exacta (desglose por periodo). */
   paymentDate?: string;
   cashTreatment?: PayrollCashTreatment;
+  /** Empata el turno TRESS exacto (columna nueva 2026-07; dimensión informativa). */
+  turno?: string;
 }
 
 export function filterRecords(records: PayrollCostRecord[], f: PayrollFilter): PayrollCostRecord[] {
@@ -585,6 +587,20 @@ export function filterRecords(records: PayrollCostRecord[], f: PayrollFilter): P
     if (f.payrollPeriod != null && String(r.payrollPeriod) !== String(f.payrollPeriod)) return false;
     if (f.paymentDate && r.paymentDate !== f.paymentDate) return false;
     if (f.cashTreatment && r.cashTreatment !== f.cashTreatment) return false;
+    if (f.turno && (r.turno ?? '').trim() !== f.turno) return false;
     return true;
   });
+}
+
+/**
+ * Turnos TRESS presentes en los records (distintos, no vacíos), para poblar
+ * el filtro. Vacío ⇒ el API aún no manda la columna y el filtro no se pinta.
+ */
+export function listTurnos(records: PayrollCostRecord[]): string[] {
+  const seen = new Set<string>();
+  for (const r of records) {
+    const t = (r.turno ?? '').trim();
+    if (t) seen.add(t);
+  }
+  return Array.from(seen).sort((a, b) => a.localeCompare(b, 'es'));
 }

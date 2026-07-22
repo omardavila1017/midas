@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import SalesCalendarDashboard from './SalesCalendarDashboard';
 import { todayISO } from '../../../formatters';
 import type { CobranzaRecord, RolRecord, ViajeEspecialRecord } from '../../../services/jde';
@@ -53,5 +53,33 @@ describe('<SalesCalendarDashboard />', () => {
     // La tira de 12 meses siempre se pinta cuando hay datos.
     expect(screen.getByText('Ene')).toBeTruthy();
     expect(screen.getByText('Dic')).toBeTruthy();
+    // Sin segmentos clasificados del API, el filtro de segmento NO se pinta.
+    expect(screen.queryByLabelText('Filtrar por segmento')).toBeNull();
+  });
+
+  it('exposes the segment filter + monthly breakdown when the API sends tipoServicio (C.1)', () => {
+    render(
+      <SalesCalendarDashboard
+        cobranzaRecords={[
+          { ...cobranza(), tipoServicio: 'Contrato' },
+          { ...cobranza(), noFactura: 'RI-2', tipoServicio: 'Viaje Especial', subTotal: 2000 } as CobranzaRecord,
+        ]}
+        rolRecords={[] as RolRecord[]}
+        viajesEspecialesRecords={[] as ViajeEspecialRecord[]}
+        companies={[{ cia: '00011', nombre: 'Servicio Industrial' }]}
+      />,
+    );
+
+    // Filtro visible con las opciones del API.
+    const select = screen.getByLabelText('Filtrar por segmento') as HTMLSelectElement;
+    expect(select).toBeTruthy();
+    // Desglose del mes por segmento.
+    expect(screen.getByText(/Por segmento ·/)).toBeTruthy();
+    expect(screen.getAllByText('Contrato').length).toBeGreaterThan(0);
+
+    // Filtrar por un segmento acota y avisa que sólo aplica a lo facturado.
+    fireEvent.change(select, { target: { value: 'Contrato' } });
+    expect(screen.getByText('Sólo facturado')).toBeTruthy();
+    expect(screen.queryByText(/Por segmento ·/)).toBeNull(); // el desglose vuelve al quitar el filtro
   });
 });

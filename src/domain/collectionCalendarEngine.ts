@@ -45,6 +45,8 @@ export interface CollectionCalendarFactura {
   fechaFactura: string;
   fechaVence: string;
   fechaCobro: string;
+  /** Promesa de pago capturada en JDE — informativa, NO altera el fechado. */
+  fechaPromesaPago?: string;
 }
 
 export interface CollectionCalendarBankInfo {
@@ -421,6 +423,7 @@ function facturaFromRecord(record: CobranzaRecord | undefined): CollectionCalend
     fechaFactura: record.fechaFactura,
     fechaVence: record.fechaVence,
     fechaCobro: record.fechaCobro,
+    fechaPromesaPago: record.fechaPromesaPago,
   };
 }
 

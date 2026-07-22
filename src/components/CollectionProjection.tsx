@@ -1766,6 +1766,15 @@ function CobranzaRealCalendar({
                         </div>
                         <div className="text-[10px] text-[var(--gray-500)] max-w-[300px]">{event.dateReason}</div>
                         <div className="text-[10px] text-[var(--gray-400)] max-w-[300px]">{event.ruleApplied}</div>
+                        {(() => {
+                          // Promesa de pago JDE — informativa, no cambia el fechado del evento.
+                          const promesa = event.facturas.find(f => f.fechaPromesaPago)?.fechaPromesaPago;
+                          return promesa ? (
+                            <div className="text-[10px] text-[var(--warning)] tabular-nums">
+                              Promesa de pago: {promesa.slice(0, 10)}
+                            </div>
+                          ) : null;
+                        })()}
                       </td>
                       <td className="px-3 py-2">
                         {event.bank ? (
@@ -2484,6 +2493,7 @@ function CobranzaRealView({
                 FechaFactura: csvDate((r.fechaFactura || '').slice(0, 10)),
                 FechaVence: csvDate((r.fechaVence || '').slice(0, 10)),
                 FechaCobroJDE: csvDate((r.fechaCobro || '').slice(0, 10)),
+                FechaPromesaPago: csvDate((r.fechaPromesaPago || '').slice(0, 10)),
                 DiasVencida: r.diasVencida,
                 BrutoMXN: r.importeBrutoPesos,
                 PendienteMXN: r.importePendientePesos,
