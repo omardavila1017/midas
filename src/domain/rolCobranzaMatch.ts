@@ -63,6 +63,23 @@ export interface RolCobranzaCrossResult {
   predicted: RolRecord[];
   /** Viajes ROL con factura pero match no encontrado (factura existe en ROL pero no en cobranza). */
   invoicedOrphans: RolRecord[];
+  /**
+   * Viajes ROL SIN clave de cliente JDE (Clave_JDE nula/vacía en CITI) que no
+   * cruzaron: defecto de ALTA del cliente en CITI (auditoría BD 2026-07-22:
+   * 102 viajes efectuados en 8 semanas, un solo cliente), accionable con CITI
+   * — NO es huérfano de folio ni "match ok". Un viaje sin clave que SÍ cruzó
+   * por folio/UUID exacto se queda en `matches` (el folio lo identifica
+   * afirmativamente); aquí caen los que antes pasaban silenciosos a
+   * `predicted`/`invoicedOrphans`. Consumidores que quieran el conjunto
+   * "sin factura" completo (Venta, proyección ROL) deben unir
+   * `predicted ∪ sinClaveCliente`.
+   */
+  sinClaveCliente: RolRecord[];
+}
+
+/** Clave de cliente JDE presente y no vacía — sin ella el viaje no puede fecharse por regla de cliente. */
+export function hasClientKey(r: Pick<RolRecord, 'claveJDE'>): boolean {
+  return trim(r.claveJDE) !== '';
 }
 
 function trim(value: string | undefined): string {
@@ -232,6 +249,7 @@ export function buildRolCobranzaCross(
   const matches: RolCobranzaMatch[] = [];
   const predicted: RolRecord[] = [];
   const invoicedOrphans: RolRecord[] = [];
+  const sinClaveCliente: RolRecord[] = [];
 
   for (const r of rolRecords) {
     const candidates = facturaCandidates(r.factura);
@@ -239,7 +257,10 @@ export function buildRolCobranzaCross(
 
     // Sin factura ni uuid → viaje aún no facturado, predicción.
     if (candidates.length === 0 && !uuid) {
-      predicted.push(r);
+      // Sin clave de cliente NO es una predicción sana (no puede fecharse por
+      // regla de cliente): bucket propio para reclamar el alta a CITI.
+      if (!hasClientKey(r)) sinClaveCliente.push(r);
+      else predicted.push(r);
       continue;
     }
 
@@ -298,11 +319,14 @@ export function buildRolCobranzaCross(
     }
 
     if (match) matches.push(match);
+    // Sin clave de cliente el no-match no es huérfano de folio: es defecto de
+    // alta en CITI — no contamina el conteo de huérfanos (meta: 0).
+    else if (!hasClientKey(r)) sinClaveCliente.push(r);
     // ROL marcado como facturado pero ni cobranza ni pagos lo tienen → huérfano.
     else invoicedOrphans.push(r);
   }
 
-  return { matches, predicted, invoicedOrphans };
+  return { matches, predicted, invoicedOrphans, sinClaveCliente };
 }
 
 /**
@@ -318,6 +342,9 @@ export interface RolCrossSummaryByClient {
   invoicedAmount: number;
   orphanTrips: number;
   orphanAmount: number;
+  /** Viajes sin clave de cliente JDE (defecto de alta en CITI) — agrupan por razón social. */
+  sinClaveTrips: number;
+  sinClaveAmount: number;
 }
 
 export function summarizeRolCrossByClient(result: RolCobranzaCrossResult): RolCrossSummaryByClient[] {
@@ -330,6 +357,7 @@ export function summarizeRolCrossByClient(result: RolCobranzaCrossResult): RolCr
         predictedTrips: 0, predictedAmount: 0,
         invoicedTrips: 0, invoicedAmount: 0,
         orphanTrips: 0, orphanAmount: 0,
+        sinClaveTrips: 0, sinClaveAmount: 0,
       };
       byClient.set(claveJDE, entry);
     }
@@ -349,6 +377,13 @@ export function summarizeRolCrossByClient(result: RolCobranzaCrossResult): RolCr
     const e = ensure(r.claveJDE, r.dCliente);
     e.orphanTrips += r.viajes;
     e.orphanAmount += r.subTotal;
+  }
+  // Sin clave JDE no hay llave estable: agrupa por razón social para que el
+  // desglose delate QUÉ cliente hay que dar de alta en CITI.
+  for (const r of result.sinClaveCliente) {
+    const e = ensure(trim(r.dCliente) || '(sin clave)', r.dCliente);
+    e.sinClaveTrips += r.viajes;
+    e.sinClaveAmount += r.subTotal;
   }
   return Array.from(byClient.values()).sort((a, b) =>
     (b.invoicedAmount + b.predictedAmount) - (a.invoicedAmount + a.predictedAmount)

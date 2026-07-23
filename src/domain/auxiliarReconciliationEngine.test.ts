@@ -485,3 +485,61 @@ describe('reconciledByCompanyMonth (MOTOR 1)', () => {
     expect(emptyAuxiliarReconResult().reconciledByCompanyMonth.size).toBe(0);
   });
 });
+
+describe('matchTierBreakdown — telemetría por tier (sin cambiar el matching)', () => {
+  // Auditoría BD 2026-07-22: la marca nativa 'R' de JDE cubre ~1.1% del
+  // histórico 1010-1020 (0.13% jun-2026) — casi todo lo concilia Midas. El
+  // desglose mide cuánto aporta cada tier para la decisión con Contabilidad.
+  it("separa las líneas 'R' de los tiers propios de Midas con % sobre el cruce", () => {
+    const res = reconcileAuxiliar(
+      [
+        // 'R' de JDE, sin contraparte bancaria → jde-reconciled por promoción.
+        glLine({ estatusConciliado: 'R', noDocto: 1, importe: 500 }),
+        // Cruce propio de Midas (exact).
+        glLine({ noDocto: 2, importe: 1000 }),
+        // Sin contraparte y sin 'R' → no cruza (no cuenta en el % del cruce).
+        glLine({ noDocto: 3, importe: 77.77, fechaContable: '2026-04-20' }),
+      ],
+      [statement([bankLine({ importe: 1000 })])],
+    );
+
+    const byTier = new Map(res.summary.matchTierBreakdown.map((t) => [t.tier, t]));
+    const r = byTier.get('jde-reconciled')!;
+    expect(r.lineas).toBe(1);
+    expect(r.monto).toBe(500);
+    expect(r.cruzada).toBe(true);
+    expect(r.pctDeCruzadas).toBeCloseTo(50);
+
+    const exact = byTier.get('exact')!;
+    expect(exact.lineas).toBe(1);
+    expect(exact.cruzada).toBe(true);
+    expect(exact.pctDeCruzadas).toBeCloseTo(50);
+
+    // Los tiers no-cruce aparecen en el desglose pero sin % del cruce.
+    const noCruce = res.summary.matchTierBreakdown.filter((t) => !t.cruzada);
+    expect(noCruce.length).toBeGreaterThan(0);
+    for (const t of noCruce) expect(t.pctDeCruzadas).toBeNull();
+
+    // El desglose cubre TODAS las líneas (se acumula antes de los continue).
+    const totalLineas = res.summary.matchTierBreakdown.reduce((s, t) => s + t.lineas, 0);
+    expect(totalLineas).toBe(res.summary.totalLineas);
+
+    // Cruzados primero, ordenados por volumen.
+    const crossedFirst = res.summary.matchTierBreakdown.map((t) => t.cruzada);
+    expect(crossedFirst.slice(0, crossedFirst.filter(Boolean).length).every(Boolean)).toBe(true);
+  });
+
+  it('cero cambios de comportamiento: los conteos previos del summary no se mueven', () => {
+    const res = reconcileAuxiliar(
+      [glLine({ estatusConciliado: 'R', importe: 500 }), glLine({ noDocto: 2, importe: 1000 })],
+      [statement([bankLine({ importe: 1000 })])],
+    );
+    // Mismos campos que ya cubrían los tests previos — el breakdown es aditivo.
+    expect(res.summary.conciliadasJde).toBe(1);
+    expect(res.summary.ingresoCruzadas).toBe(2);
+  });
+
+  it('resultado vacío trae matchTierBreakdown: []', () => {
+    expect(emptyAuxiliarReconResult().summary.matchTierBreakdown).toEqual([]);
+  });
+});

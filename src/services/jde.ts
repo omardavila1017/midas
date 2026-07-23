@@ -33,6 +33,7 @@ import { findBankAccountByCuenta } from '../domain/bankAccountsCatalog';
 import { canonicalBankAccountNumber, canonicalBankName } from '../domain/bankStatements';
 import { todayISO } from '../formatters';
 import { matchesExclusionIdentity } from '../domain/companyExclusion';
+import { normalizeCia } from '../domain/cia';
 import { isAuxiliarAllowlistedCia, AUX_IVA_PARAMS } from '../domain/auxiliarReconciliationConfig';
 import { discoverIvaObjetosByKind } from '../domain/ivaLedger';
 import { isNonOperatingDay } from '../domain/bankHolidays';
@@ -196,33 +197,9 @@ export function normalizeInvoiceRef(value: unknown): string {
     .replace(/\s+/g, '');
 }
 
-/**
- * Normaliza el campo `cia` de la respuesta JDE.
- *
- * El API regresa la cia en varias formas según el endpoint:
- *   - "00011"                                  → /empresas, /antiguedadsaldos
- *   - "00011 - SERVICIO INDUSTRIAL REGIOMONTANO"→ /antiguedadsaldos en algunos casos
- *   - "00011,"                                  → /cobranza (la coma proviene del
- *                                                request body que el equipo JDE
- *                                                comparte como ejemplo y aparece
- *                                                eco en algunas respuestas).
- *
- * Para poder agrupar/filtrar registros por compañía hay que reducir todos
- * estos a un código canónico de 5 dígitos. Estrategia:
- *   1. Tomar la PRIMERA secuencia de dígitos consecutivos de la cadena.
- *      Esto cubre los tres casos sin bifurcarnos por cada formato.
- *   2. Pad a 5 dígitos.
- *   3. Si no hay dígitos (raro, p.ej. cia="MX"), devolver el head limpio.
- */
-export function normalizeCia(v: unknown): string {
-  const raw = toStr(v);
-  if (!raw) return '';
-  const digitMatch = raw.match(/\d+/);
-  if (digitMatch) return digitMatch[0].padStart(5, '0');
-  // Sin dígitos: caer al patrón antiguo (split por espacio/guion/coma).
-  const head = raw.split(/[\s\-,]/)[0].trim();
-  return head;
-}
+// Normalización canónica de cia — vive en domain/cia.ts; re-export para
+// conservar el import surface existente (CXP.tsx, tests, mappers).
+export { normalizeCia };
 
 /** Desenvuelve respuestas tipo { data: [...] } o { result: [...] } o arreglo directo. */
 function unwrapList(raw: unknown): RawRecord[] {

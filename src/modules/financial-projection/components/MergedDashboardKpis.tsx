@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { ShieldAlert } from 'lucide-react';
 import { fmtCompact, fmtCurrency } from '../../../formatters';
-import type { AuxiliarReconResult } from '../../../domain/auxiliarReconciliationEngine';
+import type { AuxiliarMatchTier, AuxiliarReconResult } from '../../../domain/auxiliarReconciliationEngine';
 import type { FinancialMovement, ForecastRun } from '../../shared-finance/types';
 import { effectiveAmount } from '../../shared-finance/calculation-engine/financialProjectionEngine';
 
@@ -212,10 +212,29 @@ export const MinimumExpenseKpi: React.FC<{
  * monto conciliado y un diagnóstico desplegable por cía.
  * Color semáforo: verde ≥95%, ámbar ≥70%, rojo <70%.
  */
+// Etiquetas es-MX de los tiers para la telemetría del cruce (display-only).
+const MATCH_TIER_LABELS: Record<AuxiliarMatchTier, string> = {
+  'jde-reconciled': "Marca 'R' de JDE",
+  exact: 'Match exacto (Midas)',
+  tolerance: 'Match con tolerancia (Midas)',
+  'cross-account': 'Cuenta hermana (Midas)',
+  'gl-orphan': 'Sin contraparte (huérfano GL)',
+  caja: 'Caja (1010)',
+  interno: 'Traspaso interno',
+  'asiento-interno': 'Asiento interno (VI)',
+  'asiento-contable': 'Asiento contable',
+  'pendiente-revision': 'Pendiente de revisión',
+  'sin-banco': 'Sin estado de cuenta',
+  'sin-cuenta-aux': 'Sin cuenta en la línea aux',
+  'cuenta-no-en-banco': 'Cuenta sin movimientos en banco',
+  'timing-pendiente': 'Extracto bancario pendiente',
+};
+
 export const CobranzaKpiCard: React.FC<{
   reconciliation: AuxiliarReconResult;
 }> = ({ reconciliation }) => {
   const [showDiagnose, setShowDiagnose] = useState(false);
+  const [showTiers, setShowTiers] = useState(false);
   const s = reconciliation.summary;
   const cruzables = s.ingresoLineas + s.egresoLineas;
   const cruzadas = s.ingresoCruzadas + s.egresoCruzadas;
@@ -290,6 +309,54 @@ export const CobranzaKpiCard: React.FC<{
           </p>
         </div>
       </div>
+
+      {/* Telemetría por tier de match — mide cuánto aporta la marca nativa 'R'
+          de JDE vs los tiers propios de Midas (decisión pendiente con
+          Contabilidad: adoptar 'R' como proceso o dejar de esperarla). Solo
+          medición: el matching no cambia. */}
+      {!sinDatos && s.matchTierBreakdown.length > 0 && (
+        <div className="mt-3 pt-3 border-t border-[var(--gray-200)]/60">
+          <button
+            onClick={() => setShowTiers(v => !v)}
+            className="text-[12px] text-[var(--primary)] hover:underline flex items-center gap-1"
+          >
+            {showTiers ? '▾' : '▸'} Cruce por método
+            {(() => {
+              const r = s.matchTierBreakdown.find(t => t.tier === 'jde-reconciled');
+              return (
+                <span className="text-[var(--gray-500)]">
+                  · marca 'R' de JDE: {(r?.lineas ?? 0).toLocaleString('es-MX')} línea{(r?.lineas ?? 0) === 1 ? '' : 's'}
+                  {r?.pctDeCruzadas != null ? ` (${r.pctDeCruzadas.toFixed(1)}% del cruce)` : ''}
+                </span>
+              );
+            })()}
+          </button>
+          {showTiers && (
+            <table className="w-full text-[11px] mt-2">
+              <thead className="text-[var(--gray-400)]">
+                <tr>
+                  <th className="text-left font-medium">Método</th>
+                  <th className="text-right font-medium">Líneas</th>
+                  <th className="text-right font-medium">Monto</th>
+                  <th className="text-right font-medium">% del cruce</th>
+                </tr>
+              </thead>
+              <tbody>
+                {s.matchTierBreakdown.map(t => (
+                  <tr key={t.tier} className={t.cruzada ? '' : 'text-[var(--gray-400)]'}>
+                    <td>{MATCH_TIER_LABELS[t.tier] ?? t.tier}</td>
+                    <td className="text-right tabular-nums">{t.lineas.toLocaleString('es-MX')}</td>
+                    <td className="text-right tabular-nums">{fmtCompact(t.monto)}</td>
+                    <td className="text-right tabular-nums">
+                      {t.pctDeCruzadas != null ? `${t.pctDeCruzadas.toFixed(1)}%` : '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
 
       {(tieneAlerta || (!sinDatos && pct === 0)) && (
         <div className="mt-3 pt-3 border-t border-[var(--gray-200)]/60">

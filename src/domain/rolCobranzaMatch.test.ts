@@ -221,3 +221,69 @@ describe('buildRolCobranzaCross · pagos aplicados (CobranzaIndicadores)', () =>
     expect(cross.invoicedOrphans).toHaveLength(1);
   });
 });
+
+describe('buildRolCobranzaCross · sin clave de cliente (Clave_JDE nula en CITI)', () => {
+  // Auditoría BD 2026-07-22: 102 viajes efectuados en 8 semanas llegaron con
+  // Clave_JDE NULL (un solo cliente). Antes pasaban silenciosos a predicted/
+  // invoicedOrphans; ahora tienen bucket propio, accionable con CITI.
+  it('viaje efectuado SIN factura y SIN clave → sinClaveCliente, no predicted', () => {
+    const cross = buildRolCobranzaCross(
+      [rol({ claveJDE: '', dCliente: 'CLIENTE ACME' })],
+      [factura()],
+    );
+    expect(cross.sinClaveCliente).toHaveLength(1);
+    expect(cross.predicted).toHaveLength(0);
+    expect(cross.invoicedOrphans).toHaveLength(0);
+    expect(cross.matches).toHaveLength(0);
+  });
+
+  it('clave con solo espacios cuenta como sin clave', () => {
+    const cross = buildRolCobranzaCross([rol({ claveJDE: '   ' })], []);
+    expect(cross.sinClaveCliente).toHaveLength(1);
+    expect(cross.predicted).toHaveLength(0);
+  });
+
+  it('viaje CON factura no encontrada y SIN clave → sinClaveCliente; huérfanos NO se inflan', () => {
+    const cross = buildRolCobranzaCross(
+      [rol({ claveJDE: '', factura: 'RI-999999' })],
+      [factura()],
+    );
+    expect(cross.sinClaveCliente).toHaveLength(1);
+    expect(cross.invoicedOrphans).toHaveLength(0);
+  });
+
+  it('viaje SIN clave pero con folio EXACTO en cobranza sigue siendo match (identificación afirmativa)', () => {
+    const cross = buildRolCobranzaCross(
+      [rol({ claveJDE: '', factura: 'RI-305405' })],
+      [factura()],
+    );
+    expect(cross.matches).toHaveLength(1);
+    expect(cross.sinClaveCliente).toHaveLength(0);
+  });
+
+  it('viaje CON clave conserva el comportamiento previo (predicted / huérfano)', () => {
+    const cross = buildRolCobranzaCross(
+      [rol(), rol({ factura: 'RI-999999' })],
+      [factura()],
+    );
+    expect(cross.predicted).toHaveLength(1);
+    expect(cross.invoicedOrphans).toHaveLength(1);
+    expect(cross.sinClaveCliente).toHaveLength(0);
+  });
+
+  it('summarizeRolCrossByClient agrupa los sin-clave por razón social con conteo y monto', async () => {
+    const { summarizeRolCrossByClient } = await import('./rolCobranzaMatch');
+    const cross = buildRolCobranzaCross(
+      [
+        rol({ claveJDE: '', dCliente: 'CLIENTE ACME', viajes: 3, subTotal: 600 }),
+        rol({ claveJDE: '', dCliente: 'CLIENTE ACME', viajes: 2, subTotal: 400 }),
+      ],
+      [],
+    );
+    const summary = summarizeRolCrossByClient(cross);
+    const acme = summary.find((s) => s.dCliente === 'CLIENTE ACME');
+    expect(acme?.sinClaveTrips).toBe(5);
+    expect(acme?.sinClaveAmount).toBe(1000);
+    expect(acme?.predictedTrips).toBe(0);
+  });
+});

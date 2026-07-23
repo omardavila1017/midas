@@ -136,6 +136,7 @@ import {
   mergeBankStatements,
   type BankQueryState,
 } from './domain/bankStatements';
+import { summarizeManualBankFreshness } from './domain/bankSourceFreshness';
 import { SANTANDER_FILE_FORMAT } from './domain/santanderCsv';
 import {
   type AbonoEnrichment,
@@ -1753,6 +1754,19 @@ export default function App() {
   // Filas de la UI de Salud de datos: frescura por módulo. La última
   // sincronización sale del máximo timestamp de los mapas `*LoadedCias` (se
   // sella aunque la cía regrese vacía); bancos usa `banksLastSync`.
+  // Frescura de las fuentes bancarias MANUALES (Bajío/Santander): sus espejos
+  // de BD están muertos y el CSV llega con atraso — se confiesa en Salud de
+  // datos como filas propias (auditoría BD 2026-07-22).
+  const manualBankHealthRows = useMemo<DataHealthDatasetRow[]>(
+    () => summarizeManualBankFreshness(bankStatements, todayISO()).map((f) => ({
+      key: `banks-${f.source}`,
+      label: f.label,
+      status: f.status === 'fresh' ? 'ready' : f.status === 'aging' ? 'stale' : 'error',
+      lastSync: f.lastMovementDate ?? undefined,
+    })),
+    [bankStatements],
+  );
+
   const dataHealthRows = useMemo<DataHealthDatasetRow[]>(() => {
     const maxTs = (...maps: Record<string, string>[]): string | undefined => {
       let max: string | undefined;
@@ -1765,6 +1779,7 @@ export default function App() {
     };
     return [
       { key: 'banks', label: 'Bancos', status: datasetStatus.banks, lastSync: banksLastSync ?? undefined },
+      ...manualBankHealthRows,
       { key: 'cxp', label: 'CXP · Antigüedad de saldos', status: datasetStatus.cxp, lastSync: maxTs(cxpLoadedCias) },
       { key: 'cobranza', label: 'Cobranza', status: datasetStatus.cobranza, lastSync: maxTs(cobranzaLoadedCias, cobranzaPaymentsLoadedCias) },
       { key: 'compras', label: 'Compras (OCs)', status: datasetStatus.compras, lastSync: maxTs(comprasLoadedCias) },
@@ -1774,7 +1789,7 @@ export default function App() {
       { key: 'rol', label: 'ROL · Viajes', status: datasetStatus.rol, lastSync: maxTs(rolLoadedKeys) },
     ];
   }, [
-    datasetStatus, banksLastSync, cxpLoadedCias, cobranzaLoadedCias,
+    datasetStatus, banksLastSync, manualBankHealthRows, cxpLoadedCias, cobranzaLoadedCias,
     cobranzaPaymentsLoadedCias, comprasLoadedCias, pagoProveedorLoadedCias,
     auxiliarContableLoadedCias, nominaLoadedKeys, rolLoadedKeys,
   ]);

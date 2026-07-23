@@ -163,7 +163,10 @@ export function buildSaleEntries({ cobranza, rol, viajesEspeciales }: SaleSource
   // `predicted` a `matches`, así que su venta migra sola de "por facturar" a
   // "facturado" sin re-contarse.
   const rolCross = buildRolCobranzaCross(rol, cobranza);
-  for (const r of rolCross.predicted) {
+  // `sinClaveCliente` (sin Clave_JDE — defecto de alta en CITI) también es
+  // venta real por facturar: se une a `predicted` para que Venta no pierda
+  // esos viajes; el bucket separado sólo existe para visibilidad del cruce.
+  for (const r of [...rolCross.predicted, ...rolCross.sinClaveCliente]) {
     if (!r.efectuado) continue;
     const date = toISODate(r.fechaViaje);
     if (!date) continue;

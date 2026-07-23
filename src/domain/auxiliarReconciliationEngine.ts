@@ -211,6 +211,31 @@ export interface AuxiliarSourceConfirmation {
   fechaContable: string;
 }
 
+/**
+ * Fila de la telemetría por tier de match. SOLO medición — no altera pesos,
+ * orden ni criterios del matching. Alimenta la decisión pendiente con
+ * Contabilidad sobre la marca nativa de JDE (auditoría BD 2026-07-22: en
+ * cuentas 1010-1020 `Estatus_Conciliado='R'` cubre ~1.1% histórico y 0.13%
+ * en jun-2026 — casi todo lo concilia Midas por su cuenta).
+ */
+export interface MatchTierBreakdownRow {
+  tier: AuxiliarMatchTier;
+  lineas: number;
+  monto: number;
+  /** true si el tier cuenta como cruce a banco (mismo set que `ingresoCruzadas`/`egresoCruzadas`). */
+  cruzada: boolean;
+  /** % de las líneas CRUZADAS que aportó este tier (0..100); null en tiers que no son cruce. */
+  pctDeCruzadas: number | null;
+}
+
+/** Tiers que cuentan como cruce a banco — espejo del predicado `cruzada` de buildSummary. */
+const CROSSED_TIERS: ReadonlySet<AuxiliarMatchTier> = new Set([
+  'jde-reconciled',
+  'exact',
+  'tolerance',
+  'cross-account',
+]);
+
 export interface AuxiliarReconSummary {
   totalLineas: number;
   ingresoLineas: number;
@@ -274,6 +299,8 @@ export interface AuxiliarReconSummary {
   ciaBreakdown: Array<{ cia: string; lineas: number; cruzadas: number; pct: number }>;
   /** Conteos por tipo de inconsistencia detectada. */
   inconsistencyCounts: Record<AuxiliarInconsistencyKind, number>;
+  /** Telemetría: desglose de líneas por tier de match (cruzados primero, por volumen). */
+  matchTierBreakdown: MatchTierBreakdownRow[];
 }
 
 /**
@@ -1092,8 +1119,10 @@ function buildSummary(
     auxWindow,
     ciaBreakdown: [],
     inconsistencyCounts,
+    matchTierBreakdown: [],
   };
   const ciaAgg = new Map<string, { lineas: number; cruzadas: number }>();
+  const tierAgg = new Map<AuxiliarMatchTier, { lineas: number; monto: number }>();
   for (const line of lines) {
     const monto = Math.abs(line.importe);
     const cruzada =
@@ -1104,6 +1133,13 @@ function buildSummary(
     const tieneR = line.estatusConciliado.trim().toUpperCase() === 'R';
     if (tieneR) s.conciliadasJde += 1;
     if (cruzada && !tieneR) s.cruzadasSinR += 1;
+
+    // Telemetría por tier — se acumula ANTES de los `continue` de los buckets
+    // estructurales para cubrir el 100% de las líneas.
+    const tAgg = tierAgg.get(line.matchTier) ?? { lineas: 0, monto: 0 };
+    tAgg.lineas += 1;
+    tAgg.monto += monto;
+    tierAgg.set(line.matchTier, tAgg);
 
     if (line.matchTier === 'caja') {
       s.cajaLineas += 1;
@@ -1190,6 +1226,18 @@ function buildSummary(
       pct: agg.lineas > 0 ? (agg.cruzadas / agg.lineas) * 100 : 0,
     }))
     .sort((a, b) => a.cia.localeCompare(b.cia));
+  const totalCruzadasLineas = s.ingresoCruzadas + s.egresoCruzadas;
+  s.matchTierBreakdown = Array.from(tierAgg.entries())
+    .map(([tier, agg]) => ({
+      tier,
+      lineas: agg.lineas,
+      monto: agg.monto,
+      cruzada: CROSSED_TIERS.has(tier),
+      pctDeCruzadas: CROSSED_TIERS.has(tier)
+        ? (totalCruzadasLineas > 0 ? (agg.lineas / totalCruzadasLineas) * 100 : 0)
+        : null,
+    }))
+    .sort((a, b) => (Number(b.cruzada) - Number(a.cruzada)) || b.lineas - a.lineas);
   return s;
 }
 
@@ -1238,6 +1286,7 @@ export function emptyAuxiliarReconResult(): AuxiliarReconResult {
       bankOrphanOutOfWindowLineas: 0,
       bankOrphanOutOfWindowMonto: 0,
       auxWindow: { min: null, max: null },
+      matchTierBreakdown: [],
       ciaBreakdown: [],
       inconsistencyCounts: {
         'non-bank-batch-in-1020': 0,

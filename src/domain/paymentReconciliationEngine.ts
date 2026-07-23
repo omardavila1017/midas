@@ -46,6 +46,7 @@
 import type { PagoProveedorRecord, BankAccountStatement, BankStatementLine } from '../services/jdeTypes';
 import type { CXPRecord } from './persistence';
 import { bankMovementKey } from './bankMovementKey';
+import { normalizeCia } from './cia';
 import {
   buildOwnAccountDetector,
   buildOwnAccountsIndex,
@@ -1138,11 +1139,6 @@ function normalizeAccountKey(value: string): string {
   const raw = (value || '').toString();
   if (BAJIO_PATTERN.test(raw) || /^BANBAJIO$/i.test(raw.trim())) return BANBAJIO_KEY;
   return raw.replace(/\D+/g, '').replace(/^0+/, '');
-}
-
-function normalizeCia(value: string): string {
-  const m = (value || '').match(/\d+/);
-  return m ? m[0].padStart(5, '0') : (value || '').trim();
 }
 
 function sameCia(a: string, b: string): boolean {

@@ -235,7 +235,22 @@ describe('normalizeCia — contrato compartido JDE ↔ import CSV de CXP', () =>
   it('vacío → cadena vacía; sin dígitos → head limpio', () => {
     expect(normalizeCia('')).toBe('');
     expect(normalizeCia(undefined)).toBe('');
+    expect(normalizeCia(null)).toBe('');
     expect(normalizeCia('MX - Norte')).toBe('MX');
+  });
+
+  it('cubre las formas reales por fuente (jde char(8), tress int, cero)', () => {
+    expect(normalizeCia('1')).toBe('00001');
+    expect(normalizeCia(1)).toBe('00001');
+    expect(normalizeCia('00033')).toBe('00033');
+    expect(normalizeCia('00001   ')).toBe('00001'); // char(8) con espacios de la BD espejo
+    expect(normalizeCia(0)).toBe('00000');
+    expect(normalizeCia('0')).toBe('00000');
+  });
+
+  it('es la MISMA función que la canónica de domain/cia (no una copia)', async () => {
+    const canonical = await import('../domain/cia');
+    expect(normalizeCia).toBe(canonical.normalizeCia);
   });
 });
 

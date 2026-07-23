@@ -43,7 +43,14 @@ export const EXCLUSION_RULES: ExclusionRules = {
   unidadesNegocio: [],
 };
 
-/** Parse a cia value to its numeric form, padding-agnostic. "00033" → 33. */
+/**
+ * Parse a cia value to its numeric form, padding-agnostic. "00033" → 33.
+ *
+ * NOT built on domain/cia.normalizeCia on purpose: this contract is
+ * parseInt-based (leading digits only — "MX-33" → null), while the canonical
+ * takes the FIRST digit run anywhere ("MX-33" → "00033" → 33). Rebasing it
+ * would silently widen exclusion matching for alphanumeric cia strings.
+ */
 export function normalizeCiaNumber(cia: unknown): number | null {
   if (cia == null) return null;
   const n = typeof cia === 'number' ? cia : parseInt(String(cia).trim(), 10);

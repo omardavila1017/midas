@@ -107,7 +107,12 @@ export function buildRolProjectedInflows(args: {
   if (!rolRecords || rolRecords.length === 0) return emptyResult();
 
   const cross = buildRolCobranzaCross(rolRecords, cobranzaRecords ?? [], args.cobranzaPayments ?? []);
-  if (cross.predicted.length === 0) return emptyResult();
+  // `sinClaveCliente` (viajes sin Clave_JDE, defecto de alta en CITI) sigue
+  // entrando a la proyección: el fallback por tokens de nombre de abajo es
+  // exactamente el rescate para esos viajes. El bucket separado es para el
+  // cruce/panel, no para dejar de proyectar venta real.
+  const pendientes = [...cross.predicted, ...cross.sinClaveCliente];
+  if (pendientes.length === 0) return emptyResult();
 
   const lookup = args.clientLookup ?? buildClientLookup(clients);
   const agg = new Map<string, RolProjectedInflow>();
@@ -115,7 +120,7 @@ export function buildRolProjectedInflows(args: {
   let unmatchedTrips = 0;
   let unmatchedAmount = 0;
 
-  for (const r of cross.predicted) {
+  for (const r of pendientes) {
     // Sólo viajes EFECTUADOS generan ingreso; despachado-no-efectuado aún no.
     if (!r.efectuado) continue;
     if (!(r.subTotal > 0)) continue;

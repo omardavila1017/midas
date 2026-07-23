@@ -38,6 +38,7 @@ import { fmtDate } from '../../../formatters';
 import PageHeader from '../../../components/ui/PageHeader';
 import type { PayrollCostRecord } from '../../shared-finance/types';
 import { fetchNomina, JdeApiError } from '../../../services/jde';
+import { normalizeCia } from '../../../domain/cia';
 import {
   filterRecords,
   findSuspectMonths,
@@ -128,9 +129,10 @@ const SUB_TABS: SubTabDef[] = [
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-function normalizeCia(idEmpresa: number): string {
+// 99 = "todas las empresas" (sentinela del selector TRESS) → sin filtro de cia.
+function ciaFromIdEmpresa(idEmpresa: number): string {
   if (idEmpresa === 99) return '';
-  return String(idEmpresa).padStart(5, '0');
+  return normalizeCia(idEmpresa);
 }
 
 // ── Component ──────────────────────────────────────────────────────────────
@@ -161,7 +163,7 @@ export default function PayrollDashboard({
   // específica en el módulo, se respeta esa.
   const ciaFilter = idEmpresa === 99
     ? (companyCode && companyCode !== 'all' ? companyCode : undefined)
-    : normalizeCia(idEmpresa);
+    : ciaFromIdEmpresa(idEmpresa);
   // Filtro por CLASE tolerante (no por string exacto): TRESS emite "Semanal"/
   // "Operadores" (tipo 1) y "Quincenal"/"Ejecutivos" (tipo 3), así que comparar
   // contra 'Semanal'/'Quincenal' literal dejaba quincena en cero.

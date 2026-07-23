@@ -547,6 +547,7 @@ function auxiliarResult(lines: AuxiliarReconLine[]): AuxiliarReconResult {
       inconsistencyCounts: {
         'non-bank-batch-in-1020': 0,
       },
+      matchTierBreakdown: [],
     },
   };
 }

@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef, type CSSProperties } from 'react';
 import {
   Landmark,
   Loader2,
@@ -49,8 +49,9 @@ import {
   type BankQueryState,
 } from '../domain/bankStatements';
 import { parseSantanderFile, SANTANDER_FILE_FORMAT } from '../domain/santanderCsv';
+import { summarizeManualBankFreshness, type ManualBankFreshness } from '../domain/bankSourceFreshness';
 import { hex } from '../theme';
-import { fmtCurrency as fmtCurrencyUnified, todayISO } from '../formatters';
+import { fmtCurrency as fmtCurrencyUnified, fmtDate, todayISO } from '../formatters';
 import {
   bankAccountBusinessUnitLabel,
   bankAccountFlowLabel,
@@ -93,6 +94,19 @@ interface BancosProps {
 
 type BancosView = 'form' | 'dashboard';
 type TipoFilter = 'all' | 'CARGO' | 'ABONO';
+
+// Tonos del badge de frescura de fuentes manuales: verde ≤3 días hábiles,
+// amarillo 4-10, rojo >10 o sin datos (umbrales en bankSourceFreshness.ts).
+function freshnessTone(status: ManualBankFreshness['status']): CSSProperties {
+  switch (status) {
+    case 'fresh':
+      return { color: 'var(--success)', backgroundColor: 'var(--success-muted)', borderColor: 'color-mix(in oklch, var(--success) 30%, transparent)' };
+    case 'aging':
+      return { color: 'var(--warning)', backgroundColor: 'var(--warning-muted)', borderColor: 'color-mix(in oklch, var(--warning) 30%, transparent)' };
+    default:
+      return { color: 'var(--danger)', backgroundColor: 'var(--danger-muted)', borderColor: 'color-mix(in oklch, var(--danger) 30%, transparent)' };
+  }
+}
 
 const FORMATS: BankStatementFormat[] = ['SWIFT', 'BAI2', 'MT940'];
 
@@ -648,6 +662,15 @@ const BancosDashboard = ({
     [balanceAccountsView],
   );
 
+  // Frescura de las fuentes MANUALES (Bajío/Santander): sus tablas espejo de
+  // BD están muertas y el CSV llega con semanas de atraso — el rezago debe
+  // verse, no adivinarse (auditoría BD 2026-07-22). Sobre TODOS los statements
+  // cargados (no la vista filtrada) para que el filtro de cía no lo esconda.
+  const manualFreshness = useMemo(
+    () => summarizeManualBankFreshness(statements, todayISO()),
+    [statements],
+  );
+
   const unitSummaries = useMemo(() => {
     const summaries = new Map<string, { label: string; accounts: number; movimientos: number; saldo: number; abonos: number; cargos: number }>();
     for (const acc of accountsView) {
@@ -831,6 +854,31 @@ const BancosDashboard = ({
           </span>
         </div>
       )}
+
+      {/* ── Frescura de fuentes bancarias MANUALES (Bajío/Santander) ──
+          Arriba de las tarjetas de caja para que el rojo se vea sin scroll:
+          los consumidores son Tesorería y el Fideicomiso DINA. */}
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        {manualFreshness.map((f) => (
+          <div
+            key={f.source}
+            className="rounded-[var(--radius)] border px-4 py-2.5 flex items-start gap-2 text-[13px] font-medium"
+            style={freshnessTone(f.status)}
+            title={f.accounts
+              .map((a) => `${a.cuenta}: ${a.lastMovementDate ?? 'sin datos'}${a.businessDaysElapsed != null ? ` (${a.businessDaysElapsed} días hábiles)` : ''}`)
+              .join('\n') || undefined}
+          >
+            <Calendar className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+            <span>
+              <strong>{f.label}:</strong>{' '}
+              {f.status === 'no-data'
+                ? 'sin datos cargados en este navegador'
+                : <>último movimiento {fmtDate(f.lastMovementDate!)} · {f.businessDaysElapsed} día{f.businessDaysElapsed === 1 ? '' : 's'} hábil{f.businessDaysElapsed === 1 ? '' : 'es'} sin datos</>}
+              {f.status === 'stale' && ' — rezago crítico'}
+            </span>
+          </div>
+        ))}
+      </div>
 
       {/* ── Caja disponible (concentradoras) vs comprometido (pagadoras) ── */}
       {balanceAccountsView.length > 0 && (

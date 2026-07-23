@@ -38,6 +38,7 @@ export default function RolCobranzaPanel({ rolRecords, cobranzaRecords, cobranza
   const invoicedAmount = cross.matches.reduce((s, m) => s + m.rol.subTotal, 0);
   const predictedAmount = cross.predicted.reduce((s, r) => s + r.subTotal, 0);
   const orphanAmount = cross.invoicedOrphans.reduce((s, r) => s + r.subTotal, 0);
+  const sinClaveAmount = cross.sinClaveCliente.reduce((s, r) => s + r.subTotal, 0);
 
   return (
     <div className="bg-white border border-[var(--gray-200)] rounded-[var(--radius)] animate-card-in">
@@ -51,7 +52,7 @@ export default function RolCobranzaPanel({ rolRecords, cobranzaRecords, cobranza
         </span>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 px-4 pb-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 px-4 pb-4">
         <Kpi
           label="Facturado"
           hint="Viaje con factura encontrada en cobranza o pagos"
@@ -73,7 +74,21 @@ export default function RolCobranzaPanel({ rolRecords, cobranzaRecords, cobranza
           amount={orphanAmount}
           tone="var(--warning)"
         />
+        <Kpi
+          label="Sin clave cliente"
+          hint="Viaje sin Clave_JDE en CITI — defecto de alta del cliente, reclamar a CITI"
+          trips={cross.sinClaveCliente.length}
+          amount={sinClaveAmount}
+          tone="var(--danger)"
+        />
       </div>
+
+      {cross.sinClaveCliente.length > 0 && (
+        <div className="mx-4 mb-4 rounded-[var(--radius)] border px-3 py-2 text-[12px]" style={{ color: 'var(--danger)', backgroundColor: 'var(--danger-muted)', borderColor: 'color-mix(in oklch, var(--danger) 30%, transparent)' }}>
+          {cross.sinClaveCliente.length} viaje{cross.sinClaveCliente.length !== 1 ? 's' : ''} llegan de CITI sin clave de cliente JDE: no pueden fecharse
+          por regla de cliente ni cruzarse con certeza. Es un defecto de alta en CITI — pedir el alta correcta del cliente (desglose por razón social abajo).
+        </div>
+      )}
 
       {byClient.length > 0 && (
         <>
@@ -93,6 +108,7 @@ export default function RolCobranzaPanel({ rolRecords, cobranzaRecords, cobranza
                     <th className="px-4 py-2 font-medium text-right">Facturado</th>
                     <th className="px-4 py-2 font-medium text-right">Predicho</th>
                     <th className="px-4 py-2 font-medium text-right">Sin cruce</th>
+                    <th className="px-4 py-2 font-medium text-right">Sin clave</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -110,6 +126,10 @@ export default function RolCobranzaPanel({ rolRecords, cobranzaRecords, cobranza
                       <td className="px-4 py-2 text-right tabular-nums text-[var(--gray-700)]">
                         {fmtCurrency(c.orphanAmount)}
                         <span className="text-[var(--gray-400)]"> · {c.orphanTrips}</span>
+                      </td>
+                      <td className="px-4 py-2 text-right tabular-nums" style={c.sinClaveTrips > 0 ? { color: 'var(--danger)' } : undefined}>
+                        {fmtCurrency(c.sinClaveAmount)}
+                        <span className="text-[var(--gray-400)]"> · {c.sinClaveTrips}</span>
                       </td>
                     </tr>
                   ))}

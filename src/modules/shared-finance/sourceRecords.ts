@@ -11,6 +11,7 @@ import { calculateConfidenceBand } from './calculation-engine/financialProjectio
 import { buildProviderIndex, lookupProvider, type ProviderIndex } from '../../domain/providerIdentity';
 import { enrichFromCatalog, type Flexibility } from '../../domain/providerCatalog';
 import { isInternalCounterparty } from '../../domain/netCashFlowEngine';
+import { normalizeCia } from '../../domain/cia';
 
 const DAY_MS = 86_400_000;
 
@@ -375,11 +376,6 @@ function normalize(value: string | undefined | null): string {
     .replace(/\p{Diacritic}/gu, '')
     .replace(/\s+/g, ' ')
     .toUpperCase();
-}
-
-function normalizeCia(value: string | undefined | null): string {
-  const digits = (value ?? '').match(/\d+/)?.[0];
-  return digits ? digits.padStart(5, '0') : (value ?? '').trim();
 }
 
 export function normalizeJde(value: string | undefined | null): string {
