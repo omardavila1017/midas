@@ -60,7 +60,7 @@ Operational context for any agent or new dev touching `midas` (formerly `flowsen
 
 This is the handoff snapshot for delivering Midas in its current state. **`CLAUDE.md` is the single source of truth** for code/architecture; `AGENTS.md` intentionally points here (no second copy to drift). `DOCS.md` is the index of every doc in the repo (what is current vs. an archived historical snapshot under `docs/archive/`).
 
-- **Verified baseline (run after `npm install`, re-verified 2026-07-19):** `npm run typecheck` clean · `npm test` → 1444 passed / 12 skipped / 0 failed (145 files) · `npm run build` passes with the expected ~810 kB main-chunk warning. See "Before you ship".
+- **Verified baseline (run after `npm install`, re-verified 2026-07-23):** `npm run typecheck` clean · `npm test` → 1550 passed / 12 skipped / 0 failed (158 files) · `npm run build` passes with the expected ~810 kB main-chunk warning. See "Before you ship".
 - **Auth posture:** real backend session at `/api/auth/*` (HttpOnly cookie); the frontend RBAC is **UX only, not a security boundary** — the proxy/backend authorizes `/api/*`. No tokens/passwords in the bundle. See `AUTH.md` + `SECURITY-AUDIT.md` (rotate any historically-exposed secret + purge git history before going live — that operational step is still owned by the deploying team).
 - **Known intentional artifacts shipped (not bugs):**
   - Company exclusion catalog is **empty** (nothing excluded; mechanism preserved). See Risk #9 + `EXCLUSION_RULES.md`.
@@ -611,6 +611,18 @@ Auditoría de los cierres 2026-07-20 (`f33f21d`/`f740193`). Baseline verde (type
 - **`parseCXP` no normalizaba la cia** (`"150"` cruda vs `"00150"` de los fetchers JDE). Con el `replaceAllCxp` previo (wipe total) el mismatch no mordía; con `replaceCxpForCias` (merge por cia) un CSV de una cía ya cargada de JDE **no la reemplazaba — coexistían ambas llaves** y `sourceRecords.ts` (que compara con SU normalizeCia) doble-contaba la cía en la proyección. Fix: `normalizeCia` ahora es `export` en `jde.ts`, `parseCXP` (CXP.tsx) la aplica, y `replaceCxpForCias` purga además las filas `cia===''` (sólo un CSV previo puede crearlas; nunca entran a `ciaSet` → acumulaban duplicados al re-importar). Test del contrato en `jde.test.ts` (`normalizeCia — contrato compartido`).
 - **Riesgo #4 (backfill sin `onPartialBatch`) evaluado y NO corregido a propósito:** persistir progreso parcial de un backfill profundo agravaría el riesgo #3 (`minLoadedDate` como prueba de cobertura — un reload a media carga dejaría el año "cubierto" con huecos silenciosos y sin reintento), y bajo el default clear-on-entry el progreso se borra al siguiente ingreso de todos modos. Requiere primero un tracking de cobertura real (persistir rangos cubiertos, no inferirlos del min de fechas).
 
+## Corrida de mantenimiento 2026-07-23 (auditoría PRs #220/#222)
+
+Auditoría en 3 pasadas paralelas sobre los cambios 2026-07-22 (campos de Javier C.1–C.3 + corrida BD db_Artefactos A–D) contra `main` `d1a56fe`. Baseline verde (typecheck limpio · 1549 pass / 12 skip / 158 files · build OK con el warning esperado). Cero hallazgos críticos/seguridad: la consolidación `normalizeCia`, el contrato `predicted ∪ sinClaveCliente` (ambos consumidores lo unen; `RolCobranzaPanel` pinta buckets crudos a propósito) y la telemetría por tier (puramente aditiva, `CROSSED_TIERS` espejo exacto del flag `cruzada`) se verificaron sin regresión; `bankSourceFreshness` es UTC-consistente con `bankHolidays` y sus memos cubren TODOS los statements. Tres correcciones quirúrgicas display-only:
+
+- **Venta (C.1):** `segmentOptions` se deriva del scope de la compañía filtrada y el filtro se auto-resetea si el segmento seleccionado deja de existir en ese scope — antes cambiar de compañía dejaba el calendario en ceros silenciosos con un segmento heredado imposible de satisfacer. Test nuevo en `SalesCalendarDashboard.test.tsx`.
+- **Nómina (C.3):** mismo patrón para `turnoOptions` (acotado a cía/tipo activos; sin año/mes a propósito, para no resetear al navegar meses) + auto-reset. Sin test de componente (no existe harness de `PayrollDashboard`; el patrón queda pineado por el test de Venta).
+- **Bancos (frescura, punto B):** el caso fecha futura (stale con 0 días hábiles — sólo la regla "fecha futura nunca verde" lo produce) ya no pinta el texto contradictorio "0 días hábiles sin datos — rezago crítico"; ahora dice "fecha futura, revisar captura".
+
+**Hallazgos documentados sin corregir (baja severidad / decisión aparte):**
+- `clientCompatible()` (`rolCobranzaMatch.ts:169`) devuelve `true` con `claveJDE` vacía: un viaje sin clave aún puede cruzar por núcleo numérico de folio contra una factura de OTRO cliente en vez de caer en `sinClaveCliente`. Preexistente (la guardia de cliente siempre fue no-op sin clave) y endurecerlo cambia el criterio de match — decisión de negocio, no mantenimiento.
+- `CollectionProjection.tsx` (~1771): si un evento del calendario agrupa varias facturas con promesas de pago distintas sólo muestra la primera, sin indicar que hay más — cosmético, no afecta fechado.
+
 ## API client tuning
 
 `src/services/jdeClient.ts` (post 2026-05-14 retune):
@@ -727,7 +739,7 @@ Locale and currency are hardcoded `es-MX` / `MXN` in `formatters.ts`. If you eve
 ## Before you ship
 
 - `npm install` first — the repo ships no `node_modules`. (Note: invoking a *global* `tsc`/`vitest` instead of the project's pinned ones can produce false errors, e.g. `TS5101 baseUrl deprecated` from a TS 7.x preview — the project pins TypeScript `^5.5.2` + `ignoreDeprecations` in `tsconfig.json`, so always run via `npm`/`npx` against installed deps.)
-- `npm test` — **baseline 2026-07-19: 145 files, 1444 passed, 12 skipped, 0 failed** (~48s). The 12 skips are intentional and spread across 3 files (each carries its inline reason): 5 in `canonicalProjection.test.ts` (long-term projection removed), 6 in `CollectionProjection.test.tsx` (removed UI: source-filter chips / cruce-banco banner), 1 in `TaxDashboard.test.tsx`. Any new failure is yours.
+- `npm test` — **baseline 2026-07-23: 158 files, 1550 passed, 12 skipped, 0 failed** (~53s). The 12 skips are intentional and spread across 3 files (each carries its inline reason): 5 in `canonicalProjection.test.ts` (long-term projection removed), 6 in `CollectionProjection.test.tsx` (removed UI: source-filter chips / cruce-banco banner), 1 in `TaxDashboard.test.tsx`. Any new failure is yours.
 - `npm run typecheck` — clean as of 2026-07-07. Any error is yours.
 - `npm run build` — passes as of 2026-07-16, with one expected warning: the `AppCoreWithProviders` chunk is ~810 kB (>500 kB Vite threshold). Code is already split into vendor-react / vendor-charts / per-tab chunks; the main app chunk is the remaining floor. Not a blocker.
 - Dev-dependency audit debt (no prod impact — `npm audit --omit=dev` is clean): the remaining `npm audit` findings require major upgrades of `vite` (5→8) and `vitest` (2→4); deferred deliberately. Do NOT run `npm audit fix --force`.

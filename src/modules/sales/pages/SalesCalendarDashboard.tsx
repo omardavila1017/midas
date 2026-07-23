@@ -117,21 +117,34 @@ export default function SalesCalendarDashboard({
     return Array.from(set).sort();
   }, [allEntries]);
 
+  const [companyFilter, setCompanyFilter] = useState<string>(ALL_COMPANIES);
+  const companyEntries = useMemo(
+    () => (companyFilter === ALL_COMPANIES ? allEntries : allEntries.filter((e) => e.cia === companyFilter)),
+    [allEntries, companyFilter],
+  );
+
   // Segmento / tipo de servicio (C.1): sólo la capa facturado lo trae. El
   // filtro se pinta cuando el API manda ≥1 segmento clasificado (espejo del
-  // gate hasSegments de Cobranza).
-  const segmentOptions = useMemo(() => listVentaSegments(allEntries), [allEntries]);
+  // gate hasSegments de Cobranza). Las opciones se derivan del scope de la
+  // compañía filtrada; si el segmento seleccionado deja de existir en ese
+  // scope se resetea — sin esto, cambiar de compañía dejaba el calendario en
+  // ceros silenciosos con un filtro heredado imposible de satisfacer.
+  const segmentOptions = useMemo(() => listVentaSegments(companyEntries), [companyEntries]);
   const hasSegments = useMemo(
     () => segmentOptions.some((s) => s !== SEGMENT_UNCLASSIFIED),
     [segmentOptions],
   );
   const [segmentFilter, setSegmentFilter] = useState<string>(ALL_SEGMENTS);
+  useEffect(() => {
+    if (segmentFilter !== ALL_SEGMENTS && !segmentOptions.includes(segmentFilter)) {
+      setSegmentFilter(ALL_SEGMENTS);
+    }
+  }, [segmentFilter, segmentOptions]);
 
-  const [companyFilter, setCompanyFilter] = useState<string>(ALL_COMPANIES);
-  const entries = useMemo(() => {
-    const byCompany = companyFilter === ALL_COMPANIES ? allEntries : allEntries.filter((e) => e.cia === companyFilter);
-    return filterEntriesBySegment(byCompany, segmentFilter === ALL_SEGMENTS ? null : segmentFilter);
-  }, [allEntries, companyFilter, segmentFilter]);
+  const entries = useMemo(
+    () => filterEntriesBySegment(companyEntries, segmentFilter === ALL_SEGMENTS ? null : segmentFilter),
+    [companyEntries, segmentFilter],
+  );
 
   const byDay = useMemo(() => aggregateByDay(entries), [entries]);
   const byMonth = useMemo(() => aggregateByMonth(entries), [entries]);

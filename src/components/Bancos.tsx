@@ -873,8 +873,11 @@ const BancosDashboard = ({
               <strong>{f.label}:</strong>{' '}
               {f.status === 'no-data'
                 ? 'sin datos cargados en este navegador'
-                : <>último movimiento {fmtDate(f.lastMovementDate!)} · {f.businessDaysElapsed} día{f.businessDaysElapsed === 1 ? '' : 's'} hábil{f.businessDaysElapsed === 1 ? '' : 'es'} sin datos</>}
-              {f.status === 'stale' && ' — rezago crítico'}
+                : f.status === 'stale' && f.businessDaysElapsed === 0
+                  // Sólo la regla "fecha futura nunca verde" produce stale con 0
+                  // días hábiles — es error de captura, no rezago.
+                  ? <>último movimiento {fmtDate(f.lastMovementDate!)} — fecha futura, revisar captura</>
+                  : <>último movimiento {fmtDate(f.lastMovementDate!)} · {f.businessDaysElapsed} día{f.businessDaysElapsed === 1 ? '' : 's'} hábil{f.businessDaysElapsed === 1 ? '' : 'es'} sin datos{f.status === 'stale' ? ' — rezago crítico' : ''}</>}
             </span>
           </div>
         ))}

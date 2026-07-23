@@ -82,4 +82,32 @@ describe('<SalesCalendarDashboard />', () => {
     expect(screen.getByText('Sólo facturado')).toBeTruthy();
     expect(screen.queryByText(/Por segmento ·/)).toBeNull(); // el desglose vuelve al quitar el filtro
   });
+
+  it('resets the segment filter when the company scope no longer offers it', () => {
+    render(
+      <SalesCalendarDashboard
+        cobranzaRecords={[
+          { ...cobranza(), tipoServicio: 'Contrato' },
+          { ...cobranza(), cia: '00022', noFactura: 'RI-3' } as CobranzaRecord,
+        ]}
+        rolRecords={[] as RolRecord[]}
+        viajesEspecialesRecords={[] as ViajeEspecialRecord[]}
+        companies={[
+          { cia: '00011', nombre: 'Servicio Industrial' },
+          { cia: '00022', nombre: 'Transportes Norte' },
+        ]}
+      />,
+    );
+
+    const segmentSelect = screen.getByLabelText('Filtrar por segmento') as HTMLSelectElement;
+    fireEvent.change(segmentSelect, { target: { value: 'Contrato' } });
+    expect(screen.getByText('Sólo facturado')).toBeTruthy();
+
+    // La cía 00022 no trae segmentos: el filtro heredado se resetea (nada de
+    // calendario en ceros silencioso) y el select de segmento se oculta.
+    const companySelect = screen.getByLabelText('Filtrar por compañía') as HTMLSelectElement;
+    fireEvent.change(companySelect, { target: { value: '00022' } });
+    expect(screen.queryByText('Sólo facturado')).toBeNull();
+    expect(screen.queryByLabelText('Filtrar por segmento')).toBeNull();
+  });
 });

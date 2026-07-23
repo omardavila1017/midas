@@ -171,8 +171,17 @@ export default function PayrollDashboard({
     tipoNomina === 99 ? undefined : (tipoNomina === 1 ? 'semanal' : 'quincenal');
 
   // Turno TRESS (columna nueva 2026-07): el filtro sólo se pinta cuando el API
-  // realmente manda el dato (espejo del gate hasSegments de Cobranza).
-  const turnoOptions = useMemo(() => listTurnos(nominaRecords), [nominaRecords]);
+  // realmente manda el dato (espejo del gate hasSegments de Cobranza). Las
+  // opciones se acotan a la cía/tipo activos (sin año/mes, para no resetear al
+  // navegar meses); si el turno seleccionado no existe en ese scope se resetea
+  // — evita un snapshot en ceros con un turno heredado de otra cía.
+  const turnoOptions = useMemo(
+    () => listTurnos(filterRecords(nominaRecords, { cia: ciaFilter, payrollTypeClass: tipoClassFilter })),
+    [nominaRecords, ciaFilter, tipoClassFilter],
+  );
+  useEffect(() => {
+    if (turno !== 'all' && !turnoOptions.includes(turno)) setTurno('all');
+  }, [turno, turnoOptions]);
   const turnoFilter = turno === 'all' ? undefined : turno;
 
   // Snapshot del mes: alimenta Resumen / Comparativo / Conceptos / Periodos / Detalle.
