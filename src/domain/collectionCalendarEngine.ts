@@ -144,6 +144,21 @@ export function emptyCollectionCalendarSummary(): Record<CollectionCalendarEvent
   }, {} as Record<CollectionCalendarEventSource, CollectionCalendarSourceSummary>);
 }
 
+// Fechas de promesa de pago (informativas) distintas entre las facturas de un
+// evento, más antigua primero — un abono bancario puede cruzar N facturas con
+// promesas distintas y el drilldown debe indicar que hay más de una.
+export function listPromesasPago(
+  facturas: Pick<CollectionCalendarFactura, 'fechaPromesaPago'>[],
+): string[] {
+  return Array.from(
+    new Set(
+      facturas
+        .map(f => f.fechaPromesaPago?.slice(0, 10))
+        .filter((d): d is string => Boolean(d)),
+    ),
+  ).sort();
+}
+
 export function calendarEventMatchesSourceFilter(
   event: CollectionCalendarEvent,
   filter: CollectionCalendarSourceFilter,

@@ -6,6 +6,7 @@ import { buildRolProjectedInflows } from './rolProjectionEngine';
 import {
   buildCollectionCalendar,
   calendarEventMatchesSourceFilter,
+  listPromesasPago,
   recomputeClientCreditDaysFromCobranza,
 } from './collectionCalendarEngine';
 
@@ -503,5 +504,19 @@ describe('recomputeClientCreditDaysFromCobranza · frecuencia de facturación', 
     const [patched] = recomputeClientCreditDaysFromCobranza([client], [factura]);
     expect(patched.frequency).toBe('Quincenal');
     expect(patched.frequencyFromApi).not.toBe(true);
+  });
+});
+
+describe('listPromesasPago', () => {
+  it('dedup + orden ascendente + recorte a fecha, ignorando facturas sin promesa', () => {
+    expect(
+      listPromesasPago([
+        { fechaPromesaPago: '2026-02-25T00:00:00' },
+        { fechaPromesaPago: undefined },
+        { fechaPromesaPago: '2026-02-20' },
+        { fechaPromesaPago: '2026-02-25' },
+      ]),
+    ).toEqual(['2026-02-20', '2026-02-25']);
+    expect(listPromesasPago([{ fechaPromesaPago: undefined }])).toEqual([]);
   });
 });

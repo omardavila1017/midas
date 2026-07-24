@@ -16,6 +16,7 @@ import {
 } from '../domain/reconciliationConfirmations';
 import {
   buildCollectionCalendar,
+  listPromesasPago,
   COLLECTION_CALENDAR_SOURCE_LABELS,
   type BuildCollectionCalendarResult,
   type CollectionCalendarEvent,
@@ -1768,10 +1769,10 @@ function CobranzaRealCalendar({
                         <div className="text-[10px] text-[var(--gray-400)] max-w-[300px]">{event.ruleApplied}</div>
                         {(() => {
                           // Promesa de pago JDE — informativa, no cambia el fechado del evento.
-                          const promesa = event.facturas.find(f => f.fechaPromesaPago)?.fechaPromesaPago;
-                          return promesa ? (
+                          const promesas = listPromesasPago(event.facturas);
+                          return promesas.length ? (
                             <div className="text-[10px] text-[var(--warning)] tabular-nums">
-                              Promesa de pago: {promesa.slice(0, 10)}
+                              Promesa de pago: {promesas[0]}{promesas.length > 1 ? ` (+${promesas.length - 1} más)` : ''}
                             </div>
                           ) : null;
                         })()}

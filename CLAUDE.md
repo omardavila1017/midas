@@ -621,7 +621,7 @@ Auditoría en 3 pasadas paralelas sobre los cambios 2026-07-22 (campos de Javier
 
 **Hallazgos documentados sin corregir (baja severidad / decisión aparte):**
 - `clientCompatible()` (`rolCobranzaMatch.ts:169`) devuelve `true` con `claveJDE` vacía: un viaje sin clave aún puede cruzar por núcleo numérico de folio contra una factura de OTRO cliente en vez de caer en `sinClaveCliente`. Preexistente (la guardia de cliente siempre fue no-op sin clave) y endurecerlo cambia el criterio de match — decisión de negocio, no mantenimiento.
-- `CollectionProjection.tsx` (~1771): si un evento del calendario agrupa varias facturas con promesas de pago distintas sólo muestra la primera, sin indicar que hay más — cosmético, no afecta fechado.
+- `CollectionProjection.tsx` (~1771): si un evento del calendario agrupa varias facturas con promesas de pago distintas sólo muestra la primera, sin indicar que hay más — CERRADO (2026-07-24): helper puro `listPromesasPago` (`collectionCalendarEngine.ts`, dedup + orden ascendente) y el drilldown pinta la más antigua + sufijo `(+N más)`. Test en `collectionCalendarEngine.test.ts`. Baseline tras la corrida 2026-07-24: 1551 passed / 12 skipped / 158 files.
 
 ## API client tuning
 
