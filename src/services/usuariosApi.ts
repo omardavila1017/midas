@@ -123,6 +123,12 @@ async function request(path: string, init: RequestInit = {}): Promise<unknown> {
   if (!res.ok) {
     throw errorForStatus(res.status, envelope);
   }
+  // El sobre puede reportar fallo lógico con HTTP 2xx (`success:false`) — no
+  // tratarlo como éxito (p.ej. un PUT rechazado se leería como aplicado).
+  if (envelope?.success === false) {
+    const status = typeof envelope.status === 'number' ? envelope.status : res.status;
+    throw errorForStatus(status, envelope);
+  }
   return envelope?.data ?? null;
 }
 
@@ -161,7 +167,10 @@ export async function listUsuarios(filterEmail?: string): Promise<UsuarioApi[]> 
 export async function getUsuario(email: string): Promise<UsuarioApi | null> {
   const target = normalizeEmail(email);
   const list = await listUsuarios(target);
-  return list.find((u) => u.usuario === target) ?? list[0] ?? null;
+  // SOLO match exacto (ambos lados ya normalizados). Sin fallback a `list[0]`:
+  // si el backend filtrara laxo, regresar otro registro haría que los writes
+  // GET→PUT (changePassword/adminSetPassword/permisos) mutaran la cuenta equivocada.
+  return list.find((u) => u.usuario === target) ?? null;
 }
 
 export interface CreateUsuarioInput {

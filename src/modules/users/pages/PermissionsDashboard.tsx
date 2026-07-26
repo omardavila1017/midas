@@ -107,15 +107,24 @@ export default function PermissionsDashboard() {
     [selected, floorSet],
   );
 
+  // Guard de escritura en vuelo (solo modo online): cada toggle es un
+  // GET→PUT del CSV completo; dos clics concurrentes leerían el mismo CSV
+  // stale y el segundo PUT pisaría al primero (lost update). Mientras hay un
+  // PUT en vuelo los switches se deshabilitan.
+  const [saving, setSaving] = useState(false);
+
   const handleToggle = (tab: (typeof GRANTABLE_TABS)[number], enabled: boolean) => {
-    if (!selected || !canEdit || selected.role === 'admin') return;
+    if (!selected || !canEdit || selected.role === 'admin' || saving) return;
     if (midas) {
+      setSaving(true);
       void (async () => {
         try {
           await setManagedUserPermission(selected.email, tab, enabled);
           await reloadFromApi();
         } catch (error) {
           toast.error(managementErrorMessage(error, 'No se pudo actualizar el permiso.'));
+        } finally {
+          setSaving(false);
         }
       })();
       return;
@@ -125,9 +134,10 @@ export default function PermissionsDashboard() {
   };
 
   const handleSetAll = (enabled: boolean) => {
-    if (!selected || !canEdit || selected.role === 'admin') return;
+    if (!selected || !canEdit || selected.role === 'admin' || saving) return;
     if (midas) {
       const target = selected.email;
+      setSaving(true);
       void (async () => {
         try {
           await setManagedUserPermissions(target, enabled ? [...allGrantableTabs] : []);
@@ -135,6 +145,8 @@ export default function PermissionsDashboard() {
           await reloadFromApi();
         } catch (error) {
           toast.error(managementErrorMessage(error, 'No se pudieron actualizar los permisos.'));
+        } finally {
+          setSaving(false);
         }
       })();
       return;
@@ -241,16 +253,18 @@ export default function PermissionsDashboard() {
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
+                      disabled={saving}
                       onClick={() => handleSetAll(true)}
-                      className="h-8 rounded-[var(--radius-md)] border px-2.5 text-[12px] font-medium transition-colors hover:bg-[var(--gray-100)]"
+                      className="h-8 rounded-[var(--radius-md)] border px-2.5 text-[12px] font-medium transition-colors hover:bg-[var(--gray-100)] disabled:opacity-50"
                       style={{ borderColor: 'var(--gray-200)', color: 'var(--gray-700)' }}
                     >
                       Todos
                     </button>
                     <button
                       type="button"
+                      disabled={saving}
                       onClick={() => handleSetAll(false)}
-                      className="h-8 rounded-[var(--radius-md)] border px-2.5 text-[12px] font-medium transition-colors hover:bg-[var(--gray-100)]"
+                      className="h-8 rounded-[var(--radius-md)] border px-2.5 text-[12px] font-medium transition-colors hover:bg-[var(--gray-100)] disabled:opacity-50"
                       style={{ borderColor: 'var(--gray-200)', color: 'var(--gray-700)' }}
                     >
                       Ninguno
@@ -307,7 +321,7 @@ export default function PermissionsDashboard() {
                               </span>
                               <PermissionToggle
                                 checked={checked}
-                                disabled={!canEdit || forced}
+                                disabled={!canEdit || forced || saving}
                                 label={`Acceso a ${tabLabel(tab)}`}
                                 onChange={(enabled) => handleToggle(tab, enabled)}
                               />

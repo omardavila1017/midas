@@ -67,6 +67,28 @@ describe('usuariosApi', () => {
       vi.mocked(fetch).mockResolvedValueOnce(envelope(null, 500, 'boom'));
       await expect(listUsuarios()).rejects.toMatchObject({ code: 'unknown', status: 500 });
     });
+
+    it('getUsuario NO cae a list[0] cuando el filtro regresa otro usuario', async () => {
+      // Backend con filtro laxo/ignorado: la lista viene poblada pero SIN el
+      // correo pedido. Regresar list[0] haría que los writes GET→PUT mutaran
+      // la cuenta equivocada — debe ser null (no existe).
+      vi.mocked(fetch).mockResolvedValueOnce(
+        envelope([{ usuario: 'otro@x.com', contrasena: 'h', rol: 'Usuario', permisos: 'cxp', b_Activo: true }]),
+      );
+      await expect(getUsuario('buscado@x.com')).resolves.toBeNull();
+    });
+
+    it('trata HTTP 2xx con success:false como error, no como éxito', async () => {
+      // Sobre .NET: fallo lógico reportado con HTTP 200. Leerlo como éxito
+      // haría pasar por aplicado un PUT rechazado.
+      vi.mocked(fetch).mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ status: 404, success: false, message: 'El usuario no existe.', date: 'x', data: null }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      );
+      await expect(listUsuarios()).rejects.toMatchObject({ code: 'not_found', status: 404 });
+    });
   });
 
   describe('POST /usuarios (#6) — alta', () => {

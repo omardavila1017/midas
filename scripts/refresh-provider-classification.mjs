@@ -103,6 +103,16 @@ export function parseRelacionRows(csvText) {
   const iTipo = idx('Tipo_Busqueda');
   const iClas = idx('Clasificacion_Proveedor');
   const iImp = idx('Importe_Pagado');
+  const missing = [
+    ['Clave_Proveedor', iClave],
+    ['Nombre_Proveedor', iNombre],
+    ['Tipo_Busqueda', iTipo],
+    ['Clasificacion_Proveedor', iClas],
+    ['Importe_Pagado', iImp],
+  ].filter(([, i]) => i === -1).map(([name]) => name);
+  if (missing.length > 0) {
+    throw new Error(`CSV sin los encabezados esperados: ${missing.join(', ')} (fila 1: ${rows[0].join(', ')})`);
+  }
   const out = [];
   for (let r = 1; r < rows.length; r++) {
     const cells = rows[r];

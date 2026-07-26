@@ -30,6 +30,14 @@ describe('refresh-provider-classification (helpers puros)', () => {
     ]);
   });
 
+  it('parseRelacionRows LANZA si falta un encabezado esperado (no filas vacías silenciosas)', () => {
+    // Antes: encabezado ausente → indexOf -1 → cells[-1] → '' en TODAS las
+    // filas, 100% marcadas `vacia` sin error. Debe fallar ruidoso.
+    const csv = 'Proveedor,Nombre_Proveedor,Tipo_Busqueda,Clasificacion_Proveedor,Importe_Pagado\n'
+      + '123,ZAR KRUSE,Proveedores,Refaccionario,1000\n';
+    expect(() => parseRelacionRows(csv)).toThrow(/Clave_Proveedor/);
+  });
+
   const known = buildKnownVocabulary({
     industryCatalog: { catalog: { ARR: 'Arrendamientos', AUT: 'Automotriz' } },
     providerCatalog: { providerTypeByName: { Foo: 'Refaccionario' }, classificationByName: {}, flexibilityByClass: {} },

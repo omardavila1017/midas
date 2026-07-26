@@ -36,10 +36,18 @@ function majorMinor(version) {
   return `${major}.${minor}`;
 }
 
-function countMergedPrs() {
+export function countMergedPrs(cwd = join(scriptDir, '..')) {
   try {
+    // Un clon shallow NO falla en `rev-list` — regresa un conteo SUBCONTADO que
+    // se embarcaría como versión real. Detectarlo y caer al fallback.
+    const shallow = execSync('git rev-parse --is-shallow-repository', {
+      cwd,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    if (shallow === 'true') return null;
     const out = execSync('git rev-list --count --merges HEAD', {
-      cwd: join(scriptDir, '..'),
+      cwd,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
