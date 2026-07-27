@@ -72,4 +72,40 @@ describe('<UsersDashboard /> — modo ONLINE (WS/midas)', () => {
     expect(post?.url).toBe('/api/midas/usuarios');
     expect((post?.body as { usuario: string }).usuario).toBe('nuevo@gruposenda.com');
   });
+
+  it('blocks concurrent writes while a role-change PUT is in flight (lost-update guard)', async () => {
+    // El cambio de rol es GET→PUT del registro completo (incluye el CSV de
+    // permisos): un segundo write mientras el PUT está en vuelo leería el
+    // registro stale y lo pisaría. El guard `saving` deshabilita los controles.
+    let resolvePut: (() => void) | undefined;
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = (init?.method ?? 'GET').toUpperCase();
+      const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+      calls.push({ url, method, body });
+      if (method === 'GET' && url.startsWith('/api/midas/usuarios')) return Promise.resolve(envelope(roster));
+      if (method === 'PUT' && url === '/api/midas/usuarios') {
+        return new Promise<Response>((resolve) => {
+          resolvePut = () => resolve(envelope(body));
+        });
+      }
+      throw new Error(`unexpected ${method} ${url}`);
+    });
+    renderAsAdmin();
+    await screen.findByText('existente@x.com');
+    const select = screen.getByLabelText('Rol de existente@x.com') as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: 'admin' } });
+    // Espera a que el GET→PUT llegue al PUT (queda colgado en el deferred).
+    await vi.waitFor(() => {
+      expect(calls.some((c) => c.method === 'PUT')).toBe(true);
+    });
+    expect(select.disabled).toBe(true);
+    const callsBefore = calls.length;
+    fireEvent.change(select, { target: { value: 'user' } });
+    expect(calls.length).toBe(callsBefore);
+    resolvePut?.();
+    await vi.waitFor(() => {
+      expect(select.disabled).toBe(false);
+    });
+  });
 });

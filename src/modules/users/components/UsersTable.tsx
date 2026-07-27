@@ -12,6 +12,8 @@ import type { ManagedRole, ManagedUser } from '../services/accessControlStore';
 interface UsersTableProps {
   users: ManagedUser[];
   canEdit: boolean;
+  /** Hay una escritura en vuelo (modo online): deshabilita rol y eliminar. */
+  mutating?: boolean;
   canSendReset: boolean;
   resettingEmail: string | null;
   /** Correo del usuario actual, para destacar su propia fila. */
@@ -26,6 +28,7 @@ interface UsersTableProps {
 export default function UsersTable({
   users,
   canEdit,
+  mutating = false,
   canSendReset,
   resettingEmail,
   currentEmail,
@@ -92,8 +95,9 @@ export default function UsersTable({
                   {canEdit && onRoleChange ? (
                     <select
                       value={row.role}
+                      disabled={mutating}
                       onChange={(e) => onRoleChange(row.email, e.target.value as ManagedRole)}
-                      className="h-9 rounded-[var(--radius-md)] border px-2 text-[13px]"
+                      className="h-9 rounded-[var(--radius-md)] border px-2 text-[13px] disabled:cursor-not-allowed disabled:opacity-60"
                       style={{ borderColor: 'var(--gray-200)', background: 'var(--input)', color: 'var(--gray-950)' }}
                       aria-label={`Rol de ${row.email}`}
                     >
@@ -149,7 +153,7 @@ export default function UsersTable({
                         <button
                           type="button"
                           onClick={() => onRemove(row.email)}
-                          disabled={isCurrent}
+                          disabled={isCurrent || mutating}
                           className="inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-md)] border px-2.5 text-[12px] font-medium transition-colors hover:bg-[var(--danger-muted)] hover:text-[var(--danger)] disabled:cursor-not-allowed disabled:opacity-40"
                           style={{ borderColor: 'var(--gray-200)', color: 'var(--gray-600)' }}
                           aria-label={`Quitar a ${row.email}`}

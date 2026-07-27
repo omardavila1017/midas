@@ -81,11 +81,17 @@ export default function UsersDashboard() {
   const [newEmail, setNewEmail] = useState('');
   const [newRole, setNewRole] = useState<ManagedRole>('user');
 
+  // Guard de escritura en vuelo (solo modo online): el cambio de rol es un
+  // GET→PUT del registro completo (incluye el CSV de permisos), así que un
+  // write concurrente con otro PUT (rol o permisos) leería el registro stale
+  // y lo pisaría (lost update). Espejo del guard `saving` de Permisos.
+  const [saving, setSaving] = useState(false);
+
   const existingEmails = useMemo(() => new Set(users.map((u) => u.email)), [users]);
 
   const handleAdd = (event: FormEvent) => {
     event.preventDefault();
-    if (!canEdit) return;
+    if (!canEdit || saving) return;
     const value = newEmail.trim().toLowerCase();
     if (!looksLikeEmail(value)) {
       toast.error('Escribe un correo válido.');
@@ -96,6 +102,7 @@ export default function UsersDashboard() {
       return;
     }
     if (midas) {
+      setSaving(true);
       void (async () => {
         try {
           await createManagedUser(value, newRole);
@@ -105,6 +112,8 @@ export default function UsersDashboard() {
           await reloadFromApi();
         } catch (error) {
           toast.error(managementErrorMessage(error, 'No se pudo registrar el usuario.'));
+        } finally {
+          setSaving(false);
         }
       })();
       return;
@@ -117,13 +126,17 @@ export default function UsersDashboard() {
   };
 
   const handleRoleChange = (targetEmail: string, nextRole: ManagedRole) => {
+    if (saving) return;
     if (midas) {
+      setSaving(true);
       void (async () => {
         try {
           await updateManagedUserRole(targetEmail, nextRole);
           await reloadFromApi();
         } catch (error) {
           toast.error(managementErrorMessage(error, 'No se pudo cambiar el rol.'));
+        } finally {
+          setSaving(false);
         }
       })();
       return;
@@ -133,7 +146,9 @@ export default function UsersDashboard() {
   };
 
   const handleRemove = (targetEmail: string) => {
+    if (saving) return;
     if (midas) {
+      setSaving(true);
       void (async () => {
         try {
           await removeManagedUser(targetEmail);
@@ -141,6 +156,8 @@ export default function UsersDashboard() {
           await reloadFromApi();
         } catch (error) {
           toast.error(managementErrorMessage(error, 'No se pudo eliminar el usuario.'));
+        } finally {
+          setSaving(false);
         }
       })();
       return;
@@ -247,7 +264,8 @@ export default function UsersDashboard() {
           </label>
           <button
             type="submit"
-            className="inline-flex h-10 items-center gap-1.5 rounded-[var(--radius-md)] px-4 text-[13px] font-semibold text-white transition-colors"
+            disabled={saving}
+            className="inline-flex h-10 items-center gap-1.5 rounded-[var(--radius-md)] px-4 text-[13px] font-semibold text-white transition-colors disabled:opacity-50"
             style={{ background: 'var(--primary)' }}
           >
             <UserPlus className="h-4 w-4" strokeWidth={2} aria-hidden />
@@ -259,6 +277,7 @@ export default function UsersDashboard() {
       <UsersTable
         users={users}
         canEdit={canEdit}
+        mutating={saving}
         canSendReset={canSendReset}
         resettingEmail={resettingEmail}
         currentEmail={email}
