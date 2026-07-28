@@ -60,7 +60,7 @@ Operational context for any agent or new dev touching `midas` (formerly `flowsen
 
 This is the handoff snapshot for delivering Midas in its current state. **`CLAUDE.md` is the single source of truth** for code/architecture; `AGENTS.md` intentionally points here (no second copy to drift). `DOCS.md` is the index of every doc in the repo (what is current vs. an archived historical snapshot under `docs/archive/`).
 
-- **Verified baseline (run after `npm install`, re-verified 2026-07-25):** `npm run typecheck` clean · `npm test` → 1551 passed / 12 skipped / 0 failed (158 files) · `npm run build` passes with the expected ~810 kB main-chunk warning. See "Before you ship".
+- **Verified baseline (run after `npm install`, re-verified 2026-07-28):** `npm run typecheck` clean · `npm test` → 1638 passed / 12 skipped / 0 failed (164 files) · `npm run build` passes with the expected ~810 kB main-chunk warning. See "Before you ship".
 - **Auth posture:** real backend session at `/api/auth/*` (HttpOnly cookie); the frontend RBAC is **UX only, not a security boundary** — the proxy/backend authorizes `/api/*`. No tokens/passwords in the bundle. See `AUTH.md` + `SECURITY-AUDIT.md` (rotate any historically-exposed secret + purge git history before going live — that operational step is still owned by the deploying team).
 - **Known intentional artifacts shipped (not bugs):**
   - Company exclusion catalog is **empty** (nothing excluded; mechanism preserved). See Risk #9 + `EXCLUSION_RULES.md`.
@@ -650,6 +650,10 @@ Auditoría sobre el guard de escrituras en vuelo de `UsersDashboard` (PR #230) c
 
 Baseline tras la corrida: **1556 passed / 12 skipped / 158 files** (assertions nuevas en test existente, sin test nuevo). Riesgos abiertos previos sin cambio de estado.
 
+## Cobertura directa de motores núcleo (PR #232, 2026-07-28)
+
+Sólo tests — cero cambios de código de producción. 6 suites nuevas + extensión de `santanderCsv.test.ts` (158→164 archivos, +82 tests) que dan cobertura DIRECTA a piezas que antes sólo se probaban indirectamente vía `canonicalProjection.test.ts` o no se probaban: `historicalReconciledEngine.test.ts` (MOTOR 1) y `shortTermProjectionEngine.test.ts` (MOTOR 2) en `shared-finance/calculation-engine/`, `reconciliationEngine.test.ts` (cruce forecast vs ABONOs), `parsePaymentDay.test.ts`, `predictive/seriesPrep.test.ts` (`extractHistoricalSeries` / meses cerrados) y `shared-finance/hooks/useScenarioRunWorker.test.ts` (contrato del worker: `requestScenarioRun` + hook). Baseline tras el PR (re-verificado 2026-07-28): **1638 passed / 12 skipped / 164 files** · typecheck limpio · build OK con el warning esperado.
+
 ## Corrida de mantenimiento 2026-07-25 (auditoría PR #224, sin cambios de código)
 
 Baseline re-verificado contra `main` `ba971ca`: typecheck limpio · 1551 pass / 12 skip / 158 files · build OK con el warning esperado. Único delta desde la corrida previa: PR #224 (`listPromesasPago`, 34 líneas) — auditado sin hallazgos (dedup+sort lexicográfico correcto sobre ISO `YYYY-MM-DD`; fechas centinela ya filtradas aguas arriba por `mapCobranza`; test cubre dedup/orden/undefined; el CSV de cruce es por-factura, sin agregación afectada). Sin correcciones de código; sólo se refrescó el baseline documentado. Los riesgos abiertos previos (#2 umbrales de fallo parcial, #3 `minLoadedDate`, #4 backfill incancelable, #6 retry por-slot, #7 catálogo compensaciones TLJ, `clientCompatible()` sin clave) siguen vigentes sin cambio de estado.
@@ -770,7 +774,7 @@ Locale and currency are hardcoded `es-MX` / `MXN` in `formatters.ts`. If you eve
 ## Before you ship
 
 - `npm install` first — the repo ships no `node_modules`. (Note: invoking a *global* `tsc`/`vitest` instead of the project's pinned ones can produce false errors, e.g. `TS5101 baseUrl deprecated` from a TS 7.x preview — the project pins TypeScript `^5.5.2` + `ignoreDeprecations` in `tsconfig.json`, so always run via `npm`/`npx` against installed deps.)
-- `npm test` — **baseline 2026-07-26: 158 files, 1555 passed, 12 skipped, 0 failed** (~50s). The 12 skips are intentional and spread across 3 files (each carries its inline reason): 5 in `canonicalProjection.test.ts` (long-term projection removed), 6 in `CollectionProjection.test.tsx` (removed UI: source-filter chips / cruce-banco banner), 1 in `TaxDashboard.test.tsx`. Any new failure is yours.
+- `npm test` — **baseline 2026-07-28: 164 files, 1638 passed, 12 skipped, 0 failed** (~60s). The 12 skips are intentional and spread across 3 files (each carries its inline reason): 5 in `canonicalProjection.test.ts` (long-term projection removed), 6 in `CollectionProjection.test.tsx` (removed UI: source-filter chips / cruce-banco banner), 1 in `TaxDashboard.test.tsx`. Any new failure is yours.
 - `npm run typecheck` — clean as of 2026-07-07. Any error is yours.
 - `npm run build` — passes as of 2026-07-16, with one expected warning: the `AppCoreWithProviders` chunk is ~810 kB (>500 kB Vite threshold). Code is already split into vendor-react / vendor-charts / per-tab chunks; the main app chunk is the remaining floor. Not a blocker.
 - Dev-dependency audit debt (no prod impact — `npm audit --omit=dev` is clean): the remaining `npm audit` findings require major upgrades of `vite` (5→8) and `vitest` (2→4); deferred deliberately. Do NOT run `npm audit fix --force`.
