@@ -100,6 +100,10 @@ describe('<UsersDashboard /> — modo ONLINE (WS/midas)', () => {
       expect(calls.some((c) => c.method === 'PUT')).toBe(true);
     });
     expect(select.disabled).toBe(true);
+    // "Cambiar contraseña" también queda deshabilitado: abrir el modal y
+    // disparar adminSetPassword (otro GET→PUT) pisaría el PUT en vuelo.
+    const passwordBtn = screen.getByLabelText('Cambiar contraseña de existente@x.com') as HTMLButtonElement;
+    expect(passwordBtn.disabled).toBe(true);
     const callsBefore = calls.length;
     fireEvent.change(select, { target: { value: 'user' } });
     expect(calls.length).toBe(callsBefore);
@@ -107,5 +111,6 @@ describe('<UsersDashboard /> — modo ONLINE (WS/midas)', () => {
     await vi.waitFor(() => {
       expect(select.disabled).toBe(false);
     });
+    expect(passwordBtn.disabled).toBe(false);
   });
 });

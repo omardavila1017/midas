@@ -12,7 +12,7 @@ import type { ManagedRole, ManagedUser } from '../services/accessControlStore';
 interface UsersTableProps {
   users: ManagedUser[];
   canEdit: boolean;
-  /** Hay una escritura en vuelo (modo online): deshabilita rol y eliminar. */
+  /** Hay una escritura en vuelo (modo online): deshabilita rol, contraseña y eliminar. */
   mutating?: boolean;
   canSendReset: boolean;
   resettingEmail: string | null;
@@ -128,7 +128,8 @@ export default function UsersTable({
                         <button
                           type="button"
                           onClick={() => onSetPassword(row.email)}
-                          className="inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-md)] border px-2.5 text-[12px] font-medium transition-colors hover:bg-[var(--gray-100)]"
+                          disabled={mutating}
+                          className="inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-md)] border px-2.5 text-[12px] font-medium transition-colors hover:bg-[var(--gray-100)] disabled:cursor-not-allowed disabled:opacity-60"
                           style={{ borderColor: 'var(--gray-200)', color: 'var(--gray-700)' }}
                           aria-label={`Cambiar contraseña de ${row.email}`}
                         >

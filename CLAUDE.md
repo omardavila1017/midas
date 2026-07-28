@@ -642,6 +642,14 @@ Auditoría sobre las cuatro correcciones del 2026-07-26 (PR #229) contra `main` 
 
 Baseline tras la corrida: **1556 passed / 12 skipped / 158 files**. Riesgos abiertos previos sin cambio de estado.
 
+## Corrida de mantenimiento 2026-07-28 (auditoría PR #230)
+
+Auditoría sobre el guard de escrituras en vuelo de `UsersDashboard` (PR #230) contra `main` `4ced84f`. Baseline verde re-verificado (typecheck limpio · 1556 pass / 12 skip / 158 files · build OK con el warning esperado). El guard auditado sin regresión: `saving` cubre alta/cambio-de-rol/baja online, `mutating` deshabilita select de rol y Quitar, el path local nunca lo activa. `PermissionsDashboard` re-verificado: todos sus controles de escritura (switches, Todos/Ninguno y ambos handlers) respetan `saving`. Una corrección quirúrgica derivada:
+
+- **"Cambiar contraseña" era el control de escritura restante sin el guard** (`UsersTable.tsx`): el botón no se deshabilitaba con `mutating`, así que en modo online se podía abrir `SetPasswordModal` y disparar `adminSetPassword` (otro GET→PUT del registro completo) mientras un PUT de rol/alta/baja seguía en vuelo — misma clase lost-update que #229/#230 cerraron en los demás controles (`savingPassword` sólo guarda el modal contra sí mismo, no contra los writes de la tabla). Fix espejo de una línea: `disabled={mutating}` en el botón. Assertions extendidas en el test existente de `UsersDashboard.midas.test.tsx` (PUT colgado → botón de contraseña deshabilitado → re-habilita al resolver).
+
+Baseline tras la corrida: **1556 passed / 12 skipped / 158 files** (assertions nuevas en test existente, sin test nuevo). Riesgos abiertos previos sin cambio de estado.
+
 ## Corrida de mantenimiento 2026-07-25 (auditoría PR #224, sin cambios de código)
 
 Baseline re-verificado contra `main` `ba971ca`: typecheck limpio · 1551 pass / 12 skip / 158 files · build OK con el warning esperado. Único delta desde la corrida previa: PR #224 (`listPromesasPago`, 34 líneas) — auditado sin hallazgos (dedup+sort lexicográfico correcto sobre ISO `YYYY-MM-DD`; fechas centinela ya filtradas aguas arriba por `mapCobranza`; test cubre dedup/orden/undefined; el CSV de cruce es por-factura, sin agregación afectada). Sin correcciones de código; sólo se refrescó el baseline documentado. Los riesgos abiertos previos (#2 umbrales de fallo parcial, #3 `minLoadedDate`, #4 backfill incancelable, #6 retry por-slot, #7 catálogo compensaciones TLJ, `clientCompatible()` sin clave) siguen vigentes sin cambio de estado.
