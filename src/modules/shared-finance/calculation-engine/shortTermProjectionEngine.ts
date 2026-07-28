@@ -258,21 +258,6 @@ function buildInflowContext(inputs: CanonicalProjectionInputs): InflowContext {
     if (arr) arr.push(inflow);
     else rolInflowsByYm.set(ym, [inflow]);
   }
-  // TODO(rol-diag): instrumentación temporal — quitar tras confirmar mapeo ROL.
-  // Gateada a DEV: corre en el hot path del worker de proyección (cada run),
-  // así que en producción no debe emitir ruido por-cómputo.
-  if (import.meta.env.DEV && typeof console !== 'undefined') {
-    const dates = rol.inflows.map((i) => i.date).sort();
-    const gross = rol.inflows.reduce((s, i) => s + i.grossAmount, 0);
-    // eslint-disable-next-line no-console
-    console.info(
-      `[rol-diag] rolRecords=${(inputs.rolRecords ?? []).length} → líneas rol:=${rol.inflows.length} `
-      + `bruto=${Math.round(gross)} fechas ${dates[0] ?? '—'}..${dates[dates.length - 1] ?? '—'} `
-      + `· sin cliente catálogo: viajes=${rol.unmatchedTrips} monto=${Math.round(rol.unmatchedAmount)} `
-      + `· asOf=${inputs.asOfDate}`,
-    );
-  }
-
   // Viajes Especiales: cruce factura/UUID vs cobranza. Unmatched (factura
   // emitida pero cobranza aún no la tiene) se proyectan más abajo como
   // `cxc:especial:` con Fecha_Factura + Dias_Credito del API. Matched solo
@@ -291,8 +276,8 @@ function buildInflowContext(inputs: CanonicalProjectionInputs): InflowContext {
     if (arr) arr.push(v);
     else viajesEspUnmatchedByYm.set(ym, [v]);
   }
-  // Gateada a DEV igual que [rol-diag]: corre en el hot path del worker de
-  // proyección (cada run), así que en producción no debe emitir ruido por-cómputo.
+  // Gateada a DEV: corre en el hot path del worker de proyección (cada run),
+  // así que en producción no debe emitir ruido por-cómputo.
   if (import.meta.env.DEV && typeof console !== 'undefined' && viajesRecords.length > 0) {
     // eslint-disable-next-line no-console
     console.info(
