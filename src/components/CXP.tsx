@@ -17,7 +17,7 @@ import {
   HelpCircle,
   Download,
 } from 'lucide-react';
-import { fetchAgedBalances, normalizeCia, JdeApiError, type BankAccountStatement, type BankStatementLine, type Company } from '../services/jde';
+import { fetchAgedBalances, JdeApiError, type BankAccountStatement, type BankStatementLine, type Company } from '../services/jde';
 import {
   BarChart,
   Bar,
@@ -42,6 +42,7 @@ import type { CxpPaymentCoverage } from '../domain/paymentReconciliationEngine';
 import { excludeConcursoMercantil } from '../domain/concursoMercantil';
 import { buildProviderIndex, findProviderByRef, type ProviderIndex } from '../domain/providerIdentity';
 import { makeAttribution, sourceOf, type SourceAttribution } from '../domain/sourceAttribution';
+import { parseCXP } from '../domain/cxpCsv';
 
 /* ═══════════════════════════════════════════════════════════════════════
    Types
@@ -198,13 +199,6 @@ const BUCKET_CHIP: Record<ScoreBucket, string> = {
 /* ═══════════════════════════════════════════════════════════════════════
    Helpers
    ═══════════════════════════════════════════════════════════════════════ */
-
-const parseNum = (val: string): number => {
-  if (!val || val.trim() === '') return 0;
-  const cleaned = val.replace(/"/g, '').replace(/,/g, '').trim();
-  const n = parseFloat(cleaned);
-  return isNaN(n) ? 0 : n;
-};
 
 /* fmt & fmtFull → imported from ../formatters as fmtCompact & fmtCurrency */
 const fmt = fmtCompact;
@@ -526,98 +520,8 @@ function attributeCxpRow(record: CXPRecord, coverage?: CxpPaymentCoverage): Sour
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
-   CSV Parser — handles quoted fields, commas-in-numbers, \r\n
+   CSV Parser — moved to src/domain/cxpCsv.ts (parseCXP), imported above
    ═══════════════════════════════════════════════════════════════════════ */
-
-function parseCSVLine(line: string): string[] {
-  const result: string[] = [];
-  let cur = '';
-  let inQ = false;
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i];
-    if (c === '"') {
-      if (inQ && line[i + 1] === '"') { cur += '"'; i++; }
-      else inQ = !inQ;
-    } else if (c === ',' && !inQ) {
-      result.push(cur.trim());
-      cur = '';
-    } else {
-      cur += c;
-    }
-  }
-  result.push(cur.trim());
-  return result;
-}
-
-function parseCXP(text: string): CXPRecord[] {
-  // Normalize line endings
-  const raw = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-  const lines = raw.split('\n').filter(l => l.trim());
-  if (lines.length < 2) throw new Error('CSV vacío o sin datos');
-
-  const headers = parseCSVLine(lines[0]).map(h => h.toLowerCase().replace(/"/g, '').trim());
-  const colCount = headers.length;
-
-  const idx = (name: string): number => headers.indexOf(name.toLowerCase());
-
-  // Validate critical columns exist
-  const required = ['cia','nombre','importe_pendiente_pesos','por_vencer'];
-  const missing = required.filter(r => idx(r) < 0);
-  if (missing.length) throw new Error(`Columnas faltantes: ${missing.join(', ')}`);
-
-  const records: CXPRecord[] = [];
-  let skipped = 0;
-
-  for (let i = 1; i < lines.length; i++) {
-    const fields = parseCSVLine(lines[i]);
-    // Tolerate ±2 columns (some CSVs have trailing commas)
-    if (fields.length < colCount - 2) { skipped++; continue; }
-
-    const g = (name: string): string => {
-      const ci = idx(name);
-      return ci >= 0 && ci < fields.length ? fields[ci].replace(/"/g, '').trim() : '';
-    };
-    const n = (name: string): number => parseNum(g(name));
-
-    records.push({
-      // Misma normalización que los fetchers JDE ("150" → "00150"): sin ella,
-      // un CSV de una cía ya cargada de JDE no la REEMPLAZA (llave distinta)
-      // — coexisten ambas y la proyección la doble-cuenta.
-      cia: normalizeCia(g('cia')),
-      noProveedor: g('no_prov'),
-      nombre: g('nombre'),
-      noFactura: g('no_factura'),
-      fechaFactura: g('fecha_factura'),
-      fechaVence: g('fecha_vence'),
-      fechaProgramacionPago: g('fecha_programacion_pago'),
-      diasVencida: n('dias_vencida'),
-      importeBrutoPesos: n('importe_bruto_pesos'),
-      importePendientePesos: n('importe_pendiente_pesos'),
-      importeSubtotalPesos: n('importe_subtotal_pesos'),
-      importeImpuestosPesos: n('importe_impuestos_pesos'),
-      importeBrutoDolares: n('importe_bruto_dolares'),
-      importePendienteDolares: n('importe_pendiente_dolares'),
-      moneda: g('moneda'),
-      condPago: g('cond_pago'),
-      clasifica: g('clasifica'),
-      clasificacionProveedor: g('clasificacion_proveedor'),
-      edoPago: g('edo_pago'),
-      tipoCambio: n('tipo_cambio'),
-      porVencer: n('por_vencer'),
-      v1_30: n('v_1_30'),
-      v31_60: n('v_31_60'),
-      v61_90: n('v_61_90'),
-      v91_120: n('v_91_120'),
-      v121_150: n('v_121_150'),
-      v151_180: n('v_151_180'),
-      mas180: n('mas_180'),
-    });
-  }
-
-  if (records.length === 0) throw new Error(`No se encontraron registros válidos (${skipped} filas omitidas)`);
-  return records;
-}
-
 
 /* ═══════════════════════════════════════════════════════════════════════
    Custom Tooltip

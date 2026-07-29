@@ -2,12 +2,16 @@ import { describe, it, expect } from 'vitest';
 import {
   addMonths,
   monthsBetween,
+  buildBaseCashFlow,
   buildHistoricalMonths,
   buildFutureExpenses,
+  compareYearMonth,
+  lastDayOfMonth,
   projectFutureIncome,
   buildExpenseProjector,
   projectMonthlyExpense,
   filterCompleteHistorical,
+  toYearMonth,
 } from './cashFlowEngine';
 import type { CashFlowMonth } from '../types';
 import type {
@@ -24,6 +28,29 @@ describe('date helpers', () => {
     expect(monthsBetween('2026-01', '2026-06')).toBe(5);
     expect(monthsBetween('2026-06', '2026-01')).toBe(-5);
     expect(monthsBetween('2025-12', '2026-01')).toBe(1);
+  });
+
+  it('toYearMonth slices ISO dates (with or without time) and passes short strings through', () => {
+    expect(toYearMonth('2026-04-22')).toBe('2026-04');
+    expect(toYearMonth('2026-04-22T13:00:00Z')).toBe('2026-04');
+    expect(toYearMonth('')).toBe('');
+    expect(toYearMonth('2026')).toBe('2026'); // no valida — slice puro
+  });
+
+  it('compareYearMonth is a lexicographic comparator usable for sorting', () => {
+    expect(compareYearMonth('2025-12', '2026-01')).toBeLessThan(0);
+    expect(compareYearMonth('2026-01', '2026-01')).toBe(0);
+    expect(compareYearMonth('2026-02', '2026-01')).toBeGreaterThan(0);
+    const months = ['2026-03', '2025-11', '2026-01'];
+    expect([...months].sort(compareYearMonth)).toEqual(['2025-11', '2026-01', '2026-03']);
+  });
+
+  it('lastDayOfMonth handles month lengths, February and leap years', () => {
+    expect(lastDayOfMonth('2026-01')).toBe('2026-01-31');
+    expect(lastDayOfMonth('2026-04')).toBe('2026-04-30');
+    expect(lastDayOfMonth('2026-02')).toBe('2026-02-28'); // no bisiesto
+    expect(lastDayOfMonth('2024-02')).toBe('2024-02-29'); // bisiesto
+    expect(lastDayOfMonth('2026-12')).toBe('2026-12-31'); // frontera de año
   });
 });
 
@@ -121,6 +148,86 @@ describe('buildHistoricalMonths', () => {
     expect(months).toHaveLength(1);
     expect(months[0].income).toBe(250_000);
     expect(months[0].expense).toBe(0);
+  });
+
+  it('excluye movimientos de cuentas con flow neutro en el catálogo (p.ej. RESERVA)', () => {
+    // '70144758151' = SENDA SERVICIOS FINANCIEROS · RESERVA · flow "neutro"
+    // en src/assets/bankAccountsCatalog.json.
+    const statements: BankAccountStatement[] = [
+      {
+        cia: '00011', banco: 'BANAMEX', cuenta: '123', moneda: 'MXN',
+        fechaEstadoCuenta: '2026-01-31', saldoInicial: 0, saldoFinal: 0,
+        movimientos: [
+          { cia: '00011', banco: 'BANAMEX', cuenta: '123', moneda: 'MXN',
+            fechaOperacion: '2026-01-05', referencia: 'R1', concepto: 'PAGO CLIENTE',
+            tipoMovimiento: 'ABONO', importe: 1000 },
+        ],
+      },
+      {
+        cia: '00011', banco: 'BANAMEX', cuenta: '70144758151', moneda: 'MXN',
+        fechaEstadoCuenta: '2026-01-31', saldoInicial: 100, saldoFinal: 0,
+        movimientos: [
+          { cia: '00011', banco: 'BANAMEX', cuenta: '70144758151', moneda: 'MXN',
+            fechaOperacion: '2026-01-06', referencia: 'R2', concepto: 'DEPOSITO',
+            tipoMovimiento: 'ABONO', importe: 5000 },
+        ],
+      },
+    ];
+    const months = buildHistoricalMonths(statements);
+    expect(months).toHaveLength(1);
+    // El ABONO de la cuenta neutra NO cuenta como ingreso económico…
+    expect(months[0].income).toBe(1000);
+    expect(months[0].expense).toBe(0);
+    // …pero SÍ cuenta en la caja (el dinero existe en la cuenta del grupo).
+    expect(months[0].closingCash).toBe(0 + 1000 + 100 + 5000);
+  });
+
+  it('meses sin movimientos NO aparecen en la serie (hueco de mes) y la caja arrastra', () => {
+    const statements: BankAccountStatement[] = [{
+      cia: '00011', banco: 'BANAMEX', cuenta: '123', moneda: 'MXN',
+      fechaEstadoCuenta: '2026-03-31', saldoInicial: 50, saldoFinal: 0,
+      movimientos: [
+        { cia: '00011', banco: 'BANAMEX', cuenta: '123', moneda: 'MXN',
+          fechaOperacion: '2026-01-05', referencia: 'R1', concepto: 'PAGO CLIENTE',
+          tipoMovimiento: 'ABONO', importe: 100 },
+        // Febrero sin movimientos.
+        { cia: '00011', banco: 'BANAMEX', cuenta: '123', moneda: 'MXN',
+          fechaOperacion: '2026-03-10', referencia: 'R2', concepto: 'PAGO PROVEEDOR',
+          tipoMovimiento: 'CARGO', importe: 30 },
+      ],
+    }];
+    const months = buildHistoricalMonths(statements);
+    expect(months.map((m) => m.yearMonth)).toEqual(['2026-01', '2026-03']);
+    expect(months[0].closingCash).toBe(150);
+    expect(months[1]).toMatchObject({ income: 0, expense: 30, closingCash: 120 });
+  });
+
+  it('saldoInicial ausente se trata como 0 y movimientos sin fecha se ignoran', () => {
+    const statements: BankAccountStatement[] = [{
+      cia: '00011', banco: 'BANAMEX', cuenta: '123', moneda: 'MXN',
+      fechaEstadoCuenta: '2026-01-31', saldoInicial: undefined as unknown as number, saldoFinal: 0,
+      movimientos: [
+        { cia: '00011', banco: 'BANAMEX', cuenta: '123', moneda: 'MXN',
+          fechaOperacion: '', referencia: 'R0', concepto: 'SIN FECHA',
+          tipoMovimiento: 'ABONO', importe: 999_999 },
+        { cia: '00011', banco: 'BANAMEX', cuenta: '123', moneda: 'MXN',
+          fechaOperacion: '2026-01-05', referencia: 'R1', concepto: 'PAGO CLIENTE',
+          tipoMovimiento: 'ABONO', importe: 200 },
+      ],
+    }];
+    const months = buildHistoricalMonths(statements);
+    expect(months).toHaveLength(1);
+    expect(months[0].income).toBe(200);
+    expect(months[0].closingCash).toBe(200); // saldoInicial ?? 0
+  });
+
+  it('devuelve [] cuando hay statements pero ningún movimiento fechado', () => {
+    const statements: BankAccountStatement[] = [{
+      cia: '00011', banco: 'BANAMEX', cuenta: '123', moneda: 'MXN',
+      fechaEstadoCuenta: '2026-01-31', saldoInicial: 100, saldoFinal: 100,
+      movimientos: [],
+    }];
+    expect(buildHistoricalMonths(statements)).toEqual([]);
   });
 });
 
@@ -227,6 +334,129 @@ describe('filterCompleteHistorical', () => {
       { yearMonth: '2026-04', isHistorical: true, income: 0, expense: 0, closingCash: 0 },
     ];
     expect(filterCompleteHistorical(hist, '2026-04-01')).toEqual([]);
+  });
+});
+
+describe('buildFutureExpenses — fechas inválidas', () => {
+  const mkAged = (fechaProgramacionPago: string, importePendientePesos: number): AgedBalanceRecord => ({
+    cia: '00011', noProveedor: 'P1', nombre: 'Prov', noFactura: 'F1',
+    fechaFactura: '2026-03-01', fechaVence: '2026-04-01',
+    fechaProgramacionPago,
+    diasVencida: 0, importeBrutoPesos: importePendientePesos, importePendientePesos,
+    importeSubtotalPesos: 0, importeImpuestosPesos: 0,
+    importeBrutoDolares: 0, importePendienteDolares: 0,
+    moneda: 'MXN', condPago: '', clasifica: '', clasificacionProveedor: '',
+    edoPago: '', tipoCambio: 20, porVencer: importePendientePesos,
+    v1_30: 0, v31_60: 0, v61_90: 0, v91_120: 0, v121_150: 0, v151_180: 0, mas180: 0,
+  });
+
+  it('ignora facturas sin fecha de programación o con fecha corta no-ISO', () => {
+    const map = buildFutureExpenses([
+      mkAged('', 1000),
+      mkAged('n/a', 500), // slice(0,7)='n/a' → length !== 7 → ignorada
+      mkAged('2026-06-15', 250),
+    ]);
+    expect(map.size).toBe(1);
+    expect(map.get('2026-06')).toBe(250);
+  });
+});
+
+describe('buildBaseCashFlow (orquestación con datos provistos — sin fetch)', () => {
+  const mkStatements = (): BankAccountStatement[] => [{
+    cia: '00011', banco: 'BANAMEX', cuenta: '123', moneda: 'MXN',
+    fechaEstadoCuenta: '2026-02-28', saldoInicial: 0, saldoFinal: 0,
+    movimientos: [
+      { cia: '00011', banco: 'BANAMEX', cuenta: '123', moneda: 'MXN',
+        fechaOperacion: '2026-01-05', referencia: 'R1', concepto: 'PAGO CLIENTE',
+        tipoMovimiento: 'ABONO', importe: 100 },
+      { cia: '00011', banco: 'BANAMEX', cuenta: '123', moneda: 'MXN',
+        fechaOperacion: '2026-01-20', referencia: 'R2', concepto: 'PAGO PROVEEDOR',
+        tipoMovimiento: 'CARGO', importe: 40 },
+      { cia: '00011', banco: 'BANAMEX', cuenta: '123', moneda: 'MXN',
+        fechaOperacion: '2026-02-10', referencia: 'R3', concepto: 'PAGO CLIENTE',
+        tipoMovimiento: 'ABONO', importe: 200 },
+    ],
+  }];
+
+  const mkAged = (fechaProgramacionPago: string, importePendientePesos: number): AgedBalanceRecord => ({
+    cia: '00011', noProveedor: 'P1', nombre: 'Prov', noFactura: 'F9',
+    fechaFactura: '2026-03-01', fechaVence: '2026-04-01',
+    fechaProgramacionPago,
+    diasVencida: 0, importeBrutoPesos: importePendientePesos, importePendientePesos,
+    importeSubtotalPesos: 0, importeImpuestosPesos: 0,
+    importeBrutoDolares: 0, importePendienteDolares: 0,
+    moneda: 'MXN', condPago: '', clasifica: '', clasificacionProveedor: '',
+    edoPago: '', tipoCambio: 20, porVencer: importePendientePesos,
+    v1_30: 0, v31_60: 0, v61_90: 0, v91_120: 0, v121_150: 0, v151_180: 0, mas180: 0,
+  });
+
+  it('encadena históricos + proyección: promedio de ingresos, max(comprometido, baseline) en egresos', async () => {
+    const months = await buildBaseCashFlow({
+      companyCode: '00011', // ejercita el filtro por cia
+      historicalStart: '2026-01-01',
+      today: '2026-03-15',
+      horizonMonths: 2,
+      bankStatements: mkStatements(),
+      agedBalances: [mkAged('2026-05-10', 500)],
+    });
+
+    // Históricos: ene + feb. Futuros: abr + may (empiezan el mes SIGUIENTE a hoy).
+    expect(months.map((m) => m.yearMonth)).toEqual(['2026-01', '2026-02', '2026-04', '2026-05']);
+    expect(months[0]).toMatchObject({ isHistorical: true, income: 100, expense: 40 });
+    expect(months[1]).toMatchObject({ isHistorical: true, income: 200, expense: 0 });
+
+    // avgIncome = (100+200)/2 = 150; baseline egreso = (40+0)/2 = 20.
+    const abr = months[2];
+    expect(abr).toMatchObject({ yearMonth: '2026-04', isHistorical: false, income: 150, expense: 20 });
+    // runningCash: cierre histórico 260 → 260+150-20 = 390.
+    expect(abr.closingCash).toBeCloseTo(390, 2);
+
+    // Mayo: comprometido (500) > baseline (20) → gana el comprometido.
+    const may = months[3];
+    expect(may).toMatchObject({ yearMonth: '2026-05', income: 150, expense: 500 });
+    expect(may.closingCash).toBeCloseTo(40, 2);
+  });
+
+  it("companyCode 'all' sin agedBalances omite egresos comprometidos (no hay request válida)", async () => {
+    const months = await buildBaseCashFlow({
+      companyCode: 'all',
+      historicalStart: '2026-01-01',
+      today: '2026-03-15',
+      horizonMonths: 1,
+      bankStatements: mkStatements(),
+    });
+    expect(months.map((m) => m.yearMonth)).toEqual(['2026-01', '2026-02', '2026-04']);
+    // Sin comprometidos: el único egreso futuro es el baseline histórico.
+    expect(months[2].expense).toBeCloseTo(20, 2);
+  });
+
+  it('filtra por cia: statements de otra compañía no aportan histórico', async () => {
+    const months = await buildBaseCashFlow({
+      companyCode: '00099', // ninguna cuenta con esta cia
+      historicalStart: '2026-01-01',
+      today: '2026-03-15',
+      horizonMonths: 2,
+      bankStatements: mkStatements(),
+      agedBalances: [],
+    });
+    // Sin histórico: solo proyección plana en 0 desde el mes siguiente a hoy.
+    expect(months.map((m) => m.yearMonth)).toEqual(['2026-04', '2026-05']);
+    for (const m of months) {
+      expect(m).toMatchObject({ isHistorical: false, income: 0, expense: 0, closingCash: 0 });
+    }
+  });
+
+  it('sin statements ni aged: proyección vacía anclada al mes de hoy', async () => {
+    const months = await buildBaseCashFlow({
+      companyCode: 'all',
+      historicalStart: '2026-01-01',
+      today: '2026-06-30',
+      horizonMonths: 3,
+      bankStatements: [],
+      agedBalances: [],
+    });
+    expect(months.map((m) => m.yearMonth)).toEqual(['2026-07', '2026-08', '2026-09']);
+    expect(months.every((m) => !m.isHistorical && m.closingCash === 0)).toBe(true);
   });
 });
 

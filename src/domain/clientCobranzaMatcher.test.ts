@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { buildMatchSuggestions, suggestionToLink, AUTO_ACCEPT_THRESHOLD } from './clientCobranzaMatcher';
+import {
+  buildMatchSuggestions,
+  rankClientsForAccount,
+  suggestionToLink,
+  AUTO_ACCEPT_THRESHOLD,
+} from './clientCobranzaMatcher';
 import type { Client } from './types';
 import type { CobranzaRecord } from '../services/jdeTypes';
 
@@ -160,5 +165,115 @@ describe('clientCobranzaMatcher', () => {
     expect(userLink.matchedBy).toBe('user');
     expect(userLink.confidence).toBeUndefined();
     expect(userLink.tier).toBeUndefined();
+  });
+
+  it('returns empty buckets when either side is empty (early return)', () => {
+    const clients = [mkClient({ id: 'c1', name: 'CORNING' })];
+    const recs = [mkRecord({ noCliente: '100', nombreCliente: 'CORNING' })];
+    expect(buildMatchSuggestions([], recs)).toEqual({ autoAccepted: [], needsReview: [], orphanNoClientes: [] });
+    expect(buildMatchSuggestions(clients, [])).toEqual({ autoAccepted: [], needsReview: [], orphanNoClientes: [] });
+  });
+
+  it('an account with empty name and no RFC lands as orphan (nothing to score)', () => {
+    const clients = [mkClient({ id: 'c1', name: 'CORNING OPTICAL' })];
+    const recs = [mkRecord({ noCliente: '999', nombreCliente: '' })];
+    const out = buildMatchSuggestions(clients, recs);
+    expect(out.autoAccepted).toHaveLength(0);
+    expect(out.needsReview).toHaveLength(0);
+    expect(out.orphanNoClientes).toHaveLength(1);
+    expect(out.orphanNoClientes[0].bestGuess).toBeUndefined();
+  });
+
+  it('a stronger later candidate replaces an earlier weaker best (confidence DESC)', () => {
+    const clients = [
+      // Débil: solo comparte tokens parciales con la cuenta.
+      mkClient({ id: 'weak', name: 'ACEROS INDUSTRIALES MONTERREY PLANTA' }),
+      // Fuerte: RFC exacto.
+      mkClient({ id: 'strong', name: 'Nombre Totalmente Distinto', rfc: 'AIM010101AAA' }),
+    ];
+    const recs = [mkRecord({ noCliente: '100', nombreCliente: 'ACEROS INDUSTRIALES MONTERREY NORTE', rfc: 'AIM010101AAA' })];
+    const out = buildMatchSuggestions(clients, recs);
+    expect(out.autoAccepted).toHaveLength(1);
+    expect(out.autoAccepted[0].clientId).toBe('strong');
+    expect(out.autoAccepted[0].tier).toBe('rfc-exact');
+  });
+
+  it('backfills the aggregate RFC from a later invoice of the same account', () => {
+    const clients = [mkClient({ id: 'c1', name: 'ZZZ Sin Parecido', rfc: 'COR123ABC78' })];
+    const recs = [
+      // Primera factura sin RFC, segunda con RFC — el agregado debe adoptarlo.
+      mkRecord({ noCliente: '100', nombreCliente: 'OTRO NOMBRE QUE NO EMPATA', noFactura: 'F1' }),
+      mkRecord({ noCliente: '100', nombreCliente: 'OTRO NOMBRE QUE NO EMPATA', rfc: 'COR123ABC78', noFactura: 'F2' }),
+    ];
+    const out = buildMatchSuggestions(clients, recs);
+    expect(out.autoAccepted).toHaveLength(1);
+    expect(out.autoAccepted[0].tier).toBe('rfc-exact');
+    expect(out.autoAccepted[0].invoiceCount).toBe(2);
+    expect(out.autoAccepted[0].rfc).toBe('COR123ABC78');
+  });
+});
+
+describe('rankClientsForAccount', () => {
+  const account = (nombreCliente: string, over: Partial<{ rfc: string; invoiceCount: number }> = {}) => ({
+    cia: '00010',
+    noCliente: '500',
+    nombreCliente,
+    ...over,
+  });
+
+  it('returns [] when the account name normalizes to empty', () => {
+    const clients = [mkClient({ id: 'c1', name: 'CORNING' })];
+    expect(rankClientsForAccount(account(''), clients)).toEqual([]);
+    expect(rankClientsForAccount(account('###'), clients)).toEqual([]);
+  });
+
+  it('scores name-exact at 1 (normalized comparison)', () => {
+    const clients = [mkClient({ id: 'c1', name: 'corning  óptical, s.a.' })];
+    const out = rankClientsForAccount(account('CORNING OPTICAL SA'), clients);
+    expect(out).toHaveLength(1);
+    expect(out[0].tier).toBe('name-exact');
+    expect(out[0].confidence).toBe(1);
+    expect(out[0].clientId).toBe('c1');
+  });
+
+  it('scores long-substring containment at 0.9', () => {
+    const clients = [mkClient({ id: 'c1', name: 'CORNING OPTICAL COMMUNICATIONS' })];
+    const out = rankClientsForAccount(account('CORNING OPTICAL COMMUNICATIONS QRO SA DE CV'), clients);
+    expect(out).toHaveLength(1);
+    expect(out[0].tier).toBe('substring');
+    expect(out[0].confidence).toBe(0.9);
+  });
+
+  it('scores token-overlap with a partial-substring bonus, below the substring tier', () => {
+    const clients = [mkClient({ id: 'c1', name: 'FERROCARRIL MEXICANO NORTE' })];
+    const out = rankClientsForAccount(account('FERROCARRIL MEXICANO SUR'), clients);
+    expect(out).toHaveLength(1);
+    expect(out[0].tier).toBe('token-overlap');
+    expect(out[0].confidence).toBeGreaterThan(0);
+    expect(out[0].confidence).toBeLessThan(0.9);
+  });
+
+  it('excludes zero-score clients and honors the limit, sorted by score desc', () => {
+    const clients = [
+      mkClient({ id: 'nada', name: 'PANIFICADORA DEL BAJIO' }),
+      mkClient({ id: 'token', name: 'CORNING DISPLAY MONTERREY' }),
+      mkClient({ id: 'sub', name: 'CORNING OPTICAL COMMUNICATIONS' }),
+      mkClient({ id: 'exact', name: 'CORNING OPTICAL COMMUNICATIONS QRO' }),
+    ];
+    const out = rankClientsForAccount(account('CORNING OPTICAL COMMUNICATIONS QRO'), clients, 2);
+    expect(out).toHaveLength(2);
+    expect(out[0].clientId).toBe('exact');
+    expect(out[0].confidence).toBe(1);
+    expect(out[1].clientId).toBe('sub');
+    expect(out.map((s) => s.clientId)).not.toContain('nada');
+  });
+
+  it('threads account metadata through and defaults invoiceCount to 0', () => {
+    const clients = [mkClient({ id: 'c1', name: 'CORNING OPTICAL' })];
+    const withCount = rankClientsForAccount(account('CORNING OPTICAL', { rfc: 'XX', invoiceCount: 7 }), clients);
+    expect(withCount[0]).toMatchObject({ cia: '00010', noCliente: '500', rfc: 'XX', invoiceCount: 7 });
+
+    const withoutCount = rankClientsForAccount(account('CORNING OPTICAL'), clients);
+    expect(withoutCount[0].invoiceCount).toBe(0);
   });
 });
