@@ -361,6 +361,14 @@ const BANKS_PARTIAL_REVALIDATE_DAYS = 14;
 // Ventana de revalidación de días parciales del Auxiliar Contable (pólizas
 // posteadas con atraso). Mismo razonamiento que bancos.
 const AUX_PARTIAL_REVALIDATE_DAYS = 14;
+// El backfill de historia trabaja con slots de dataset (`DatasetKey`), pero los
+// huecos por día/mes/chunk de `jde.ts` se registran con el namespace del cache.
+// Alinear los dos nombres mantiene `__midas__.dataHealth.gaps()` filtrable por
+// un solo dataset (mismo criterio que los gaps por cía de los boot loaders).
+const BACKFILL_GAP_DATASET: Record<string, string> = {
+  pagos: 'pagoproveedor',
+  auxiliar: 'auxiliarcontable',
+};
 // Whitelist explícito de cías que SÍ generan órdenes de compra relevantes.
 // El resto del catálogo JDE (subsidiarias dormidas, holdings, etc.) devuelve
 // OCs vacías o irrelevantes — pedirlas era ~17 cías × 13 meses ≈ 220 requests
@@ -4881,12 +4889,18 @@ export default function App() {
             // y el año se pintaba vacío el resto de la sesión.
             // eslint-disable-next-line no-console
             console.warn(`[backfill] ${ds} ${from}..${to} incompleto — rollback para permitir reintento`);
+            // El rollback habilita el reintento, pero para el usuario el año
+            // navegado quedó pintado como $0 legítimo y la pill "Cargando…" ya
+            // desapareció. Registrarlo lo hace visible en "Salud de datos"
+            // (aditivo: no cambia el rollback ni el gate de reintento).
+            reportDataGap(BACKFILL_GAP_DATASET[ds] ?? ds, 'window-failed', `backfill ${from}..${to}`);
             backfilledFloorRef.current[ds] = coveredFloor;
             backfillFailedFloorRef.current[ds] = requestedFloor;
           }
         } catch (err) {
           // eslint-disable-next-line no-console
           console.warn(`[backfill] ${ds} ${from}..${to} falló`, err);
+          reportDataGap(BACKFILL_GAP_DATASET[ds] ?? ds, 'window-failed', `backfill ${from}..${to}`);
           backfilledFloorRef.current[ds] = coveredFloor; // rollback → un re-intento puede volver
           backfillFailedFloorRef.current[ds] = requestedFloor;
         } finally {
