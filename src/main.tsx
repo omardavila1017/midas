@@ -7,6 +7,7 @@ import AuthGate from './components/Login'
 import { runStorageHealthGuard } from './services/storageHealthGuard'
 import { installRuntimeGuardian } from './services/runtimeGuardian'
 import { installNominaDebug } from './modules/payroll/services/nominaDebug'
+import { installBuildInfo } from './config/buildInfo'
 
 // CRÍTICO: corre antes de cualquier import de persistence o hidratación.
 // Si detecta storage envenenado (corrupto, sobre-tamaño, o crash previo),
@@ -24,6 +25,11 @@ installRuntimeGuardian()
 // (dump/byMonth) para inspeccionar heavy-store vs nominaLoadedKeys desde la
 // consola. No dispara fetches ni toca estado.
 installNominaDebug()
+
+// `window.__midas__.build` = { appVersion, buildId }. El buildId es el hash del
+// código desplegado: permite confirmar en un segundo QUÉ código está corriendo
+// el navegador antes de concluir que un fix no funcionó.
+installBuildInfo()
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

@@ -35,15 +35,17 @@ describe('financialProjectionPersistentCache', () => {
 
   // Lo persistido son SALIDAS del motor con una llave que sólo describe los
   // INPUTS: un fix del motor (prorrateo Citi, PR #239) no movía la llave y la
-  // entrada pre-fix seguía sirviéndose tras el deploy. La versión de la app
-  // entra en la llave para que cada deploy invalide las salidas viejas.
-  it('namespaces the keys by app version so a deploy invalidates engine output', async () => {
+  // entrada pre-fix seguía sirviéndose tras el deploy. La identidad del motor
+  // (hash del código, `BUILD_ID`) entra en la llave para que un cambio de
+  // código invalide las salidas viejas. NO se usa la versión de app: el deploy
+  // real recibe los archivos sin `.git` y esa versión queda congelada.
+  it('namespaces the keys by build id so a code change invalidates engine output', async () => {
     const input = projectionInput({ startingBalance: 10_000 });
 
     const keys: { source: string; run: string; forecast: string }[] = [];
-    for (const version of ['1.0.100', '1.0.101']) {
+    for (const buildId of ['a1b2c3d4e5f6', 'f6e5d4c3b2a1']) {
       vi.resetModules();
-      vi.doMock('../../../config/appVersion', () => ({ APP_VERSION: version }));
+      vi.doMock('../../../config/buildId', () => ({ BUILD_ID: buildId }));
       const mod = await import('./financialProjectionPersistentCache');
       keys.push({
         source: mod.projectionSourcePersistentCacheKey(input),
@@ -55,7 +57,29 @@ describe('financialProjectionPersistentCache', () => {
     expect(keys[0].source).not.toBe(keys[1].source);
     expect(keys[0].run).not.toBe(keys[1].run);
     expect(keys[0].forecast).not.toBe(keys[1].forecast);
-    vi.doUnmock('../../../config/appVersion');
+    vi.doUnmock('../../../config/buildId');
+    vi.resetModules();
+  });
+
+  // La llave ya impide servir una entrada de otro motor; esto fija que además
+  // se DESECHE el índice, para que no se queden pegadas en disco para siempre.
+  it('descarta el índice guardado por un motor anterior', async () => {
+    const input = projectionInput({ startingBalance: 10_000 });
+
+    vi.resetModules();
+    vi.doMock('../../../config/buildId', () => ({ BUILD_ID: 'motor-viejo' }));
+    const viejo = await import('./financialProjectionPersistentCache');
+    viejo.saveProjectionSourceToPersistentCache(input, projectionSource('motor-viejo'));
+    await Promise.resolve();
+    expect(localStorage.getItem('midas.financialProjection.cache.index.v1')).toContain('projection-source:');
+
+    vi.resetModules();
+    vi.doMock('../../../config/buildId', () => ({ BUILD_ID: 'motor-nuevo' }));
+    const nuevo = await import('./financialProjectionPersistentCache');
+    await expect(nuevo.loadProjectionSourceFromPersistentCache(input)).resolves.toBeNull();
+    expect(localStorage.getItem('midas.financialProjection.cache.index.v1')).not.toContain('projection-source:');
+
+    vi.doUnmock('../../../config/buildId');
     vi.resetModules();
   });
 });

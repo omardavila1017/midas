@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react'
 import path from 'path'
 import { visualizer } from 'rollup-plugin-visualizer'
 import { resolveVersion } from './scripts/resolveVersion.mjs'
+import { resolveBuildId } from './scripts/resolveBuildId.mjs'
 
 function lucideIconPath(iconName: string): string {
   const fileName = iconName
@@ -139,8 +140,15 @@ export default defineConfig(({ mode }) => {
   return {
     // Versión automática del login (MAJOR.MINOR.<#PRs> desde git). Ver
     // scripts/resolveVersion.mjs. En tests (vitest) no se define → 'dev'.
+    //
+    // __BUILD_ID__ es OTRA cosa y NO se puede sustituir por la anterior: es el
+    // hash del código que entra al bundle, y es lo que invalida las SALIDAS del
+    // motor guardadas en el cache persistente de proyección. La versión de git
+    // no sirve para eso — el deploy recibe los archivos por rsync sin `.git`.
+    // Ver scripts/resolveBuildId.mjs.
     define: {
       __APP_VERSION__: JSON.stringify(resolveVersion()),
+      __BUILD_ID__: JSON.stringify(resolveBuildId()),
     },
     plugins: [
       react({

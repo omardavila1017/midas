@@ -4,7 +4,7 @@ import type {
 } from './financialProjectionService';
 import type { ScenarioForecastRun } from '../../financial-planning/services/scenarioForecastRun';
 import { todayISO } from '../../../formatters';
-import { APP_VERSION } from '../../../config/appVersion';
+import { BUILD_ID } from '../../../config/buildId';
 
 const DB_NAME = 'midas-financial-projection-cache';
 const DB_VERSION = 1;
@@ -15,17 +15,25 @@ const INDEX_KEY = 'midas.financialProjection.cache.index.v1';
 // v3: la clave incorpora la versión de la app (ver ENGINE_VERSION).
 // v4: "días en déficit" se mide sobre la curva diaria (antes por cierre de
 // bucket, que a mensual reportaba 0) — cambia `summary` sin cambiar inputs.
-const SCHEMA_VERSION = 4;
+// v5: la identidad del motor pasó de la versión de app (inerte en el deploy
+// real) al hash del código, y el store se PURGA al cambiar de motor. Con esto
+// un cambio de motor ya NO necesita un bump manual de esta constante — v4 fue
+// el último que hizo falta.
+const SCHEMA_VERSION = 5;
 // Los valores persistidos son SALIDAS DEL MOTOR (movimientos ya prorrateados,
-// corridas ya calculadas), pero la clave sólo describía los INPUTS. Un fix del
+// corridas ya calculadas), pero la clave sólo describe los INPUTS. Un fix del
 // motor que cambia el número sin cambiar el dato de origen (p.ej. el
-// denominador del prorrateo Citi, PR #239) dejaba la entrada pre-fix vigente:
-// el navegador computaba bien al arrancar y volvía al número viejo en cuanto
-// esta cache resolvía. Por eso la versión de la app entra en la llave — cada
-// deploy invalida las salidas del motor anterior. `clearCacheStorageOnEntry`
-// borra esta BD, pero `deleteDatabase` se bloquea en silencio si otra pestaña
-// la tiene abierta, así que no basta.
-const ENGINE_VERSION = `${SCHEMA_VERSION}:${APP_VERSION}`;
+// denominador del prorrateo Citi, PR #239) deja la entrada pre-fix vigente: el
+// navegador computa bien al arrancar y vuelve al número viejo en cuanto esta
+// cache resuelve.
+//
+// La identidad del motor es `BUILD_ID` = hash del código fuente del bundle.
+// NO uses `APP_VERSION` aquí: se deriva del conteo de merges de git y el deploy
+// real (`omardavila1017/midas`, rama `qa`) recibe los archivos por
+// `rsync --exclude='.git'`, así que allá ese conteo es de otro repo y queda
+// congelado — versionar por app version fue inerte en producción (PR #240).
+// `BUILD_ID` cambia siempre que cambia el código y nunca depende de git.
+const ENGINE_VERSION = `${SCHEMA_VERSION}:${BUILD_ID}`;
 const SOURCE_LIMIT = 12;
 const SCENARIO_LIMIT = 24;
 // El forecast probabilístico (Holt-Winters + Monte Carlo del Escenario
@@ -43,6 +51,8 @@ interface CacheIndexEntry {
 
 interface CacheIndex {
   schemaVersion: number;
+  /** Identidad del motor que produjo estas entradas (ver ENGINE_VERSION). */
+  engineVersion?: string;
   entries: CacheIndexEntry[];
 }
 
@@ -226,10 +236,13 @@ export function saveProbabilisticForecastToPersistentCache<T>(
 export function __clearFinancialProjectionPersistentCacheForTests(): void {
   sessionCache.clear();
   pendingWrites.clear();
-  writeIndex({ schemaVersion: SCHEMA_VERSION, entries: [] });
+  stalePurgeDone = true;
+  stalePurge = null;
+  writeIndex({ schemaVersion: SCHEMA_VERSION, engineVersion: ENGINE_VERSION, entries: [] });
 }
 
 async function loadEntry<T>(key: string, kind: CacheKind): Promise<T | null> {
+  purgeStaleEngineEntriesOnce();
   const index = readIndex();
   if (!index.entries.some((entry) => entry.key === key && entry.kind === kind)) return null;
   const sessionHit = sessionCacheGet(key, kind);
@@ -262,6 +275,7 @@ async function loadEntry<T>(key: string, kind: CacheKind): Promise<T | null> {
 }
 
 async function saveEntry<T>(key: string, kind: CacheKind, value: T): Promise<void> {
+  purgeStaleEngineEntriesOnce();
   const savedAt = new Date().toISOString();
   sessionCacheSet(key, kind, value);
   rememberIndexEntry({ key, kind, savedAt });
@@ -283,6 +297,7 @@ async function writeEntryToIdb<T>(
   savedAt: string,
   value: T,
 ): Promise<void> {
+  if (stalePurge) await stalePurge;
   const db = await openDb();
   if (!db) return;
   await new Promise<void>((resolve) => {
@@ -355,17 +370,62 @@ function openDb(): Promise<IDBDatabase | null> {
 }
 
 function readIndex(): CacheIndex {
+  const empty: CacheIndex = { schemaVersion: SCHEMA_VERSION, engineVersion: ENGINE_VERSION, entries: [] };
   try {
     const raw = localStorage.getItem(INDEX_KEY);
-    if (!raw) return { schemaVersion: SCHEMA_VERSION, entries: [] };
+    if (!raw) return empty;
     const parsed = JSON.parse(raw) as CacheIndex;
-    if (parsed?.schemaVersion !== SCHEMA_VERSION || !Array.isArray(parsed.entries)) {
-      return { schemaVersion: SCHEMA_VERSION, entries: [] };
-    }
+    if (parsed?.schemaVersion !== SCHEMA_VERSION || !Array.isArray(parsed.entries)) return empty;
+    // Motor distinto → sus salidas no valen. La llave ya lo garantiza (un hash
+    // distinto nunca empata), pero además así no se quedan pegadas en disco.
+    if (parsed.engineVersion !== ENGINE_VERSION) return empty;
     return parsed;
   } catch {
-    return { schemaVersion: SCHEMA_VERSION, entries: [] };
+    return empty;
   }
+}
+
+/**
+ * Borra del disco lo que produjo un motor anterior. Corre UNA vez por sesión,
+ * al primer uso de la cache. Es limpieza (la llave ya impide servirlas), pero
+ * evita que las entradas envenenadas ocupen IDB para siempre y deja el estado
+ * observable: tras un deploy, el store arranca vacío.
+ */
+let stalePurgeDone = false;
+let stalePurge: Promise<void> | null = null;
+function purgeStaleEngineEntriesOnce(): void {
+  if (stalePurgeDone) return;
+  stalePurgeDone = true;
+  let staleFound = false;
+  try {
+    const raw = localStorage.getItem(INDEX_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw) as CacheIndex;
+    staleFound = parsed?.engineVersion !== ENGINE_VERSION || parsed?.schemaVersion !== SCHEMA_VERSION;
+  } catch {
+    staleFound = true;
+  }
+  if (!staleFound) return;
+  writeIndex({ schemaVersion: SCHEMA_VERSION, engineVersion: ENGINE_VERSION, entries: [] });
+  // Los writes de esta sesión esperan al borrado: si el `clear` corriera
+  // después del primer `put`, se llevaría la entrada recién computada.
+  stalePurge = clearIdbStore();
+}
+
+async function clearIdbStore(): Promise<void> {
+  const db = await openDb();
+  if (!db) return;
+  await new Promise<void>((resolve) => {
+    try {
+      const tx = db.transaction(STORE_NAME, 'readwrite');
+      tx.objectStore(STORE_NAME).clear();
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+      tx.onabort = () => resolve();
+    } catch {
+      resolve();
+    }
+  });
 }
 
 function writeIndex(index: CacheIndex): void {
@@ -382,7 +442,7 @@ function rememberIndexEntry(entry: CacheIndexEntry): void {
   const sources = entries.filter((item) => item.kind === 'projection-source').slice(0, SOURCE_LIMIT);
   const runs = entries.filter((item) => item.kind === 'scenario-run').slice(0, SCENARIO_LIMIT);
   const forecasts = entries.filter((item) => item.kind === 'probabilistic-forecast').slice(0, PROBABILISTIC_LIMIT);
-  writeIndex({ schemaVersion: SCHEMA_VERSION, entries: [...sources, ...runs, ...forecasts] });
+  writeIndex({ schemaVersion: SCHEMA_VERSION, engineVersion: ENGINE_VERSION, entries: [...sources, ...runs, ...forecasts] });
 }
 
 function fingerprintArray<T>(items: readonly T[], pick: (item: T) => string): string {

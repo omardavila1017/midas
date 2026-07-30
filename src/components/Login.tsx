@@ -21,6 +21,7 @@ import {
   setCurrentAuthSession,
 } from '../contexts/authSession';
 import { APP_VERSION } from '../config/appVersion';
+import { BUILD_ID } from '../config/buildId';
 
 const sendaLogoUrl = `${import.meta.env.BASE_URL}logos/senda-corporativo.svg`;
 
@@ -120,9 +121,13 @@ function LoginShell({ children }: { children: ReactNode }) {
         {children}
         <p
           className="mt-6 text-center text-[10px] font-medium uppercase tracking-[0.12em] text-[var(--gray-400)]"
-          title="Versión automática (MAJOR.MINOR.#PRs)"
+          title={`Versión automática (MAJOR.MINOR.#PRs) · build ${BUILD_ID}`}
         >
-          Midas v{APP_VERSION}
+          {/* El build id hace VERIFICABLE que un deploy llegó. La versión de
+              git se congela en el deploy real (llega por rsync sin `.git`), así
+              que sin esto no se distingue "el fix no sirvió" de "el fix no está
+              desplegado" — que fue justo la confusión con los PRs #239/#240. */}
+          Midas v{APP_VERSION} · {BUILD_ID.slice(0, 7)}
         </p>
       </div>
     </div>

@@ -40,4 +40,6 @@ interface ImportMeta {
 declare global {
   /** Versión de la app inyectada en build desde git (MAJOR.MINOR.<#PRs>). */
   const __APP_VERSION__: string;
+  /** Hash del código fuente que entró al bundle. Ver scripts/resolveBuildId.mjs. */
+  const __BUILD_ID__: string;
 }

@@ -144,6 +144,53 @@ function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
 }
 
 /**
+ * Tolerancia de la atribución 1:1 depósito ↔ cobranza, en pesos. Al centavo a
+ * propósito: un depósito que ES el pago de un cliente coincide exacto.
+ * Aflojarla inventaría atribuciones — en lógica de dinero preferimos no
+ * atribuir y caer al reparto por peso.
+ */
+const CITI_DEPOSIT_MATCH_TOLERANCE = 0.01;
+
+/**
+ * Piso de `pool / cobranza sin atribuir` para repartir el remanente por peso.
+ *
+ * Las dos poblaciones NO son la misma: hay cobranza del mes sin pierna bancaria
+ * en la concentradora (compensaciones, depósito en otro banco, cruce fechado en
+ * otro mes, cobro que aún no cae). Cuando eso pasa el denominador es mucho
+ * mayor que el pool y el reparto proporcional le devuelve a CADA cliente una
+ * fracción arbitraria de lo suyo — el defecto reportado con 3M en 2026-02:
+ * $221,201.53 salieron como $220.41, factor 1/1000, y el factor cambia mes a
+ * mes (por eso el error era errático). Por debajo de este piso NO se reparte:
+ * el depósito se conserva como fila sin desglosar, que es dato incompleto pero
+ * no dato falso.
+ */
+const CITI_MIN_PRORRATEO_RATIO = 0.5;
+
+/** Contraparte de la fila que absorbe el excedente no atribuible del depósito. */
+const CITI_UNIDENTIFIED_NAME = 'Cobranza Citi por identificar';
+
+/** Cómo se resolvió un (cía, mes) del prorrateo. Sólo diagnóstico. */
+type CitiAttributionMode = 'exacto' | 'remanente-cubierto' | 'prorrateo' | 'sin-desglosar';
+
+interface CitiAttributionDiagnostic {
+  cia: string;
+  ym: string;
+  /** Σ depósitos sin cruzar de la concentradora (el pool). */
+  depositTotal: number;
+  /** Σ atribuido 1:1 por importe exacto. */
+  matchedByAmount: number;
+  matchedDeposits: number;
+  /** Pool que quedó tras (A). */
+  leftoverPool: number;
+  /** Cobranza sin atribuir que quedó tras (A). */
+  leftoverExpected: number;
+  /** `leftoverPool / leftoverExpected` — 1 = poblaciones equivalentes. */
+  ratio: number | null;
+  mode: CitiAttributionMode;
+  clients: number;
+}
+
+/**
  * Atribución por cliente de los depósitos reales a las concentradoras Citi.
  *
  * Un depósito a la concentradora "CONCENTRADORA CLIENTES CITI" es UN
@@ -152,23 +199,29 @@ function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
  * 1010-1020, sin la línea CXC), así que no se puede amarrar 1:1 a un cliente.
  * El detalle por cliente SÍ vive en la cobranza JDE (`fechaCobro`, `noCliente`).
  *
- * Aquí prorrateamos: por cada (cía, mes), repartimos el TOTAL real depositado a
- * las concentradoras `clientes_citi` que NO cruzó a factura, entre los clientes
- * según su peso en la cobranza del mes que TAMPOCO quedó atribuida por cruce.
- * El total mensual del banco se conserva EXACTO (Σ pesos = 1) — es la verdad
- * del efectivo; solo cambia la atribución por cliente. La cobranza se usa como
- * PESO (ratio), nunca como monto, así que no hay doble conteo.
+ * La atribución va en TRES pasos, del más exacto al más aproximado. El total
+ * mensual del banco se conserva EXACTO en todos ellos — es la verdad del
+ * efectivo; sólo cambia a quién se le atribuye. La cobranza se usa como
+ * IDENTIDAD o como PESO, nunca como monto, así que no hay doble conteo.
  *
- * El denominador es la clave: sólo cobranza SIN atribuir. El pool a repartir ya
- * excluye los ABONOs cruzados (quedaron como AR_COLLECTION), así que un
- * denominador con la cobranza completa del mes mezcla dos universos y diluye a
- * todo cliente no cruzado por `pool / cobranzaTotal`. Si un (cía, mes) no tiene
- * cobranza sin atribuir, el depósito amontonado se conserva tal cual (fallback
- * — la fila concentradora sigue ahí; preferible a inventar una atribución).
+ *   A) 1:1 por IMPORTE (exacto). Un depósito cuyo importe coincide al centavo
+ *      con la cobranza sin atribuir de UN solo cliente ES el pago de ese
+ *      cliente. Se le acredita completo, con su propia fecha. No depende del
+ *      folio ni del recibo, así que sobrevive a los defectos de cruce (p.ej.
+ *      el prefijo de 10 dígitos de `No_Recibo`) — es el paso que hace que el
+ *      caso 3M salga exacto pase lo que pase aguas arriba.
+ *   B) Remanente con caja suficiente (`pool >= cobranza sin atribuir`): cada
+ *      cliente recibe EXACTAMENTE lo suyo y el excedente del depósito queda en
+ *      una sola fila "por identificar". Nunca se infla a un cliente por encima
+ *      de lo que realmente cobró.
+ *   C) Remanente con caja insuficiente: reparto proporcional por peso. Sólo se
+ *      aplica si las dos poblaciones se corresponden razonablemente
+ *      (`pool / cobranza >= CITI_MIN_PRORRATEO_RATIO`); si no, NO se reparte y
+ *      el depósito se queda como fila sin desglosar (ver la constante).
  *
- * Fecha de las líneas sintéticas: la del depósito más grande del mes (mejor
- * proxy de cuándo entró el grueso del efectivo). Aproximación aceptada para el
- * desglose por cliente; el reparto intra-mes diario es aproximado.
+ * Fecha de las líneas sintéticas: la del propio depósito en (A); la del
+ * depósito más grande del mes en (B)/(C) — mejor proxy de cuándo entró el
+ * grueso del efectivo. El reparto intra-mes diario es aproximado.
  */
 function prorateCitiConcentradoraByClient(
   movements: FinancialMovement[],
@@ -191,8 +244,13 @@ function prorateCitiConcentradoraByClient(
   const targets = movements.filter(isTarget);
   if (targets.length === 0) return movements;
 
-  // 1) Total real depositado + fecha representativa por (cía, mes).
-  interface Group { cia: string; ym: string; total: number; repDate: string; repAmount: number; }
+  // 1) Depósitos individuales + total + fecha representativa por (cía, mes).
+  //
+  // Los depósitos se conservan UNO POR UNO (antes sólo se acumulaba el total):
+  // el importe de un depósito es la señal que permite acreditarlo completo a su
+  // cliente en el paso (A) en vez de disolverlo en un promedio ponderado.
+  interface Deposit { movement: FinancialMovement; amount: number; date: string; }
+  interface Group { cia: string; ym: string; total: number; repDate: string; repAmount: number; deposits: Deposit[]; }
   const groups = new Map<string, Group>();
   for (const movement of targets) {
     const date = movement.actualDate ?? movement.projectedDate;
@@ -203,6 +261,7 @@ function prorateCitiConcentradoraByClient(
     const group = groups.get(key);
     if (group) {
       group.total += amount;
+      group.deposits.push({ movement, amount, date });
       if (amount > group.repAmount) { group.repAmount = amount; group.repDate = date; }
     } else {
       // La cía del grupo se guarda NORMALIZADA, igual que la llave del join:
@@ -210,7 +269,14 @@ function prorateCitiConcentradoraByClient(
       // valor sin padding ahí las separaría del resto de la cía (el filtro por
       // `companyId` de las propuestas —financialProjectionEngine— compara por
       // igualdad exacta). Normalizar sólo la llave dejaba el blindaje a medias.
-      groups.set(key, { cia: normalizeCia(movement.companyId ?? ''), ym: date.slice(0, 7), total: amount, repDate: date, repAmount: amount });
+      groups.set(key, {
+        cia: normalizeCia(movement.companyId ?? ''),
+        ym: date.slice(0, 7),
+        total: amount,
+        repDate: date,
+        repAmount: amount,
+        deposits: [{ movement, amount, date }],
+      });
     }
   }
 
@@ -265,75 +331,226 @@ function prorateCitiConcentradoraByClient(
     else clientWeights.set(display.id, { name: display.name ?? 'Cliente', amount });
   }
 
-  // 4) Descontar del peso lo ya atribuido por cruce y recalcular el total.
+  // 4) Descontar de la cobranza esperada lo ya atribuido por cruce directo.
   //
   // Se resta por cliente (no se excluye al cliente entero) para que la
   // cobertura PARCIAL quede bien: un cliente con 3 de 10 facturas cruzadas
-  // conserva como peso el remanente sin atribuir. Totalmente cruzado → peso 0
-  // (no recibe doble); sin cruzar → peso completo.
-  const cobranzaTotalByGroup = new Map<string, number>();
+  // conserva como pendiente el remanente sin atribuir. Totalmente cruzado → 0
+  // (no recibe doble); sin cruzar → su cobranza completa.
   for (const [key, clientWeights] of weightsByGroup) {
     const attributed = attributedByGroup.get(key);
-    let total = 0;
     for (const [clientId, info] of clientWeights) {
       const already = attributed?.get(clientId) ?? 0;
       info.amount = Math.max(0, info.amount - already);
-      if (info.amount > 0) total += info.amount;
-      else clientWeights.delete(clientId);
+      if (!(info.amount > 0)) clientWeights.delete(clientId);
     }
-    cobranzaTotalByGroup.set(key, total);
   }
 
-  // 5) Emitir líneas por cliente y marcar los grupos prorrateados.
-  const proratedGroups = new Set<string>();
+  // 5) Emitir líneas por cliente en tres pasos (ver el encabezado). `dropIds`
+  //    acumula SÓLO los depósitos efectivamente atribuidos: lo que no se
+  //    atribuye se conserva tal cual, así el total bancario nunca cambia.
+  const dropIds = new Set<string>();
   const synthetic: FinancialMovement[] = [];
+  const diagnostics: CitiAttributionDiagnostic[] = [];
+
+  const citiLine = (args: {
+    id: string; cia: string; date: string;
+    clientId?: string; name: string; amount: number;
+    concept: string; rule: string; comment: string;
+  }): FinancialMovement => ({
+    id: args.id,
+    sourceSystem: 'BANK',
+    type: 'INFLOW',
+    category: 'AR_COLLECTION',
+    subcategory: INCOME_SUBCAT_CITI,
+    companyId: args.cia,
+    counterpartyId: args.clientId,
+    counterpartyName: args.name,
+    counterpartyType: args.clientId ? 'CUSTOMER' : 'BANK',
+    concept: args.concept,
+    currency: 'MXN',
+    originalAmount: args.amount,
+    baseAmount: args.amount,
+    projectedAmount: args.amount,
+    actualDate: args.date,
+    projectedDate: args.date,
+    confidenceScore: 100,
+    confidenceBand: calculateConfidenceBand(100),
+    forecastMethod: 'RULE',
+    ruleApplied: args.rule,
+    status: 'REAL',
+    lockState: 'LOCKED',
+    comments: [args.comment],
+    createdAt: `${args.date}T00:00:00.000Z`,
+    updatedAt: `${args.date}T00:00:00.000Z`,
+  });
+
   for (const [key, group] of groups) {
     const clientWeights = weightsByGroup.get(key);
-    const cobranzaTotal = cobranzaTotalByGroup.get(key) ?? 0;
-    if (!clientWeights || clientWeights.size === 0 || !(cobranzaTotal > 0)) continue; // fallback: deja el lump
-    proratedGroups.add(key);
+    if (!clientWeights || clientWeights.size === 0) continue; // fallback: deja el lump
+
+    // (A) 1:1 por importe exacto y ÚNICO. Dos clientes con el mismo importe
+    // pendiente son ambiguos → no se atribuye ninguno (cae al remanente).
+    //
+    // Índice por centavos para que la búsqueda sea O(1): un mes puede traer
+    // miles de clientes × cientos de depósitos, y esto corre en el main thread
+    // en cada recómputo del motor.
+    const centsKey = (amount: number) => Math.round(amount * 100);
+    const byCents = new Map<number, string[]>();
     for (const [clientId, info] of clientWeights) {
-      const amount = group.total * (info.amount / cobranzaTotal);
-      if (!(amount > 0)) continue;
-      synthetic.push({
-        id: `citi-prorrateo:${group.cia}:${clientId}:${group.ym}`,
-        sourceSystem: 'BANK',
-        type: 'INFLOW',
-        category: 'AR_COLLECTION',
-        subcategory: INCOME_SUBCAT_CITI,
-        companyId: group.cia,
-        counterpartyId: clientId,
-        counterpartyName: info.name,
-        counterpartyType: 'CUSTOMER',
-        concept: `Cobro Citi ${info.name} (prorrateo depósito concentradora ${group.ym})`,
-        currency: 'MXN',
-        originalAmount: amount,
-        baseAmount: amount,
-        projectedAmount: amount,
-        actualDate: group.repDate,
-        projectedDate: group.repDate,
-        confidenceScore: 100,
-        confidenceBand: calculateConfidenceBand(100),
-        forecastMethod: 'RULE',
-        ruleApplied: 'Prorrateo depósito concentradora Citi por cobranza JDE',
-        status: 'REAL',
-        lockState: 'LOCKED',
-        comments: ['Atribución por cliente del depósito real a la concentradora Citi, prorrateada según la cobranza JDE del periodo. El total mensual del banco se conserva exacto.'],
-        createdAt: `${group.repDate}T00:00:00.000Z`,
-        updatedAt: `${group.repDate}T00:00:00.000Z`,
-      });
+      const cents = centsKey(info.amount);
+      const bucket = byCents.get(cents);
+      if (bucket) bucket.push(clientId);
+      else byCents.set(cents, [clientId]);
     }
+    const candidatesFor = (amount: number): string[] => {
+      const cents = centsKey(amount);
+      const tolerance = Math.round(CITI_DEPOSIT_MATCH_TOLERANCE * 100);
+      const out: string[] = [];
+      for (let delta = -tolerance; delta <= tolerance; delta++) {
+        for (const clientId of byCents.get(cents + delta) ?? []) {
+          // Un cliente ya consumido por otro depósito sale de `clientWeights`.
+          if (clientWeights.has(clientId)) out.push(clientId);
+        }
+      }
+      return out;
+    };
+
+    const leftoverDeposits: Deposit[] = [];
+    let matchedByAmount = 0;
+    let matchedDeposits = 0;
+    for (const deposit of [...group.deposits].sort((a, b) => b.amount - a.amount)) {
+      const candidates = candidatesFor(deposit.amount);
+      if (candidates.length !== 1) { leftoverDeposits.push(deposit); continue; }
+      const clientId = candidates[0];
+      const info = clientWeights.get(clientId)!;
+      synthetic.push(citiLine({
+        // El id del depósito hace única la línea aunque el mismo cliente
+        // reciba varios depósitos identificados en el mes.
+        id: `citi-prorrateo:${group.cia}:${clientId}:${deposit.movement.id}`,
+        cia: group.cia,
+        date: deposit.date,
+        clientId,
+        name: info.name,
+        amount: deposit.amount,
+        concept: `Cobro Citi ${info.name} (depósito concentradora ${deposit.date})`,
+        rule: 'Depósito concentradora Citi identificado por importe exacto de la cobranza JDE',
+        comment: 'El importe del depósito coincide al centavo con la cobranza sin atribuir de un solo cliente, así que se le acredita completo. No depende del folio ni del recibo.',
+      }));
+      clientWeights.delete(clientId);
+      dropIds.add(deposit.movement.id);
+      matchedByAmount += deposit.amount;
+      matchedDeposits++;
+    }
+
+    const leftoverPool = leftoverDeposits.reduce((sum, d) => sum + d.amount, 0);
+    let leftoverExpected = 0;
+    for (const info of clientWeights.values()) leftoverExpected += info.amount;
+    const ratio = leftoverExpected > 0 ? leftoverPool / leftoverExpected : null;
+    let mode: CitiAttributionMode = matchedDeposits > 0 ? 'exacto' : 'sin-desglosar';
+    const excess = leftoverPool - leftoverExpected;
+
+    if (leftoverPool > 0 && leftoverExpected > 0) {
+      if (excess > 0.005) {
+        // (B) La caja alcanza: cada cliente recibe EXACTAMENTE lo suyo y el
+        // excedente va a una sola fila por identificar. Escalar hacia arriba
+        // inflaría clientes por encima de lo que cobraron (el defecto espejo
+        // del prorrateo diluido).
+        mode = 'remanente-cubierto';
+        for (const [clientId, info] of clientWeights) {
+          synthetic.push(citiLine({
+            id: `citi-prorrateo:${group.cia}:${clientId}:${group.ym}`,
+            cia: group.cia,
+            date: group.repDate,
+            clientId,
+            name: info.name,
+            amount: info.amount,
+            concept: `Cobro Citi ${info.name} (depósito concentradora ${group.ym})`,
+            rule: 'Atribución del depósito concentradora Citi por la cobranza JDE sin atribuir',
+            comment: 'El depósito del mes alcanza para cubrir la cobranza sin atribuir, así que cada cliente recibe su importe real. El excedente queda en la fila por identificar.',
+          }));
+        }
+        synthetic.push(citiLine({
+          id: `citi-prorrateo:${group.cia}:sin-identificar:${group.ym}`,
+          cia: group.cia,
+          date: group.repDate,
+          name: CITI_UNIDENTIFIED_NAME,
+          amount: excess,
+          concept: `${CITI_UNIDENTIFIED_NAME} (depósito concentradora ${group.ym})`,
+          rule: 'Excedente del depósito concentradora Citi sin cobranza JDE que lo explique',
+          comment: 'Parte del depósito real a la concentradora que ninguna cobranza del periodo explica. Se conserva sin atribuir para no inflar a ningún cliente; el total bancario del mes queda exacto.',
+        }));
+        for (const deposit of leftoverDeposits) dropIds.add(deposit.movement.id);
+      } else if (ratio !== null && ratio >= CITI_MIN_PRORRATEO_RATIO) {
+        // (C) Reparto proporcional. Σ = pool exacto (cuadre Planeación ↔ banco).
+        mode = 'prorrateo';
+        for (const [clientId, info] of clientWeights) {
+          const amount = leftoverPool * (info.amount / leftoverExpected);
+          if (!(amount > 0)) continue;
+          synthetic.push(citiLine({
+            id: `citi-prorrateo:${group.cia}:${clientId}:${group.ym}`,
+            cia: group.cia,
+            date: group.repDate,
+            clientId,
+            name: info.name,
+            amount,
+            concept: `Cobro Citi ${info.name} (prorrateo depósito concentradora ${group.ym})`,
+            rule: 'Prorrateo depósito concentradora Citi por cobranza JDE',
+            comment: 'Atribución por cliente del depósito real a la concentradora Citi, prorrateada según la cobranza JDE sin atribuir del periodo. El total mensual del banco se conserva exacto.',
+          }));
+        }
+        for (const deposit of leftoverDeposits) dropIds.add(deposit.movement.id);
+      }
+      // Fuera del piso: NO se reparte. Los depósitos del remanente se quedan
+      // como fila sin desglosar (dato incompleto, nunca dato falso).
+    }
+
+    diagnostics.push({
+      cia: group.cia,
+      ym: group.ym,
+      depositTotal: group.total,
+      matchedByAmount,
+      matchedDeposits,
+      leftoverPool,
+      leftoverExpected,
+      ratio,
+      mode,
+      clients: clientWeights.size + matchedDeposits,
+    });
   }
 
-  if (proratedGroups.size === 0) return movements;
+  publishCitiAttributionDiagnostics(diagnostics);
+  if (dropIds.size === 0 && synthetic.length === 0) return movements;
 
-  // 6) Quitar SOLO los depósitos amontonados de los grupos que sí prorrateamos.
-  const dropIds = new Set(
-    targets.filter((t) => proratedGroups.has(groupKeyOf(t))).map((t) => t.id),
-  );
+  // 6) Quitar SÓLO los depósitos que quedaron atribuidos.
   const result = movements.filter((m) => !dropIds.has(m.id));
   result.push(...synthetic);
   return result;
+}
+
+/**
+ * Publica el diagnóstico del prorrateo Citi en `window.__midas__.citiProrrateo`
+ * y avisa en consola de los (cía, mes) que quedaron SIN desglosar. Esto es lo
+ * que faltaba cuando el defecto de 3M pasó meses sin detectarse: el reparto
+ * fallaba en silencio y la fila se veía plausible. Best-effort: en el worker
+ * (sin `window`) no hace nada.
+ */
+function publishCitiAttributionDiagnostics(diagnostics: CitiAttributionDiagnostic[]): void {
+  if (diagnostics.length === 0) return;
+  const undistributed = diagnostics.filter((d) => d.mode === 'sin-desglosar' && d.leftoverPool > 0);
+  if (undistributed.length > 0) {
+    console.warn(
+      `[citi-prorrateo] ${undistributed.length} periodo(s) sin desglosar por cliente: la cobranza sin atribuir no corresponde al depósito (ratio < ${CITI_MIN_PRORRATEO_RATIO}). Detalle: window.__midas__.citiProrrateo`,
+      undistributed.map((d) => `${d.cia}/${d.ym} pool=${Math.round(d.leftoverPool)} cobranza=${Math.round(d.leftoverExpected)} ratio=${d.ratio === null ? 'n/a' : d.ratio.toFixed(4)}`),
+    );
+  }
+  try {
+    if (typeof window === 'undefined') return;
+    const w = window as unknown as { __midas__?: Record<string, unknown> };
+    w.__midas__ = { ...(w.__midas__ ?? {}), citiProrrateo: diagnostics };
+  } catch {
+    /* diagnóstico best-effort */
+  }
 }
 
 export function hasSufficientCanonicalData(inputs: CanonicalProjectionInputs): boolean {

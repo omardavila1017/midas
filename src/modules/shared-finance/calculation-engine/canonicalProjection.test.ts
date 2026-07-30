@@ -1602,6 +1602,128 @@ describe('prorateCitiConcentradoraByClient — denominador del peso', () => {
   });
 });
 
+/**
+ * El prorrateo por peso sólo es válido si el pool (depósitos sin cruzar) y el
+ * denominador (cobranza sin atribuir) son la MISMA población. En producción no
+ * lo son: hay cobranza del mes sin pierna bancaria en la concentradora
+ * (compensaciones, depósito en otro banco, cruce fechado en otro mes). Estos
+ * casos fijan que un número correcto NO dependa de esa suposición.
+ */
+describe('prorateCitiConcentradoraByClient — atribución exacta y no-dilución', () => {
+  const CONCENTRADORA = '06780038436';
+  const CIA = '00011';
+  const TRES_M = 221_201.53;
+  const asOfDate = '2026-03-01';
+
+  function inputs(patch: {
+    deposits: { importe: number; fecha: string; referencia: string }[];
+    cobranza: { noCliente: string; nombreCliente: string; importe: number; fechaCobro: string }[];
+  }) {
+    return {
+      companyCode: 'all',
+      bankStatements: [bankStatement({
+        cia: CIA, banco: 'BANAMEX', cuenta: CONCENTRADORA, saldoInicial: 0,
+        movimientos: patch.deposits.map((d) => bankMovement({
+          cia: CIA, banco: 'BANAMEX', cuenta: CONCENTRADORA, tipoMovimiento: 'ABONO',
+          importe: d.importe, fechaOperacion: d.fecha, referencia: d.referencia,
+          concepto: `Deposito ${d.referencia}`,
+        })),
+      })],
+      abonoEnrichments: [],
+      cobranzaRecords: patch.cobranza.map((c) => cobranzaRecord({
+        cia: CIA, noCliente: c.noCliente, nombreCliente: c.nombreCliente,
+        noFactura: `F-${c.noCliente}`, fechaFactura: '2025-12-16',
+        fechaCobro: c.fechaCobro, importeBrutoPesos: c.importe,
+      })),
+      clients: [], providers: [], cxpRecords: [],
+      assumptions, budget: null, startingBalance: undefined, asOfDate,
+    };
+  }
+
+  const citiInflow = (movements: ReturnType<typeof buildCanonicalProjection>['movements']) =>
+    movements.filter((m) => m.type === 'INFLOW'
+      && m.subcategory === 'Clientes Citi'
+      && (m.actualDate ?? m.projectedDate ?? '').startsWith('2026-02'));
+
+  const forClient = (movements: ReturnType<typeof buildCanonicalProjection>['movements'], name: RegExp) =>
+    citiInflow(movements).filter((m) => name.test(m.counterpartyName ?? ''))
+      .reduce((sum, m) => sum + m.projectedAmount, 0);
+
+  it('acredita el depósito completo al cliente cuyo importe coincide, aunque el resto de la cobranza del mes no tenga pierna bancaria', () => {
+    // Caso real 3M (2026-02): su depósito NO cruzó a factura, y la cobranza del
+    // mes trae $221.7M de otro cliente que se liquidó por compensación (nunca
+    // entró al banco). Repartir por peso devolvía 221201.53 × (221201.53/222M)
+    // ≈ $220.41 — el número que reportó Santiago.
+    const movements = buildCanonicalProjection(inputs({
+      deposits: [{ importe: TRES_M, fecha: '2026-02-12', referencia: 'REF-3M' }],
+      cobranza: [
+        { noCliente: '103246', nombreCliente: '3M MEXICO S.A. DE C.V.', importe: TRES_M, fechaCobro: '2026-02-12' },
+        { noCliente: 'C-COMP', nombreCliente: 'CLIENTE COMPENSACION SA DE CV', importe: 221_778_798.47, fechaCobro: '2026-02-20' },
+      ],
+    })).movements;
+    expect(forClient(movements, /3M MEXICO/i)).toBeCloseTo(TRES_M, 2);
+    // El de la compensación no recibe nada: su cobro nunca entró a la concentradora.
+    expect(forClient(movements, /COMPENSACION/i)).toBe(0);
+    // Cuadre: el total del mes sigue siendo el ABONO real.
+    expect(citiInflow(movements).reduce((s, m) => s + m.projectedAmount, 0)).toBeCloseTo(TRES_M, 2);
+  });
+
+  it('no reparte cuando la cobranza sin atribuir no corresponde al depósito: deja la fila sin desglosar', () => {
+    const movements = buildCanonicalProjection(inputs({
+      deposits: [{ importe: 1_000_000, fecha: '2026-02-10', referencia: 'REF-X' }],
+      cobranza: [{ noCliente: 'C-A', nombreCliente: 'CLIENTE A SA DE CV', importe: 50_000_000, fechaCobro: '2026-02-11' }],
+    })).movements;
+    // Ratio 0.02: repartir le daría al cliente 1/50 de lo suyo. No se atribuye.
+    expect(forClient(movements, /CLIENTE A/i)).toBe(0);
+    const lump = citiInflow(movements);
+    expect(lump).toHaveLength(1);
+    expect(lump[0].category).toBe('TRANSFER');
+    expect(lump[0].projectedAmount).toBeCloseTo(1_000_000, 2);
+  });
+
+  it('nunca infla a un cliente por encima de su cobranza: el excedente va a una fila por identificar', () => {
+    const movements = buildCanonicalProjection(inputs({
+      deposits: [{ importe: 1_000_000, fecha: '2026-02-10', referencia: 'REF-Y' }],
+      cobranza: [{ noCliente: 'C-B', nombreCliente: 'CLIENTE B SA DE CV', importe: 600_000, fechaCobro: '2026-02-11' }],
+    })).movements;
+    // Escalar por peso le habría dado el millón completo (67% de más).
+    expect(forClient(movements, /CLIENTE B/i)).toBeCloseTo(600_000, 2);
+    expect(forClient(movements, /por identificar/i)).toBeCloseTo(400_000, 2);
+    expect(citiInflow(movements).reduce((s, m) => s + m.projectedAmount, 0)).toBeCloseTo(1_000_000, 2);
+  });
+
+  it('no atribuye por importe cuando dos clientes empatan (ambiguo) — cae al reparto por peso', () => {
+    const movements = buildCanonicalProjection(inputs({
+      deposits: [{ importe: 500_000, fecha: '2026-02-10', referencia: 'REF-Z' }],
+      cobranza: [
+        { noCliente: 'C-C', nombreCliente: 'CLIENTE C SA DE CV', importe: 500_000, fechaCobro: '2026-02-11' },
+        { noCliente: 'C-D', nombreCliente: 'CLIENTE D SA DE CV', importe: 500_000, fechaCobro: '2026-02-11' },
+      ],
+    })).movements;
+    expect(forClient(movements, /CLIENTE C/i)).toBeCloseTo(250_000, 2);
+    expect(forClient(movements, /CLIENTE D/i)).toBeCloseTo(250_000, 2);
+    expect(citiInflow(movements).reduce((s, m) => s + m.projectedAmount, 0)).toBeCloseTo(500_000, 2);
+  });
+
+  it('identifica varios depósitos del mismo mes, cada uno con su cliente y su fecha', () => {
+    const movements = buildCanonicalProjection(inputs({
+      deposits: [
+        { importe: TRES_M, fecha: '2026-02-12', referencia: 'REF-3M' },
+        { importe: 987_654.32, fecha: '2026-02-25', referencia: 'REF-E' },
+      ],
+      cobranza: [
+        { noCliente: '103246', nombreCliente: '3M MEXICO S.A. DE C.V.', importe: TRES_M, fechaCobro: '2026-02-12' },
+        { noCliente: 'C-E', nombreCliente: 'CLIENTE E SA DE CV', importe: 987_654.32, fechaCobro: '2026-02-24' },
+      ],
+    })).movements;
+    expect(forClient(movements, /3M MEXICO/i)).toBeCloseTo(TRES_M, 2);
+    expect(forClient(movements, /CLIENTE E/i)).toBeCloseTo(987_654.32, 2);
+    // Cada línea lleva la fecha de SU depósito, no la del más grande del mes.
+    const eLine = citiInflow(movements).find((m) => /CLIENTE E/i.test(m.counterpartyName ?? ''));
+    expect(eLine?.actualDate).toBe('2026-02-25');
+  });
+});
+
 function client(patch: Partial<Client> = {}): Client {
   const monthlyBilling = Array.from({ length: 12 }, () => 0);
   monthlyBilling[4] = 1000;
