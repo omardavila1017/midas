@@ -59,7 +59,6 @@ export function applyViajesEspecialesGroup(
   let promotedCount = 0;
   const matchedKeys = new Set<string>();
   const out = clients.map((c) => {
-    if (c.manualGroupOverride === true) return c;
     const accounts = c.jdeAccounts ?? [];
     let hit = false;
     for (const acc of accounts) {
@@ -71,6 +70,10 @@ export function applyViajesEspecialesGroup(
         // diagnóstico cuando un cliente tiene cuentas en varias cías.
       }
     }
+    // Un `manualGroupOverride` NO se promueve, pero SÍ cuenta como match: su
+    // K_Cliente sí existe en el catálogo. Contarlo como "sin Client" inflaba
+    // el diagnóstico de claves huérfanas del API (`unmatchedClaveJdeCount`).
+    if (c.manualGroupOverride === true) return c;
     if (!hit) return c;
     if (c.commercialGroupId === VIAJES_ESPECIALES_GROUP_ID) return c;
     promotedCount += 1;

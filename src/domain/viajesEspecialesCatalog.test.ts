@@ -86,9 +86,9 @@ describe('applyViajesEspecialesGroup', () => {
     expect(res.promotedCount).toBe(0);
     expect(res.clients[0]).toBe(manual);
     expect(res.clients[0].commercialGroupId).toBe('group-custom');
-    // An override-skipped client never registers its key as matched, so the
-    // API key still counts as unmatched (observed behavior).
-    expect(res.unmatchedClaveJdeCount).toBe(1);
+    // El override no se promueve, pero su K_Cliente SÍ existe en el catálogo:
+    // no debe contarse como clave huérfana del API.
+    expect(res.unmatchedClaveJdeCount).toBe(0);
   });
 
   it('is a no-op for a client already in the viajes-especiales group', () => {

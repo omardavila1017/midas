@@ -28,7 +28,7 @@ import { setProviderCatalogForCategoryLookup } from './modules/financial-plannin
 import { clearAuth } from './components/Login';
 import { fetchClientCatalog } from './services/catalog.service';
 import { primeDailyCache, getMaxCachedDay, nextIsoDay, isoDaysBefore, isDailyCachePersistent, dailyCacheStats, clearAllDailyCache } from './services/dailyApiCache';
-import { publishDataHealthDiagnostics, getDataGaps, clearDataLakeMarkers } from './services/dataHealth';
+import { publishDataHealthDiagnostics, getDataGaps, clearDataLakeMarkers, reportDataGap } from './services/dataHealth';
 import { DataHealthPanel, type DataHealthDatasetRow } from './components/DataHealthPanel';
 import {
   loadBankStatementsFromIDB,
@@ -2982,6 +2982,11 @@ export default function App() {
         console.error(
           `[cxp] ${failedCias.length}/${ciasToFetch.length} cías fallaron tras retries: ${failedCias.join(', ')}`,
         );
+        // El slot del boot sólo marca 'error' si fallaron TODAS, así que el
+        // splash abre la app con estas cías faltando y sin señal para el
+        // usuario. Registrarlas como hueco de sesión las hace visibles en
+        // "Salud de datos" (no cambia el gate ni los datos cargados).
+        for (const cia of failedCias) reportDataGap('cxp', 'cia-failed', cia);
       }
       const allFailed = errors === ciasToFetch.length;
       setBootSlot('cxp', allFailed ? 'error' : 'done');
@@ -3107,6 +3112,7 @@ export default function App() {
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err);
               errors.push(`${cia}: ${msg}`);
+              reportDataGap('compras', 'cia-failed', `${cia}: ${msg}`);
             }
           }
         };
@@ -3370,6 +3376,7 @@ export default function App() {
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err);
               errors.push(`${cia}: ${msg}`);
+              reportDataGap('auxiliarcontable', 'cia-failed', `${cia}: ${msg}`);
               // eslint-disable-next-line no-console
               console.warn(`[auxiliarcontable] ${cia} fail: ${msg}`);
             }
@@ -3810,6 +3817,7 @@ export default function App() {
           } else {
             const msg = recordsResult.reason instanceof Error ? recordsResult.reason.message : String(recordsResult.reason);
             errors.push(`${cia}: ${msg}`);
+            reportDataGap('cobranza', 'cia-failed', `${cia}: ${msg}`);
           }
           if (paymentsResult.status === 'fulfilled') {
             const payments = paymentsResult.value;
@@ -3837,6 +3845,7 @@ export default function App() {
           } else {
             const msg = paymentsResult.reason instanceof Error ? paymentsResult.reason.message : String(paymentsResult.reason);
             errors.push(`indicadores ${cia}: ${msg}`);
+            reportDataGap('cobranza-pagos', 'cia-failed', `${cia}: ${msg}`);
           }
           completed += 1;
           if (progressSlot === 'cobranza') {
