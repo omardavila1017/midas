@@ -4,6 +4,7 @@ import type {
 } from './financialProjectionService';
 import type { ScenarioForecastRun } from '../../financial-planning/services/scenarioForecastRun';
 import { todayISO } from '../../../formatters';
+import { APP_VERSION } from '../../../config/appVersion';
 
 const DB_NAME = 'midas-financial-projection-cache';
 const DB_VERSION = 1;
@@ -11,7 +12,18 @@ const STORE_NAME = 'entries';
 const INDEX_KEY = 'midas.financialProjection.cache.index.v1';
 // v2: client fingerprint expanded to cover `frequency`, `paymentDayName`,
 // `commercialGroupId` patched by the JDE cobranza overlay.
-const SCHEMA_VERSION = 2;
+// v3: la clave incorpora la versión de la app (ver ENGINE_VERSION).
+const SCHEMA_VERSION = 3;
+// Los valores persistidos son SALIDAS DEL MOTOR (movimientos ya prorrateados,
+// corridas ya calculadas), pero la clave sólo describía los INPUTS. Un fix del
+// motor que cambia el número sin cambiar el dato de origen (p.ej. el
+// denominador del prorrateo Citi, PR #239) dejaba la entrada pre-fix vigente:
+// el navegador computaba bien al arrancar y volvía al número viejo en cuanto
+// esta cache resolvía. Por eso la versión de la app entra en la llave — cada
+// deploy invalida las salidas del motor anterior. `clearCacheStorageOnEntry`
+// borra esta BD, pero `deleteDatabase` se bloquea en silencio si otra pestaña
+// la tiene abierta, así que no basta.
+const ENGINE_VERSION = `${SCHEMA_VERSION}:${APP_VERSION}`;
 const SOURCE_LIMIT = 12;
 const SCENARIO_LIMIT = 24;
 // El forecast probabilístico (Holt-Winters + Monte Carlo del Escenario
@@ -112,7 +124,7 @@ function sessionCacheSet(key: string, kind: CacheKind, value: unknown): void {
 export function projectionSourcePersistentCacheKey(input: FinancialProjectionSourceInput): string {
   const asOfDate = input.asOfDate ?? todayISO();
   return `projection-source:${hashString([
-    `v=${SCHEMA_VERSION}`,
+    `v=${ENGINE_VERSION}`,
     `company=${input.companyCode}`,
     `asOf=${asOfDate}`,
     `starting=${input.startingBalance}`,
@@ -163,7 +175,7 @@ export function projectionSourcePersistentCacheKey(input: FinancialProjectionSou
 }
 
 export function scenarioRunPersistentCacheKey(rawKey: string): string {
-  return `scenario-run:${hashString(`v=${SCHEMA_VERSION}|${rawKey}`)}`;
+  return `scenario-run:${hashString(`v=${ENGINE_VERSION}|${rawKey}`)}`;
 }
 
 export async function loadProjectionSourceFromPersistentCache(
@@ -193,7 +205,7 @@ export function saveScenarioRunToPersistentCache(
 }
 
 export function probabilisticForecastPersistentCacheKey(rawKey: string): string {
-  return `probabilistic-forecast:${hashString(`v=${SCHEMA_VERSION}|${rawKey}`)}`;
+  return `probabilistic-forecast:${hashString(`v=${ENGINE_VERSION}|${rawKey}`)}`;
 }
 
 export async function loadProbabilisticForecastFromPersistentCache<T>(

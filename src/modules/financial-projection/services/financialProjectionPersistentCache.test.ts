@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FinancialProjectionSourceData, FinancialProjectionSourceInput } from './financialProjectionService';
 import {
   __clearFinancialProjectionPersistentCacheForTests,
@@ -31,6 +31,32 @@ describe('financialProjectionPersistentCache', () => {
 
   it('returns null when IndexedDB has no saved metadata', async () => {
     await expect(loadProjectionSourceFromPersistentCache(projectionInput({ startingBalance: 10_000 }))).resolves.toBeNull();
+  });
+
+  // Lo persistido son SALIDAS del motor con una llave que sólo describe los
+  // INPUTS: un fix del motor (prorrateo Citi, PR #239) no movía la llave y la
+  // entrada pre-fix seguía sirviéndose tras el deploy. La versión de la app
+  // entra en la llave para que cada deploy invalide las salidas viejas.
+  it('namespaces the keys by app version so a deploy invalidates engine output', async () => {
+    const input = projectionInput({ startingBalance: 10_000 });
+
+    const keys: { source: string; run: string; forecast: string }[] = [];
+    for (const version of ['1.0.100', '1.0.101']) {
+      vi.resetModules();
+      vi.doMock('../../../config/appVersion', () => ({ APP_VERSION: version }));
+      const mod = await import('./financialProjectionPersistentCache');
+      keys.push({
+        source: mod.projectionSourcePersistentCacheKey(input),
+        run: mod.scenarioRunPersistentCacheKey('raw'),
+        forecast: mod.probabilisticForecastPersistentCacheKey('raw'),
+      });
+    }
+
+    expect(keys[0].source).not.toBe(keys[1].source);
+    expect(keys[0].run).not.toBe(keys[1].run);
+    expect(keys[0].forecast).not.toBe(keys[1].forecast);
+    vi.doUnmock('../../../config/appVersion');
+    vi.resetModules();
   });
 });
 

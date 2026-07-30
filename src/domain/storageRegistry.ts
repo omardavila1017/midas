@@ -225,11 +225,48 @@ export async function clearCacheStorageOnEntry(): Promise<void> {
   ]);
   // Cache computado de proyección: re-derivable, no crítico para la frescura
   // del dato JDE → borrado fire-and-forget (no bloquea el boot).
-  try {
-    if (typeof indexedDB !== 'undefined') {
-      indexedDB.deleteDatabase('midas-financial-projection-cache');
+  void clearProjectionCacheDb();
+}
+
+/**
+ * Vacía el cache computado de proyección. `deleteDatabase` queda BLOQUEADO en
+ * SILENCIO mientras otra pestaña (o esta misma página) tenga la BD abierta —
+ * el `onblocked` nunca se atendía, así que el clear-on-entry aparentaba
+ * funcionar y las entradas pre-deploy sobrevivían. Un `clear()` sobre el
+ * object store NO se bloquea con conexiones abiertas, así que vaciamos primero
+ * y el delete queda como limpieza oportunista. Best-effort: nunca tira.
+ */
+async function clearProjectionCacheDb(): Promise<void> {
+  if (typeof indexedDB === 'undefined') return;
+  const name = 'midas-financial-projection-cache';
+  await new Promise<void>((resolve) => {
+    let db: IDBDatabase | null = null;
+    const done = () => {
+      try { db?.close(); } catch { /* ignore */ }
+      try { indexedDB.deleteDatabase(name); } catch { /* ignore */ }
+      resolve();
+    };
+    try {
+      const req = indexedDB.open(name);
+      req.onerror = () => resolve();
+      req.onblocked = () => resolve();
+      req.onsuccess = () => {
+        db = req.result;
+        try {
+          if (!db.objectStoreNames.contains('entries')) { done(); return; }
+          const tx = db.transaction('entries', 'readwrite');
+          tx.objectStore('entries').clear();
+          tx.oncomplete = done;
+          tx.onerror = done;
+          tx.onabort = done;
+        } catch {
+          done();
+        }
+      };
+    } catch {
+      // Sin `open` disponible (entorno acotado): queda el delete a secas.
+      try { indexedDB.deleteDatabase(name); } catch { /* ignore */ }
+      resolve();
     }
-  } catch {
-    /* ignore */
-  }
+  });
 }
