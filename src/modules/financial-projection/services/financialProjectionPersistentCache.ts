@@ -13,7 +13,9 @@ const INDEX_KEY = 'midas.financialProjection.cache.index.v1';
 // v2: client fingerprint expanded to cover `frequency`, `paymentDayName`,
 // `commercialGroupId` patched by the JDE cobranza overlay.
 // v3: la clave incorpora la versión de la app (ver ENGINE_VERSION).
-const SCHEMA_VERSION = 3;
+// v4: "días en déficit" se mide sobre la curva diaria (antes por cierre de
+// bucket, que a mensual reportaba 0) — cambia `summary` sin cambiar inputs.
+const SCHEMA_VERSION = 4;
 // Los valores persistidos son SALIDAS DEL MOTOR (movimientos ya prorrateados,
 // corridas ya calculadas), pero la clave sólo describía los INPUTS. Un fix del
 // motor que cambia el número sin cambiar el dato de origen (p.ej. el

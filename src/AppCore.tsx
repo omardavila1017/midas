@@ -5517,6 +5517,7 @@ export default function App() {
     assumptions,
     budget: null,
     startingBalance: undefined,
+    payrollMonthlyActualJDE,
   }), [
     selectedCia,
     accountableBankStatements,
@@ -5533,6 +5534,7 @@ export default function App() {
     purchaseReceiptsFromCompras,
     nominaRecords,
     assumptions,
+    payrollMonthlyActualJDE,
   ]);
   const frozenProjectionProps = useFrozenWhenInactive(projectionProps, projectionActive);
   const frozenPlanningProps = useFrozenWhenInactive(planningProps, planningActive);

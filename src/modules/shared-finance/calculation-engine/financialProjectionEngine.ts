@@ -90,7 +90,11 @@ export function calculateBaseProjection(movements: FinancialMovement[], options:
     generatedAt: new Date().toISOString(),
     movements: normalized,
     buckets: bucketsWithAlerts,
-    summary: summarizeProjection(bucketsWithAlerts, normalized, options.minimumCash, granularity),
+    summary: summarizeProjection(bucketsWithAlerts, normalized, options.minimumCash, granularity, {
+      startDate: options.startDate,
+      endDate: options.endDate,
+      initialCash: options.initialCash,
+    }),
     alerts,
   };
 }
@@ -311,8 +315,9 @@ export function summarizeBucketsForScenario(
   movements: FinancialMovement[],
   minimumCashRequired: number,
   granularity: ProjectionGranularity = 'daily',
+  deficitWindow?: DeficitScanWindow,
 ): ProjectionSummary {
-  return summarizeProjection(buckets, movements, minimumCashRequired, granularity);
+  return summarizeProjection(buckets, movements, minimumCashRequired, granularity, deficitWindow);
 }
 
 export function compareProjectionVsScenario(baseProjection: ForecastRun, scenarioProjection: ForecastRun): ScenarioComparison {
@@ -530,6 +535,84 @@ function calculateRiskAlerts(buckets: ProjectionBucket[], movements: FinancialMo
   return alerts;
 }
 
+export interface DeficitScanWindow {
+  startDate: string;
+  endDate: string;
+  initialCash: number;
+}
+
+export interface DeficitScanResult {
+  /** Días de calendario cuyo cierre queda por debajo del piso. */
+  deficitDays: number;
+  /** Caja más baja alcanzada en la ventana (mínimo DIARIO, no de cierre de bucket). */
+  minCash: number;
+  minCashDate?: string;
+  /** Faltante máximo contra el piso (0 si nunca se cae). */
+  worstDeficit: number;
+  worstDeficitDate?: string;
+}
+
+/** Cota del barrido diario (~11 años). Blindaje contra una ventana mal armada. */
+const MAX_DEFICIT_SCAN_DAYS = 4_000;
+
+/**
+ * Barrido DIARIO de la caja para medir déficit, independiente de la
+ * granularidad de visualización.
+ *
+ * Por qué existe: los buckets sólo evalúan el CIERRE del periodo. A
+ * granularidad mensual (el default de Planeación) un hoyo intramensual —el
+ * caso normal: la caja cae antes de la cobranza y se recupera antes de fin de
+ * mes— quedaba invisible y "Días en déficit" salía 0 aunque la caja hubiera
+ * pasado semanas bajo el piso. Además contar el `bucketDaySpan` del bucket en
+ * déficit reportaba ~30 días por un mes que quizá sólo tuvo 3.
+ *
+ * Reconstruye la curva diaria sobre la MISMA ventana y el mismo saldo inicial
+ * que usó `calculateCashBalance`, así que el resultado es consistente con la
+ * caja que pinta el grid — sólo con resolución de día.
+ */
+export function scanDeficitDays(args: DeficitScanWindow & {
+  movements: FinancialMovement[];
+  minimumCash: number;
+}): DeficitScanResult {
+  const { movements, startDate, endDate, initialCash, minimumCash } = args;
+  const empty: DeficitScanResult = { deficitDays: 0, minCash: initialCash, worstDeficit: 0 };
+  if (!startDate || !endDate || endDate < startDate) return empty;
+
+  const netByDay = new Map<string, number>();
+  for (const movement of movements) {
+    const date = effectiveMovementDate(movement);
+    if (!inRange(date, startDate, endDate)) continue;
+    const signed = movement.type === 'INFLOW' ? effectiveAmount(movement) : -effectiveAmount(movement);
+    netByDay.set(date, (netByDay.get(date) ?? 0) + signed);
+  }
+
+  let cash = initialCash;
+  let deficitDays = 0;
+  let minCash = Number.POSITIVE_INFINITY;
+  let minCashDate: string | undefined;
+  let cursor = startDate;
+  for (let guard = 0; cursor <= endDate && guard < MAX_DEFICIT_SCAN_DAYS; guard += 1) {
+    cash += netByDay.get(cursor) ?? 0;
+    if (cash < minCash) {
+      minCash = cash;
+      minCashDate = cursor;
+    }
+    // Mismo criterio que `bucket.deficit > 0`: cierre por debajo del piso.
+    if (cash < minimumCash) deficitDays += 1;
+    cursor = addDays(cursor, 1);
+  }
+  if (!Number.isFinite(minCash)) return empty;
+
+  const worstDeficit = Math.max(0, minimumCash - minCash);
+  return {
+    deficitDays,
+    minCash,
+    minCashDate,
+    worstDeficit,
+    worstDeficitDate: worstDeficit > 0 ? minCashDate : undefined,
+  };
+}
+
 function bucketDaySpan(bucket: ProjectionBucket, index: number, buckets: ProjectionBucket[]): number {
   const next = buckets[index + 1];
   if (next) {
@@ -545,6 +628,7 @@ function summarizeProjection(
   movements: FinancialMovement[],
   minimumCashRequired: number,
   granularity: ProjectionGranularity = 'daily',
+  deficitWindow?: DeficitScanWindow,
 ): ProjectionSummary {
   const bucketForDay = (days: number) => buckets[Math.min(days - 1, Math.max(0, buckets.length - 1))];
   const futureMovements = movements
@@ -561,13 +645,25 @@ function summarizeProjection(
   const totalInflows = buckets.reduce((sum, bucket) => sum + bucket.inflows, 0);
   const totalOutflows = buckets.reduce((sum, bucket) => sum + bucket.outflows, 0);
   const lastBucket = buckets[buckets.length - 1];
+  // El déficit se mide en DÍAS reales. A granularidad diaria los buckets ya
+  // SON días (el `bucketDaySpan` de cada uno vale 1), así que el conteo por
+  // bucket es exacto y además respeta los `CellOverride` (que viven a nivel
+  // bucket). A granularidad semanal/mensual hace falta la curva diaria: sin
+  // ella un hoyo intraperiodo desaparece (KPI en 0) y un periodo en déficit
+  // se reportaba como ~30 días completos.
+  const scan = granularity !== 'daily' && deficitWindow
+    ? scanDeficitDays({ ...deficitWindow, movements, minimumCash: minimumCashRequired })
+    : undefined;
+  const deficitDays = scan
+    ? scan.deficitDays
+    : buckets.reduce((sum, bucket, i) => sum + (bucket.deficit > 0 ? bucketDaySpan(bucket, i, buckets) : 0), 0);
   return {
     currentCash: buckets[0]?.openingCash ?? 0,
     projectedCash7: bucketForDay(7)?.closingCash ?? lastBucket?.closingCash ?? 0,
     projectedCash30: bucketForDay(30)?.closingCash ?? lastBucket?.closingCash ?? 0,
     projectedCash90: bucketForDay(90)?.closingCash ?? lastBucket?.closingCash ?? 0,
     minimumCashRequired,
-    deficitDays: buckets.reduce((sum, bucket, i) => sum + (bucket.deficit > 0 ? bucketDaySpan(bucket, i, buckets) : 0), 0),
+    deficitDays,
     largestUpcomingInflow,
     largestUpcomingOutflow,
     averageConfidence: movements.length === 0
@@ -576,9 +672,16 @@ function summarizeProjection(
     totalInflows,
     totalOutflows,
     finalCash: lastBucket?.closingCash ?? 0,
-    minCash: minBucket?.closingCash ?? 0,
-    maxRiskDate: maxRiskBucket?.deficit ? maxRiskBucket.date : undefined,
-    creditRequired: maxRiskBucket?.deficit ?? 0,
+    // Coherencia con `deficitDays`: cuando el barrido diario corre, el valle y
+    // la fecha crítica salen de ahí. Si no, un KPI podía decir "45 días en
+    // déficit / sin fecha crítica" porque ningún CIERRE de mes bajó del piso.
+    minCash: scan ? Math.min(scan.minCash, minBucket?.closingCash ?? scan.minCash) : (minBucket?.closingCash ?? 0),
+    maxRiskDate: scan
+      ? (scan.worstDeficitDate ?? (maxRiskBucket?.deficit ? maxRiskBucket.date : undefined))
+      : (maxRiskBucket?.deficit ? maxRiskBucket.date : undefined),
+    creditRequired: scan
+      ? Math.max(scan.worstDeficit, maxRiskBucket?.deficit ?? 0)
+      : (maxRiskBucket?.deficit ?? 0),
   };
 }
 

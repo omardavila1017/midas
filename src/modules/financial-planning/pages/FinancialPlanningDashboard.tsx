@@ -6,6 +6,7 @@ import {
 } from '../../shared-finance/services/sharedSourceWorker';
 import { AlertTriangle, CheckCircle2, Copy, Download, Eye, Trash2, Wallet, AlertTriangle as AlertIcon, TrendingUp } from 'lucide-react';
 import type { Budget } from '../../../domain/budget';
+import { computeMinimumOperatingExpense } from '../../../domain/minimumOperatingExpense';
 import type { CXPRecord } from '../../../domain/persistence';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
 import type { BankAccountStatement } from '../../../services/jde';
@@ -142,6 +143,11 @@ interface Props {
    * re-inyectar el flujo del fideicomiso en escenarios no-base.
    */
   bajioStatements?: BankAccountStatement[];
+  /**
+   * Costo real de nómina del mes en curso (TRESS). Entra al piso operativo que
+   * define el umbral de "Días en déficit" — mismo contrato que Proyección.
+   */
+  payrollMonthlyActualJDE?: number;
 }
 
 const USER = 'tesoreria@senda.local';
@@ -410,7 +416,7 @@ async function preloadPlanningScenarioRuns(input: {
   const taxStore = loadTaxStore(defaultTaxStore());
   const initialCash = calculateInitialCash(props.bankStatements, props.startingBalance, { companyCode: props.companyCode });
   const supplierInitialCash = calculateCurrentBankCash(props.bankStatements, props.companyCode, initialCash);
-  const minimumCash = minimumCashFor();
+  const minimumCash = minimumCashFor(props.providers, props.payrollMonthlyActualJDE);
   const sharedRunInputsKey = [
     fingerprintArray(source.movements, (m) => m.id + ':' + (m.adjustedAmount ?? m.projectedAmount)),
     fingerprintArray(bootstrap.adjustments, (a) => a.id + ':' + a.status + ':' + a.createdAt),
@@ -697,7 +703,10 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
     () => calculateCurrentBankCash(props.bankStatements, props.companyCode, initialCash),
     [props.bankStatements, props.companyCode, initialCash],
   );
-  const minimumCash = useMemo(() => minimumCashFor(), []);
+  const minimumCash = useMemo(
+    () => minimumCashFor(props.providers, props.payrollMonthlyActualJDE),
+    [props.providers, props.payrollMonthlyActualJDE],
+  );
 
   // Stable fingerprint for the inputs every scenario run shares. Folds into
   // the LRU cache key so repeat tab visits + tab-strip lookups skip the
@@ -1888,9 +1897,24 @@ function MiniStat({ label, value }: { label: string; value: string }) {
   );
 }
 
-function minimumCashFor(): number {
-  const fallback = 20_000_000;
-  return fallback;
+/**
+ * Piso operativo mensual (proveedores Operación críticos + nómina). Es el
+ * umbral de "Días en déficit": un día cuenta como déficit cuando la caja
+ * proyectada cae por debajo de este piso, no sólo cuando se vuelve negativa.
+ *
+ * Antes era una reserva HARDCODEADA de $20M — el mismo placeholder que
+ * Proyección ya había reemplazado (2026-06-15) por el piso real, así que los
+ * dos módulos medían el déficit contra umbrales distintos. Se computa idéntico
+ * a `operatingFloorMonthlyFor` de Proyección, y debe computarse igual en
+ * `preloadPlanningScenarioRuns` y en el dashboard interno para que el cache-key
+ * del run empate.
+ *
+ * El fallback sobrevive sólo para el arranque sin catálogo de proveedores
+ * (piso 0 = nunca hay déficit, que es peor que un umbral aproximado).
+ */
+function minimumCashFor(providers: Provider[], payrollMonthlyActualJDE?: number): number {
+  const floor = computeMinimumOperatingExpense(providers, null, payrollMonthlyActualJDE).totalMonthly;
+  return floor > 0 ? floor : 20_000_000;
 }
 
 

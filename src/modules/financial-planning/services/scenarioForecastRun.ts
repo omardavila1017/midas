@@ -321,7 +321,14 @@ export function aggregateScenarioForecastRun(
   return {
     ...rawProjection,
     buckets,
-    summary: summarizeBucketsForScenario(buckets, rawProjection.movements, args.minimumCash, args.granularity),
+    // La ventana permite medir "días en déficit" sobre la curva DIARIA aunque
+    // el grid esté en mensual/semanal (ver `scanDeficitDays`). Debe ser la
+    // MISMA que alimentó `calculateBaseProjection` arriba.
+    summary: summarizeBucketsForScenario(buckets, rawProjection.movements, args.minimumCash, args.granularity, {
+      startDate: args.startDate,
+      endDate: pipeline.projectionEndDate,
+      initialCash: args.initialCash,
+    }),
     rows,
     overrides: args.overrides,
     supplierPlan: pipeline.supplierPlan,
