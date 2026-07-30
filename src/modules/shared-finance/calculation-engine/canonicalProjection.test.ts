@@ -1588,12 +1588,17 @@ describe('prorateCitiConcentradoraByClient — denominador del peso', () => {
       cobranzaRecords: inputs.cobranzaRecords.map((r) => ({ ...r, cia: '00011' })),
       abonoEnrichments: [],
     }).movements;
-    const tresM = movements
-      .filter((m) => /3M MEXICO/i.test(m.counterpartyName ?? ''))
-      .reduce((s, m) => s + m.projectedAmount, 0);
+    const tresMRows = movements.filter((m) => /3M MEXICO/i.test(m.counterpartyName ?? ''));
+    const tresM = tresMRows.reduce((s, m) => s + m.projectedAmount, 0);
     // Sin cruces, el pool es todo el depósito y 3M pesa lo suyo sobre el total.
     expect(tresM).toBeGreaterThan(0);
     expect(tresM).toBeCloseTo((TRES_M + OTRO) * (TRES_M / (TRES_M + OTRO)), 2);
+    // La cía sale NORMALIZADA en el movimiento sintético, no la '11' cruda del
+    // banco: el filtro por companyId de las propuestas compara por igualdad.
+    for (const row of tresMRows.filter((m) => m.id.startsWith('citi-prorrateo:'))) {
+      expect(row.companyId).toBe('00011');
+      expect(row.id.startsWith('citi-prorrateo:00011:')).toBe(true);
+    }
   });
 });
 

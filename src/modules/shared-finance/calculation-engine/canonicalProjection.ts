@@ -205,7 +205,12 @@ function prorateCitiConcentradoraByClient(
       group.total += amount;
       if (amount > group.repAmount) { group.repAmount = amount; group.repDate = date; }
     } else {
-      groups.set(key, { cia: movement.companyId ?? '', ym: date.slice(0, 7), total: amount, repDate: date, repAmount: amount });
+      // La cía del grupo se guarda NORMALIZADA, igual que la llave del join:
+      // se emite en `companyId` y en el `id` de las líneas sintéticas, y un
+      // valor sin padding ahí las separaría del resto de la cía (el filtro por
+      // `companyId` de las propuestas —financialProjectionEngine— compara por
+      // igualdad exacta). Normalizar sólo la llave dejaba el blindaje a medias.
+      groups.set(key, { cia: normalizeCia(movement.companyId ?? ''), ym: date.slice(0, 7), total: amount, repDate: date, repAmount: amount });
     }
   }
 
