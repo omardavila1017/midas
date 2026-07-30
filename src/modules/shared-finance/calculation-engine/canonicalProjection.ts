@@ -37,6 +37,7 @@ import { isInternalCounterparty } from '../../../domain/netCashFlowEngine';
 import { isPersonName } from '../../../domain/personNameHeuristic';
 import { VIAJES_ESPECIALES_GROUP_ID } from '../../../domain/viajesEspecialesCatalog';
 import { findBankAccount } from '../../../domain/bankAccountsCatalog';
+import { normalizeCia } from '../../../domain/cia';
 import { calculateConfidenceBand } from './financialProjectionEngine';
 import type { FinancialMovement } from '../types';
 import { buildHistoricalReconciledMovements } from './historicalReconciledEngine';
@@ -152,12 +153,18 @@ function buildMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
  * El detalle por cliente SÍ vive en la cobranza JDE (`fechaCobro`, `noCliente`).
  *
  * Aquí prorrateamos: por cada (cía, mes), repartimos el TOTAL real depositado a
- * las concentradoras `clientes_citi` entre los clientes según su peso en la
- * cobranza cobrada ese mes. El total mensual del banco se conserva EXACTO
- * (Σ pesos = 1) — es la verdad del efectivo; solo cambia la atribución por
- * cliente. La cobranza se usa como PESO (ratio), nunca como monto, así que no
- * hay doble conteo. Si un (cía, mes) no tiene cobranza, el depósito amontonado
- * se conserva tal cual (fallback — la fila concentradora sigue ahí).
+ * las concentradoras `clientes_citi` que NO cruzó a factura, entre los clientes
+ * según su peso en la cobranza del mes que TAMPOCO quedó atribuida por cruce.
+ * El total mensual del banco se conserva EXACTO (Σ pesos = 1) — es la verdad
+ * del efectivo; solo cambia la atribución por cliente. La cobranza se usa como
+ * PESO (ratio), nunca como monto, así que no hay doble conteo.
+ *
+ * El denominador es la clave: sólo cobranza SIN atribuir. El pool a repartir ya
+ * excluye los ABONOs cruzados (quedaron como AR_COLLECTION), así que un
+ * denominador con la cobranza completa del mes mezcla dos universos y diluye a
+ * todo cliente no cruzado por `pool / cobranzaTotal`. Si un (cía, mes) no tiene
+ * cobranza sin atribuir, el depósito amontonado se conserva tal cual (fallback
+ * — la fila concentradora sigue ahí; preferible a inventar una atribución).
  *
  * Fecha de las líneas sintéticas: la del depósito más grande del mes (mejor
  * proxy de cuándo entró el grueso del efectivo). Aproximación aceptada para el
@@ -167,8 +174,13 @@ function prorateCitiConcentradoraByClient(
   movements: FinancialMovement[],
   inputs: CanonicalProjectionInputs,
 ): FinancialMovement[] {
+  // La cía se normaliza en AMBOS lados del join (movimiento y cobranza): hoy
+  // todas las fuentes ya la emiten con padding a 5 dígitos, pero un mismatch de
+  // padding aquí no da error — deja el grupo sin pesos y el mes entero sin
+  // desglosar por cliente. Misma clase de bug que causó doble conteo en CXP
+  // (mantenimiento 2026-07-21); barato blindarlo en lógica de dinero.
   const groupKeyOf = (m: FinancialMovement): string =>
-    `${m.companyId ?? ''}::${(m.actualDate ?? m.projectedDate ?? '').slice(0, 7)}`;
+    `${normalizeCia(m.companyId ?? '')}::${(m.actualDate ?? m.projectedDate ?? '').slice(0, 7)}`;
   const isTarget = (m: FinancialMovement): boolean =>
     m.type === 'INFLOW'
     && m.status === 'REAL'
@@ -197,14 +209,38 @@ function prorateCitiConcentradoraByClient(
     }
   }
 
-  // 2) Pesos por cliente desde la cobranza JDE (fechaCobro en ese cía/mes).
+  // 2) Cobranza YA atribuida por cruce directo banco↔factura.
+  //
+  // Ese cobro salió del pool a prorratear: su ABONO quedó como AR_COLLECTION
+  // (no TRANSFER), así que `group.total` ya NO lo contiene. Si además siguiera
+  // pesando en el reparto, el denominador incluiría clientes que ya cobraron y
+  // TODO cliente sin cruzar se diluiría por el factor `pool / cobranzaTotal`
+  // — el defecto reportado con 3M (2026-02): un cobro real de $221,201.53 que
+  // no cruzó quedaba solo en el pool y se repartía contra los $222M de
+  // cobranza del mes, devolviéndole $220.40 (1/1000 de lo suyo) y regalando el
+  // resto a clientes que ya tenían su ABONO atribuido (doble conteo).
+  const attributedByGroup = new Map<string, Map<string, number>>();
+  for (const movement of movements) {
+    if (movement.type !== 'INFLOW' || movement.status !== 'REAL') continue;
+    if (movement.category !== 'AR_COLLECTION') continue;
+    const clientId = movement.counterpartyId;
+    if (!clientId) continue;
+    const key = groupKeyOf(movement);
+    if (!groups.has(key)) continue;
+    const amount = Math.abs(movement.projectedAmount ?? movement.baseAmount ?? 0);
+    if (!(amount > 0)) continue;
+    let byClient = attributedByGroup.get(key);
+    if (!byClient) { byClient = new Map(); attributedByGroup.set(key, byClient); }
+    byClient.set(clientId, (byClient.get(clientId) ?? 0) + amount);
+  }
+
+  // 3) Pesos por cliente desde la cobranza JDE (fechaCobro en ese cía/mes).
   const clientLookup = buildClientLookup(inputs.clients);
   const weightsByGroup = new Map<string, Map<string, { name: string; amount: number }>>();
-  const cobranzaTotalByGroup = new Map<string, number>();
   for (const rec of inputs.cobranzaRecords ?? []) {
     const cobroDate = cleanDate(rec.fechaCobro);
     if (!cobroDate) continue;
-    const key = `${rec.cia}::${cobroDate.slice(0, 7)}`;
+    const key = `${normalizeCia(rec.cia)}::${cobroDate.slice(0, 7)}`;
     if (!groups.has(key)) continue;
     if (isInternalCounterparty(rec.rfc, rec.nombreCliente)) continue;
     const amount = Math.abs(rec.importeBrutoPesos);
@@ -222,10 +258,28 @@ function prorateCitiConcentradoraByClient(
     const existing = clientWeights.get(display.id);
     if (existing) existing.amount += amount;
     else clientWeights.set(display.id, { name: display.name ?? 'Cliente', amount });
-    cobranzaTotalByGroup.set(key, (cobranzaTotalByGroup.get(key) ?? 0) + amount);
   }
 
-  // 3) Emitir líneas por cliente y marcar los grupos prorrateados.
+  // 4) Descontar del peso lo ya atribuido por cruce y recalcular el total.
+  //
+  // Se resta por cliente (no se excluye al cliente entero) para que la
+  // cobertura PARCIAL quede bien: un cliente con 3 de 10 facturas cruzadas
+  // conserva como peso el remanente sin atribuir. Totalmente cruzado → peso 0
+  // (no recibe doble); sin cruzar → peso completo.
+  const cobranzaTotalByGroup = new Map<string, number>();
+  for (const [key, clientWeights] of weightsByGroup) {
+    const attributed = attributedByGroup.get(key);
+    let total = 0;
+    for (const [clientId, info] of clientWeights) {
+      const already = attributed?.get(clientId) ?? 0;
+      info.amount = Math.max(0, info.amount - already);
+      if (info.amount > 0) total += info.amount;
+      else clientWeights.delete(clientId);
+    }
+    cobranzaTotalByGroup.set(key, total);
+  }
+
+  // 5) Emitir líneas por cliente y marcar los grupos prorrateados.
   const proratedGroups = new Set<string>();
   const synthetic: FinancialMovement[] = [];
   for (const [key, group] of groups) {
@@ -268,7 +322,7 @@ function prorateCitiConcentradoraByClient(
 
   if (proratedGroups.size === 0) return movements;
 
-  // 4) Quitar SOLO los depósitos amontonados de los grupos que sí prorrateamos.
+  // 6) Quitar SOLO los depósitos amontonados de los grupos que sí prorrateamos.
   const dropIds = new Set(
     targets.filter((t) => proratedGroups.has(groupKeyOf(t))).map((t) => t.id),
   );

@@ -1479,6 +1479,124 @@ describe('canonicalProjection · categorización por cuenta contable (GL)', () =
   });
 });
 
+// Prorrateo del depósito a la concentradora Citi. El peso por cliente debe
+// medirse SOLO contra la cobranza que sigue sin atribuir; si el denominador
+// incluye a los clientes cuyo ABONO ya se cruzó a factura (y que por tanto ya
+// salieron del pool a prorratear), todo cliente no cruzado se diluye por el
+// factor `pool / cobranzaTotal` — el defecto que reportó Santiago con 3M.
+describe('prorateCitiConcentradoraByClient — denominador del peso', () => {
+  // Cuenta real del catálogo: CONCENTRADORA CLIENTES CITI (subRole clientes_citi).
+  const CONCENTRADORA = '06780038436';
+  const CIA = '00011';
+  // Cifras reales del caso reportado (2026-02).
+  const TRES_M = 221_201.53;
+  const OTRO = 221_778_798.47; // cobranza del resto del mes, ya cruzada a factura
+  const asOfDate = '2026-03-01';
+
+  /**
+   * Un mes con DOS cobros a la concentradora:
+   *   - 3M: ABONO que NO cruzó a factura → cae al pool del prorrateo.
+   *   - Otro cliente: ABONO que SÍ cruzó → sale del pool (category AR_COLLECTION).
+   * Ambos tienen cobranza JDE con `fechaCobro` en el mes.
+   */
+  function buildInputs() {
+    const abono3M = bankMovement({
+      cia: CIA, banco: 'BANAMEX', cuenta: CONCENTRADORA,
+      tipoMovimiento: 'ABONO', importe: TRES_M, fechaOperacion: '2026-02-12',
+      referencia: 'REF-3M', concepto: '102 3M MEXICO SA DE CV',
+    });
+    const abonoOtro = bankMovement({
+      cia: CIA, banco: 'BANAMEX', cuenta: CONCENTRADORA,
+      tipoMovimiento: 'ABONO', importe: OTRO, fechaOperacion: '2026-02-20',
+      referencia: 'REF-OTRO', concepto: 'Cobro cliente cruzado',
+    });
+    return {
+      companyCode: 'all',
+      bankStatements: [bankStatement({
+        cia: CIA, banco: 'BANAMEX', cuenta: CONCENTRADORA,
+        saldoInicial: 0, movimientos: [abono3M, abonoOtro],
+      })],
+      // Solo el ABONO del "otro" cliente cruza a factura.
+      abonoEnrichments: [{
+        movementKey: bankMovementKey(abonoOtro),
+        status: 'factura-cobrada' as const,
+        facturas: [{
+          cia: CIA, noFactura: 'F-OTRO', noCliente: 'C-OTRO',
+          nombreCliente: 'CLIENTE CRUZADO SA DE CV', importeBruto: OTRO,
+        }],
+        catalogClientId: 'C-OTRO',
+        catalogClientName: 'CLIENTE CRUZADO SA DE CV',
+      }],
+      cobranzaRecords: [
+        cobranzaRecord({
+          cia: CIA, noCliente: '103246', nombreCliente: '3M MEXICO S.A. DE C.V.',
+          noFactura: 'RI-301306', fechaFactura: '2025-12-16', fechaCobro: '2026-02-12',
+          importeBrutoPesos: TRES_M,
+        }),
+        cobranzaRecord({
+          cia: CIA, noCliente: 'C-OTRO', nombreCliente: 'CLIENTE CRUZADO SA DE CV',
+          noFactura: 'F-OTRO', fechaFactura: '2025-12-20', fechaCobro: '2026-02-20',
+          importeBrutoPesos: OTRO,
+        }),
+      ],
+      clients: [], providers: [], cxpRecords: [],
+      assumptions, budget: null, startingBalance: undefined, asOfDate,
+    };
+  }
+
+  function citiRowsFor(name: RegExp) {
+    const movements = buildCanonicalProjection(buildInputs()).movements;
+    return movements.filter((m) =>
+      m.type === 'INFLOW'
+      && (m.actualDate ?? m.projectedDate ?? '').startsWith('2026-02')
+      && name.test(m.counterpartyName ?? ''));
+  }
+
+  it('atribuye a 3M su cobro real, no una fracción diluida por los clientes ya cruzados', () => {
+    const total = citiRowsFor(/3M MEXICO/i).reduce((s, m) => s + m.projectedAmount, 0);
+    // El defecto producía 221201.53 × (221201.53 / 222_000_000) ≈ $220.4.
+    expect(total).toBeGreaterThan(200_000);
+    expect(total).toBeCloseTo(TRES_M, 2);
+  });
+
+  it('conserva el total bancario del grupo prorrateado (cuadre Planeación ↔ banco)', () => {
+    const movements = buildCanonicalProjection(buildInputs()).movements;
+    const citiInflow = movements
+      .filter((m) => m.type === 'INFLOW'
+        && m.subcategory === 'Clientes Citi'
+        && (m.actualDate ?? m.projectedDate ?? '').startsWith('2026-02'))
+      .reduce((s, m) => s + m.projectedAmount, 0);
+    // Σ (prorrateo + cruzados) === Σ ABONOs reales a la concentradora.
+    expect(citiInflow).toBeCloseTo(TRES_M + OTRO, 2);
+  });
+
+  it('no le da al cliente ya cruzado una porción extra del prorrateo (sin doble conteo)', () => {
+    const total = citiRowsFor(/CLIENTE CRUZADO/i).reduce((s, m) => s + m.projectedAmount, 0);
+    expect(total).toBeCloseTo(OTRO, 2);
+  });
+
+  // Hoy todas las fuentes emiten la cía con padding a 5 dígitos, pero un
+  // mismatch aquí no falla ruidosamente: deja el mes sin desglosar por cliente.
+  it('cruza el depósito con la cobranza aunque la cía venga sin padding', () => {
+    const inputs = buildInputs();
+    const movements = buildCanonicalProjection({
+      ...inputs,
+      bankStatements: [bankStatement({
+        ...inputs.bankStatements[0], cia: '11',
+        movimientos: inputs.bankStatements[0].movimientos.map((m) => ({ ...m, cia: '11' })),
+      })],
+      cobranzaRecords: inputs.cobranzaRecords.map((r) => ({ ...r, cia: '00011' })),
+      abonoEnrichments: [],
+    }).movements;
+    const tresM = movements
+      .filter((m) => /3M MEXICO/i.test(m.counterpartyName ?? ''))
+      .reduce((s, m) => s + m.projectedAmount, 0);
+    // Sin cruces, el pool es todo el depósito y 3M pesa lo suyo sobre el total.
+    expect(tresM).toBeGreaterThan(0);
+    expect(tresM).toBeCloseTo((TRES_M + OTRO) * (TRES_M / (TRES_M + OTRO)), 2);
+  });
+});
+
 function client(patch: Partial<Client> = {}): Client {
   const monthlyBilling = Array.from({ length: 12 }, () => 0);
   monthlyBilling[4] = 1000;
