@@ -375,6 +375,30 @@ export default function FinancialPlanningDashboard(props: Props) {
   return <PlanningDashboardInner {...props} today={today} source={source} />;
 }
 
+/**
+ * Llave de la corrida persistida de un escenario de Planeación.
+ *
+ * Vive en UNA función porque se arma en DOS lugares —el precalentado
+ * (`preloadPlanningScenarioRuns`) y el dashboard interno— y basta con que uno
+ * omita un tramo para que el precalentado quede inerte: lee una llave que
+ * nadie pide después. Eso es exactamente lo que pasaba desde que el lado
+ * interno ganó `trend:` y `g=` sin que el precalentado los agregara — la
+ * corrida guardada en IndexedDB nunca se encontraba y Planeación la
+ * recomputaba en cada entrada.
+ */
+function planningRunCacheKey(args: {
+  scenarioId: string;
+  includeManualEntries: boolean;
+  sharedRunInputsKey: string;
+  customKey: string;
+  overrideKey: string;
+  trendTag: string;
+  granularity: ProjectionGranularity;
+}): string {
+  const manual = args.includeManualEntries ? 'm1' : 'm0';
+  return `planning-run:${args.scenarioId}:${manual}|${args.sharedRunInputsKey}|${args.customKey}|${args.overrideKey}|${args.trendTag}|g=${args.granularity}`;
+}
+
 async function preloadPlanningScenarioRuns(input: {
   source: FinancialProjectionSourceData;
   props: Props;
@@ -452,7 +476,20 @@ async function preloadPlanningScenarioRuns(input: {
     const scenarioOverrides = bootstrap.cellOverrides.filter((override) => override.scenarioId === scenario.id);
     const customKey = fingerprintArray(scenarioCustomRows, (row) => row.id + ':' + (row.updatedAt ?? ''));
     const overrideKey = fingerprintArray(scenarioOverrides, (override) => `${override.conceptKey}@${override.bucketKey}:${override.value}:${override.updatedAt ?? ''}`);
-    const cacheKey = `planning-run:${scenario.id}:m1|${sharedRunInputsKey}|${customKey}|${overrideKey}`;
+    // Precalentado siempre con la granularidad default (mensual) y tendencia
+    // OFF: es el estado en el que abre Planeación. Base siempre corre con
+    // `trend:0` (el top-off es no-base), así que su llave empata exacto; la
+    // Aprobada corre con `trend:1` y se recomputa — mismo contrato que el
+    // warmup de Proyección.
+    const cacheKey = planningRunCacheKey({
+      scenarioId: scenario.id,
+      includeManualEntries: true,
+      sharedRunInputsKey,
+      customKey,
+      overrideKey,
+      trendTag: 'trend:0',
+      granularity: 'monthly',
+    });
     const cached = await loadScenarioRunFromPersistentCache(cacheKey);
     if (cached) primeProjectionRunCache(cacheKey, cached);
   }));
@@ -782,7 +819,15 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
     // pipelineKey: el top-off vive en el pipeline (mismo contrato que Proyección).
     const trendOn = trendAvailable && scenario?.kind !== 'BASE';
     const trendTag = `trend:${trendOn ? 1 : 0}`;
-    const cacheKey = `planning-run:${scenarioId}:${includeManualEntries ? 'm1' : 'm0'}|${sharedRunInputsKey}|${customKey}|${overrideKey}|${trendTag}|g=${granularity}`;
+    const cacheKey = planningRunCacheKey({
+      scenarioId,
+      includeManualEntries,
+      sharedRunInputsKey,
+      customKey,
+      overrideKey,
+      trendTag,
+      granularity,
+    });
     // pipelineKey omits granularity so flips reuse the worker's pipeline cache.
     const pipelineKey = `planning-pipeline:${scenarioId}:${includeManualEntries ? 'm1' : 'm0'}|${sharedRunInputsKey}|${customKey}|${overrideKey}|${trendTag}`;
     const persistRun = (scenarioId === baseScenario.id || scenarioId === approvedScenario.id)

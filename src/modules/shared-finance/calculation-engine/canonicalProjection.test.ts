@@ -1705,6 +1705,32 @@ describe('prorateCitiConcentradoraByClient — atribución exacta y no-dilución
     expect(citiInflow(movements).reduce((s, m) => s + m.projectedAmount, 0)).toBeCloseTo(500_000, 2);
   });
 
+  it('reporta el periodo como sin desglosar cuando queda pool sin repartir, aunque un depósito sí se haya identificado', () => {
+    // El diagnóstico es lo único que avisa de un depósito que se quedó sin
+    // atribuir: si un match 1:1 marcara el periodo como 'exacto', el resto del
+    // pool volvería a fallar en silencio — el modo de falla que costó meses
+    // detectar en el caso 3M.
+    const movements = buildCanonicalProjection(inputs({
+      deposits: [
+        { importe: TRES_M, fecha: '2026-02-12', referencia: 'REF-3M' },
+        { importe: 1_000_000, fecha: '2026-02-18', referencia: 'REF-X' },
+      ],
+      cobranza: [
+        { noCliente: '103246', nombreCliente: '3M MEXICO S.A. DE C.V.', importe: TRES_M, fechaCobro: '2026-02-12' },
+        { noCliente: 'C-A', nombreCliente: 'CLIENTE A SA DE CV', importe: 50_000_000, fechaCobro: '2026-02-11' },
+      ],
+    })).movements;
+    expect(forClient(movements, /3M MEXICO/i)).toBeCloseTo(TRES_M, 2);
+    // El millón no corresponde a la cobranza pendiente (ratio 0.02): se queda sin desglosar.
+    expect(forClient(movements, /CLIENTE A/i)).toBe(0);
+    const diagnostics = (window as unknown as { __midas__?: { citiProrrateo?: { ym: string; mode: string; matchedDeposits: number; leftoverPool: number }[] } })
+      .__midas__?.citiProrrateo ?? [];
+    const feb = diagnostics.find((d) => d.ym === '2026-02');
+    expect(feb?.matchedDeposits).toBe(1);
+    expect(feb?.leftoverPool).toBeCloseTo(1_000_000, 2);
+    expect(feb?.mode).toBe('sin-desglosar');
+  });
+
   it('identifica varios depósitos del mismo mes, cada uno con su cliente y su fecha', () => {
     const movements = buildCanonicalProjection(inputs({
       deposits: [

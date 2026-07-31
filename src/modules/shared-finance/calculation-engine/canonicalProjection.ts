@@ -447,7 +447,12 @@ function prorateCitiConcentradoraByClient(
     let leftoverExpected = 0;
     for (const info of clientWeights.values()) leftoverExpected += info.amount;
     const ratio = leftoverExpected > 0 ? leftoverPool / leftoverExpected : null;
-    let mode: CitiAttributionMode = matchedDeposits > 0 ? 'exacto' : 'sin-desglosar';
+    // Arranca en 'sin-desglosar' y sólo sube si el remanente SE reparte. Un
+    // periodo con matches 1:1 pero con pool sobrante NO es 'exacto': parte del
+    // depósito se quedó sin atribuir, que es justo lo que el aviso tiene que
+    // levantar. `matchedDeposits`/`matchedByAmount` conservan lo que sí se
+    // atribuyó, así que no se pierde información.
+    let mode: CitiAttributionMode = 'sin-desglosar';
     const excess = leftoverPool - leftoverExpected;
 
     if (leftoverPool > 0 && leftoverExpected > 0) {
@@ -504,6 +509,8 @@ function prorateCitiConcentradoraByClient(
       // Fuera del piso: NO se reparte. Los depósitos del remanente se quedan
       // como fila sin desglosar (dato incompleto, nunca dato falso).
     }
+    // Sin remanente que repartir, el pool quedó atribuido 1:1 al centavo.
+    if (mode === 'sin-desglosar' && matchedDeposits > 0 && !(leftoverPool > 0)) mode = 'exacto';
 
     diagnostics.push({
       cia: group.cia,
@@ -540,7 +547,7 @@ function publishCitiAttributionDiagnostics(diagnostics: CitiAttributionDiagnosti
   const undistributed = diagnostics.filter((d) => d.mode === 'sin-desglosar' && d.leftoverPool > 0);
   if (undistributed.length > 0) {
     console.warn(
-      `[citi-prorrateo] ${undistributed.length} periodo(s) sin desglosar por cliente: la cobranza sin atribuir no corresponde al depósito (ratio < ${CITI_MIN_PRORRATEO_RATIO}). Detalle: window.__midas__.citiProrrateo`,
+      `[citi-prorrateo] ${undistributed.length} periodo(s) con depósito sin desglosar por cliente: la cobranza sin atribuir no corresponde al depósito (no la hay, o el ratio quedó bajo ${CITI_MIN_PRORRATEO_RATIO}). Detalle: window.__midas__.citiProrrateo`,
       undistributed.map((d) => `${d.cia}/${d.ym} pool=${Math.round(d.leftoverPool)} cobranza=${Math.round(d.leftoverExpected)} ratio=${d.ratio === null ? 'n/a' : d.ratio.toFixed(4)}`),
     );
   }
