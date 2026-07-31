@@ -1750,6 +1750,133 @@ describe('prorateCitiConcentradoraByClient — atribución exacta y no-dilución
   });
 });
 
+// El depósito que SÍ cruzó al libro mayor con un tipo_docto de cobranza (RC)
+// llega al prorrateo como AR_COLLECTION SIN cliente — la conciliación va contra
+// el objeto 1010-1020, no contra la línea CXC. Tomar sólo `TRANSFER` como pool
+// dejaba fuera a esa población (la mayoritaria) sin sacar su cobranza del
+// denominador: los clientes del mes salían diluidos y, con el piso de ratio,
+// EN BLANCO. Cifras verificadas contra la BD (2026-07-31, cía 00011):
+//   · jde.Auxiliar_Contable objeto 1020 Ano 26 Periodo 2 tipo_docto RC → $184,627,055.90
+//   · jde.Cobranza_Citi Fecha_Pago 2026-02 → $198,822,157.27 (1039 facturas)
+//   · 3M MEXICO (No_Cliente 103246) 2026-02 → 1 factura, $221,201.53
+//   · jde.Bancos cuenta 06780038436 2026-02-12 ABONO $221,201.53 ("3M MEXICO SA DE CV")
+describe('prorateCitiConcentradoraByClient — depósito tipificado como cobranza por el mayor', () => {
+  const CONCENTRADORA = '06780038436';
+  const CIA = '00011';
+  const TRES_M = 221_201.53;
+  const RESTO = 5_000_000;
+  const asOfDate = '2026-03-01';
+
+  /** Línea del mayor que cruza el ABONO con tipo_docto RC (→ AR_COLLECTION). */
+  function reconLine(movement: ReturnType<typeof bankMovement>, importe: number): AuxiliarReconLine {
+    return {
+      glKey: `${CIA}::aux::RC::${movement.referencia}`,
+      cia: CIA,
+      cuentaBanco: CONCENTRADORA,
+      nombreCuenta: 'BANAMEX 67838436',
+      cuentaContable: '11.1020.0011302',
+      cuentaObjeto: '1020',
+      idCuenta: '11302',
+      flujo: 'ingreso',
+      esCaja: false,
+      fechaContable: movement.fechaOperacion,
+      importe,
+      moneda: 'MXN',
+      tipoDocto: 'RC',
+      tipoDoctoDesc: 'Cobros - CC',
+      estatusConciliado: 'R',
+      matchTier: 'exact',
+      confidence: 1,
+      bankMovementKey: bankMovementKey(movement),
+      source: { kind: 'otro', cia: CIA, ref: '', contraparte: '' },
+    };
+  }
+
+  function inputs() {
+    const abono3M = bankMovement({
+      cia: CIA, banco: 'BANAMEX', cuenta: CONCENTRADORA, tipoMovimiento: 'ABONO',
+      importe: TRES_M, fechaOperacion: '2026-02-12', referencia: 'REF-3M',
+      concepto: '102 3M MEXICO SA DE CV',
+    });
+    const abonoResto = bankMovement({
+      cia: CIA, banco: 'BANAMEX', cuenta: CONCENTRADORA, tipoMovimiento: 'ABONO',
+      importe: RESTO, fechaOperacion: '2026-02-20', referencia: 'REF-RESTO',
+      concepto: 'ORDEN DE ABONO',
+    });
+    return {
+      companyCode: 'all',
+      bankStatements: [bankStatement({
+        cia: CIA, banco: 'BANAMEX', cuenta: CONCENTRADORA, saldoInicial: 0,
+        movimientos: [abono3M, abonoResto],
+      })],
+      abonoEnrichments: [],
+      // Ambos ABONOs cruzan al mayor como cobranza (RC) pero SIN cliente.
+      auxiliarReconLines: [reconLine(abono3M, TRES_M), reconLine(abonoResto, RESTO)],
+      cobranzaRecords: [
+        cobranzaRecord({
+          cia: CIA, noCliente: '103246', nombreCliente: '3M MEXICO S.A. DE C.V.',
+          noFactura: 'RI-301306', fechaFactura: '2025-12-16', fechaCobro: '2026-02-12',
+          importeBrutoPesos: TRES_M,
+        }),
+        cobranzaRecord({
+          cia: CIA, noCliente: 'C-B', nombreCliente: 'CLIENTE B SA DE CV',
+          noFactura: 'F-B', fechaFactura: '2025-12-20', fechaCobro: '2026-02-18',
+          importeBrutoPesos: RESTO,
+        }),
+      ],
+      clients: [], providers: [], cxpRecords: [],
+      assumptions, budget: null, startingBalance: undefined, asOfDate,
+    };
+  }
+
+  const citiFeb = (movements: ReturnType<typeof buildCanonicalProjection>['movements']) =>
+    movements.filter((m) => m.type === 'INFLOW'
+      && m.subcategory === 'Clientes Citi'
+      && (m.actualDate ?? m.projectedDate ?? '').startsWith('2026-02'));
+
+  const forClient = (movements: ReturnType<typeof buildCanonicalProjection>['movements'], name: RegExp) =>
+    citiFeb(movements).filter((m) => name.test(m.counterpartyName ?? ''))
+      .reduce((sum, m) => sum + m.projectedAmount, 0);
+
+  it('desglosa por cliente el depósito que el mayor tipificó como cobranza (RC) sin identificar al cliente', () => {
+    const movements = buildCanonicalProjection(inputs()).movements;
+    // El caso pineado: 3M cobra $221,201.53 y eso es lo que debe verse.
+    expect(forClient(movements, /3M MEXICO/i)).toBeCloseTo(TRES_M, 2);
+    expect(forClient(movements, /CLIENTE B/i)).toBeCloseTo(RESTO, 2);
+    // Y ya no queda el montón sin desglosar a nombre de la cuenta bancaria.
+    expect(forClient(movements, /CONCENTRADORA/i)).toBe(0);
+  });
+
+  it('conserva exacto el total bancario del mes al desglosarlo', () => {
+    const movements = buildCanonicalProjection(inputs()).movements;
+    expect(citiFeb(movements).reduce((s, m) => s + m.projectedAmount, 0))
+      .toBeCloseTo(TRES_M + RESTO, 2);
+  });
+
+  it('no re-prorratea el depósito que YA tiene cliente por cruce banco↔factura (sin doble conteo)', () => {
+    const base = inputs();
+    const abonoCruzado = base.bankStatements[0].movimientos[0];
+    const movements = buildCanonicalProjection({
+      ...base,
+      // El ABONO de 3M cruza a SU factura: llega como AR_COLLECTION CON cliente.
+      abonoEnrichments: [{
+        movementKey: bankMovementKey(abonoCruzado),
+        status: 'factura-cobrada' as const,
+        facturas: [{
+          cia: CIA, noFactura: 'RI-301306', noCliente: '103246',
+          nombreCliente: '3M MEXICO S.A. DE C.V.', importeBruto: TRES_M,
+        }],
+        catalogClientId: '103246',
+        catalogClientName: '3M MEXICO S.A. DE C.V.',
+      }],
+    }).movements;
+    // Se acredita UNA vez: el cruce directo, no el cruce + una porción del reparto.
+    expect(forClient(movements, /3M MEXICO/i)).toBeCloseTo(TRES_M, 2);
+    expect(citiFeb(movements).reduce((s, m) => s + m.projectedAmount, 0))
+      .toBeCloseTo(TRES_M + RESTO, 2);
+  });
+});
+
 function client(patch: Partial<Client> = {}): Client {
   const monthlyBilling = Array.from({ length: 12 }, () => 0);
   monthlyBilling[4] = 1000;

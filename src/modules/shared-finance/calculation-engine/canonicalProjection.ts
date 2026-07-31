@@ -199,6 +199,17 @@ interface CitiAttributionDiagnostic {
  * 1010-1020, sin la línea CXC), así que no se puede amarrar 1:1 a un cliente.
  * El detalle por cliente SÍ vive en la cobranza JDE (`fechaCobro`, `noCliente`).
  *
+ * EL POOL SON LOS DEPÓSITOS SIN DUEÑO, LOS DESCRIBA COMO LOS DESCRIBA EL LIBRO
+ * MAYOR (`isUnattributedDeposit`). Antes el pool era sólo `TRANSFER`, y la
+ * categorización por `tipo_docto` (RC → AR_COLLECTION, catálogo
+ * `jdeDocTypeFlowCatalog`) sacaba del pool a todo depósito cruzado al mayor sin
+ * quitar su cobranza del denominador: en (00011, 2026-02) el pool caía a
+ * ~$118.6k contra ~$198.8M de cobranza (ratio 0.0006) y 3M MEXICO salía en
+ * $220 con el reparto proporcional viejo, o —tras el piso de ratio— en blanco
+ * junto con TODOS los clientes del mes. Dos universos distintos, un nivel más
+ * arriba de donde miró el PR #239. Verificado contra la BD (2026-07-31):
+ * `Auxiliar_Contable` cia 00011 objeto 1020 Ano 26 Periodo 2 → RC $184.6M.
+ *
  * La atribución va en TRES pasos, del más exacto al más aproximado. El total
  * mensual del banco se conserva EXACTO en todos ellos — es la verdad del
  * efectivo; sólo cambia a quién se le atribuye. La cobranza se usa como
@@ -234,11 +245,31 @@ function prorateCitiConcentradoraByClient(
   // (mantenimiento 2026-07-21); barato blindarlo en lógica de dinero.
   const groupKeyOf = (m: FinancialMovement): string =>
     `${normalizeCia(m.companyId ?? '')}::${(m.actualDate ?? m.projectedDate ?? '').slice(0, 7)}`;
+  // Qué es "un depósito a la concentradora todavía sin dueño". Son DOS formas,
+  // y tomar sólo la primera fue la causa raíz del caso 3M (ver el bloque de
+  // arriba):
+  //
+  //   • `TRANSFER` — el ABONO no cruzó a nada.
+  //   • `AR_COLLECTION` SIN `counterpartyId` — el ABONO sí cruzó al libro mayor
+  //     y su `tipo_docto` (RC/RI/RK… → cobranza) lo tipificó como AR_COLLECTION
+  //     en `historicalReconciledEngine`, pero ese cruce NO identifica al
+  //     CLIENTE: la conciliación va contra el objeto 1010-1020, sin la línea
+  //     CXC. Sigue siendo un depósito agrupado sin dueño — exactamente la
+  //     población que este prorrateo existe para desglosar.
+  //
+  // Un `AR_COLLECTION` CON `counterpartyId` (cruce banco↔factura) ya tiene
+  // cliente: queda fuera del pool y se descuenta del peso más abajo. Ésa es la
+  // línea que separa los dos universos y no se puede mover sin doble contar.
+  const isUnattributedDeposit = (m: FinancialMovement): boolean =>
+    m.category === 'TRANSFER'
+    || (m.category === 'AR_COLLECTION' && !m.counterpartyId);
   const isTarget = (m: FinancialMovement): boolean =>
     m.type === 'INFLOW'
     && m.status === 'REAL'
-    && m.category === 'TRANSFER'
+    && isUnattributedDeposit(m)
     && m.subcategory === INCOME_SUBCAT_CITI
+    // Las líneas sintéticas del propio prorrateo no traen `bankAccountId`, así
+    // que nunca se re-procesan aunque este predicado acepte AR_COLLECTION.
     && findBankAccount(m.bankAccountId)?.subRole === CITI_CLIENT_SUBROLE;
 
   const targets = movements.filter(isTarget);
