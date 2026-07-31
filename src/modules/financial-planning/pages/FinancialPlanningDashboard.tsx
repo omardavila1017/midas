@@ -44,6 +44,7 @@ import {
   PLANNING_DEFAULT_GRANULARITY,
   planningRunCacheKey,
   planningSharedRunInputsKey,
+  planningWindowFor,
 } from '../services/planningRunCacheKey';
 import { FirstSimulationNudge } from '../components/FirstSimulationNudge';
 import { MovementPickerModal } from '../components/MovementPickerModal';
@@ -54,7 +55,6 @@ import { onMemoryPressure } from '../../../services/runtimeGuardian';
 import { downloadFile, toCSV } from '../../../utils/export';
 import SourceInfo from '../../../components/ui/SourceInfo';
 import { attributeMovementId, sourceCsvFields } from '../../../domain/sourceAttribution';
-import { projectionWindowFor } from '../../financial-projection/services/projectionWindow';
 import { useScenarioRunWorker } from '../../shared-finance/hooks/useScenarioRunWorker';
 import { CellDetailPopover, type CellDetailData } from '../components/CellDetailPopover';
 import { SpreadsheetGrid } from '../components/spreadsheet/SpreadsheetGrid';
@@ -413,9 +413,9 @@ async function preloadPlanningScenarioRuns(input: {
   const approvedScenario = bootstrap.scenarios.find((scenario) => scenario.id === APPROVED_SCENARIO_ID && scenario.kind === 'APPROVED' && !scenario.archivedAt)
     ?? bootstrap.scenarios.find((scenario) => scenario.kind === 'APPROVED' && !scenario.archivedAt)
     ?? baseScenario;
-  const y = today.slice(0, 4);
-  const yearStart = `${y}-01-01`;
-  const yearEnd = `${y}-12-31`;
+  // Ventana desde la única fuente: el precalentado la derivaba a mano y el
+  // dashboard en su memo — si divergen, el warm-start queda inerte.
+  const { yearStart, yearEnd } = planningWindowFor(today, PLANNING_DEFAULT_GRANULARITY);
   const taxStore = loadTaxStore(defaultTaxStore());
   const initialCash = calculateInitialCash(props.bankStatements, props.startingBalance, { companyCode: props.companyCode });
   const supplierInitialCash = calculateCurrentBankCash(props.bankStatements, props.companyCode, initialCash);
@@ -517,24 +517,15 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
     },
     [granularity],
   );
-  // Window depends on granularity. Monthly = año en curso (Ene 1 → Dic 31):
-  // Planeación debe arrancar en enero y son solo 12 buckets. Weekly/daily over
-  // a full year = up to 365 daily columns × N rows × synchronous per-scenario
-  // projection runs with no grid virtualization → renderer OOM (Chrome
-  // "Aw Snap" code 5). Bound the sub-month views to a near window instead.
-  const { yearStart, yearEnd } = useMemo(() => {
-    const y = today.slice(0, 4);
-    if (granularity === 'monthly') {
-      // Planeación monthly = año natural completo (Ene 1 → Dic 31, 12 buckets).
-      // Difiere a propósito del monthly de Proyección (today+364).
-      return { yearStart: `${y}-01-01`, yearEnd: `${y}-12-31` };
-    }
-    // Sub-month: comparte la ventana acotada con Proyección
-    // (projectionWindowFor) para que AMBOS dashboards usen la misma vista —
-    // día = "lo que lleva el mes actual + 2 meses adelante". Mantiene los dos
-    // en sync (CLAUDE.md) y respeta el spec de producto en una sola fuente.
-    return projectionWindowFor(today, granularity);
-  }, [today, granularity]);
+  // Ventana por granularidad desde la única fuente (`planningWindowFor`): el
+  // precalentado arma la MISMA ventana para la granularidad default, así que
+  // derivarla dos veces por concatenación era el tramo de llave que seguía
+  // pudiendo desincronizarse. La regla (mensual = año natural, sub-mes =
+  // ventana acotada de Proyección) está documentada ahí.
+  const { yearStart, yearEnd } = useMemo(
+    () => planningWindowFor(today, granularity),
+    [today, granularity],
+  );
 
   const sourceBaseScenario = useMemo(
     () => source.scenarios.find((s) => s.kind === 'BASE') ?? source.scenarios[0],
@@ -779,7 +770,12 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
       trendTag,
       granularity,
     });
-    // pipelineKey omits granularity so flips reuse the worker's pipeline cache.
+    // pipelineKey omite el tramo `g=` porque el pipeline (pre-bucketing) no
+    // depende de la granularidad en sí. NO esperes reuso al cambiar de
+    // granularidad: `sharedRunInputsKey` ya lleva la granularidad Y su ventana
+    // (`planningWindowFor` da un rango distinto por cada una), así que el
+    // pipeline se recomputa — correcto, la ventana cambió los movimientos en
+    // scope. El omitir `g=` sólo evita una segunda entrada redundante.
     const pipelineKey = `planning-pipeline:${scenarioId}:${includeManualEntries ? 'm1' : 'm0'}|${sharedRunInputsKey}|${customKey}|${overrideKey}|${trendTag}`;
     const persistRun = (scenarioId === baseScenario.id || scenarioId === approvedScenario.id)
       ? (key: string, run: PlanningScenarioRun) => saveScenarioRunToPersistentCache(key, run)

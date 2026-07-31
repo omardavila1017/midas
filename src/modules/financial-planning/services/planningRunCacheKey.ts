@@ -4,6 +4,7 @@ import type { Provider } from '../../../domain/types';
 import type { BankAccountStatement } from '../../../services/jde';
 import type { CobranzaPayment } from '../../../services/jdeTypes';
 import { fingerprintArray } from '../../financial-projection/services/projectionCache';
+import { projectionWindowFor } from '../../financial-projection/services/projectionWindow';
 import { auxiliarTaxCoverageFingerprint, cxpPaymentCoverageFingerprint, type TaxStore } from '../../taxes/services/taxModuleService';
 import type {
   FinancialAdjustment,
@@ -33,6 +34,34 @@ import type {
  * arma la llave. Si divergen, el precalentado vuelve a quedar inerte.
  */
 export const PLANNING_DEFAULT_GRANULARITY: ProjectionGranularity = 'monthly';
+
+/**
+ * Ventana de Planeación por granularidad. Es DOS tramos más de la llave
+ * compartida (`yearStart`/`yearEnd`), así que vive aquí por el mismo motivo que
+ * `PLANNING_DEFAULT_GRANULARITY`: el precalentado la derivaba por su cuenta
+ * (`${y}-01-01`/`${y}-12-31` hardcodeado) mientras el dashboard la derivaba en
+ * su memo. Dos derivaciones de un valor que DEBE coincidir = el mismo modo de
+ * falla que PRs #173→#245 vinieron cerrando tramo por tramo: si la regla de la
+ * ventana mensual cambia de un lado, el warm-start desde IndexedDB queda
+ * inerte otra vez (sin error, sin warning, sin test rojo).
+ *
+ * Mensual = año natural completo (Ene 1 → Dic 31, 12 buckets): Planeación debe
+ * arrancar en enero. Difiere A PROPÓSITO del mensual de Proyección
+ * (`today+364`). Sub-mes comparte la ventana acotada de Proyección para que
+ * ambos dashboards usen la misma vista y el conteo de buckets se mantenga
+ * chico (weekly/daily sobre el año entero = ~365-730 columnas → OOM del
+ * renderer, "Aw Snap code 5").
+ */
+export function planningWindowFor(
+  today: string,
+  granularity: ProjectionGranularity,
+): { yearStart: string; yearEnd: string } {
+  if (granularity === 'monthly') {
+    const y = today.slice(0, 4);
+    return { yearStart: `${y}-01-01`, yearEnd: `${y}-12-31` };
+  }
+  return projectionWindowFor(today, granularity);
+}
 
 export interface PlanningSharedRunInputs {
   movements: readonly FinancialMovement[];
