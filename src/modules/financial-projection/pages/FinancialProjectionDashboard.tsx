@@ -97,6 +97,7 @@ import {
 import KpiCard from '../../../components/ui/KpiCard';
 import PageHeader from '../../../components/ui/PageHeader';
 import DashboardLoadingShell from '../../shared-finance/components/DashboardLoadingShell';
+import StaleDataBadge from '../../shared-finance/components/StaleDataBadge';
 import EmptyState from '../../shared-finance/components/EmptyState';
 import { useNavigateToTab } from '../../shared-finance/components/NavigationContext';
 import { useScenarioSelection } from '../../shared-finance/components/ScenarioSelectionContext';
@@ -236,7 +237,25 @@ export default function FinancialProjectionDashboard(props: Props) {
   const [sourceState, setSourceState] = useState<{ key: string; data: FinancialProjectionSourceData } | null>(() =>
     cachedSource ? { key: sourceKey, data: cachedSource } : null,
   );
-  const source = hasProjectionInputs && sourceState?.key === sourceKey ? sourceState.data : null;
+  // INVARIANTE DE ESTABILIDAD (2026-07-31): una vez que el tablero pintó cifras
+  // reales NUNCA regresa al warm-up shell porque llegó data de fondo.
+  //
+  // `sourceKey` es huella de TODOS los inputs (bancos, cxp, cobranza, rol,
+  // nómina…). Cualquier ola posterior al boot —delta de bancos, backfill de un
+  // año histórico, revalidación de compras/pagos— cambia la identidad del array
+  // en AppCore y por lo tanto `sourceKey`. Con el `null` anterior, ese instante
+  // desmontaba el dashboard COMPLETO y lo sustituía por el shell de carga ~1s
+  // después de que el usuario ya veía todos los números, durante los 12s de
+  // debounce MÁS el rebuild del canónico (~20s) — y se repetía con cada ola.
+  // Ahora conservamos el último source bueno y lo seguimos mostrando mientras
+  // el nuevo se construye; el swap ocurre cuando el nuevo está listo.
+  const lastGoodSourceRef = useRef<FinancialProjectionSourceData | null>(null);
+  const freshSource = hasProjectionInputs && sourceState?.key === sourceKey ? sourceState.data : null;
+  if (freshSource) lastGoodSourceRef.current = freshSource;
+  // Sin inputs NO hay fallback: un vacío legítimo debe seguir viéndose vacío.
+  const source = freshSource ?? (hasProjectionInputs ? lastGoodSourceRef.current : null);
+  // Cifras del build previo mientras el nuevo se computa (se avisa en la UI).
+  const sourceIsStale = freshSource === null && source !== null;
 
   // If we don't have the source cached, schedule the canonical build for
   // *after* the first paint so the user sees the chrome immediately.
@@ -266,6 +285,15 @@ export default function FinancialProjectionDashboard(props: Props) {
       setSourceState(null);
       return;
     }
+    // Ya tenemos el source construido para ESTA llave. Los deps de este effect
+    // son IDENTIDADES (`cacheProbeInput`, `cachedSource`), y hay recomputes de
+    // AppCore que mueven identidad sin mover la llave — la derivación idle de
+    // providers, el overlay de clientes de cobranza, el `cxpCoverage` del
+    // worker de pagos. Sin este corte cada uno reiniciaba el debounce completo
+    // de 12s y re-leía el source de IDB para terminar con el MISMO resultado
+    // (misma llave ⇒ mismo resultado es el contrato del cache), moviendo
+    // además la identidad de `source` → re-preload de los runs de escenario.
+    if (sourceState?.key === sourceKey) return;
     if (props.isActive === false && !cachedSource) return;
     if (cachedSource) {
       setSourceState({ key: sourceKey, data: cachedSource });
@@ -353,7 +381,7 @@ export default function FinancialProjectionDashboard(props: Props) {
       // from Planning and useFinancialProjectionSource too. The `cancelled`
       // flag + jobId-filtered listener guarantee stale results no-op.
     };
-  }, [cachedSource, cacheProbeInput, props.isActive, sourceKey, hasProjectionInputs]);
+  }, [cachedSource, cacheProbeInput, props.isActive, sourceKey, hasProjectionInputs, sourceState?.key]);
 
   // Subscribe to shared source worker once; filter by the per-job input map
   // so we only react to jobs this dashboard posted.
@@ -431,7 +459,12 @@ export default function FinancialProjectionDashboard(props: Props) {
     return <ProjectionWarmupShell />;
   }
 
-  return <ProjectionDashboardInner {...props} today={today} source={source} />;
+  return (
+    <>
+      {sourceIsStale && <StaleDataBadge />}
+      <ProjectionDashboardInner {...props} today={today} source={source} />
+    </>
+  );
 }
 
 // Coalesce concurrent warmup calls. Boot waves (cxp/cobranza/compras/payroll
@@ -1040,14 +1073,42 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
     [buildRun, baseScenario.id, deferredGranularity],
   );
   const baseRunIsPlaceholder = baseRun.scenarioId !== baseScenario.id;
-  const activeRun = useMemo(
+  const rawActiveRun = useMemo(
     () => (activeScenarioId === baseScenario.id ? baseRun : buildRun(activeScenarioId, deferredGranularity)),
     [buildRun, activeScenarioId, baseScenario.id, baseRun, deferredGranularity],
   );
   // runCached may serve a cross-scenario placeholder (warmup-seeded Base run)
   // while the real scenario compute is in-flight. Detect it so we render a
   // loading state instead of showing Base data labeled as Approved/Draft.
+  //
+  // INVARIANTE DE ESTABILIDAD (2026-07-31): esa detección ocultaba TODO el
+  // cuerpo del tablero (KPIs, chart, tabla, alertas) detrás de "Cargando
+  // proyección de …". Como la llave del run incluye la huella de los inputs,
+  // una ola de datos posterior al boot provocaba un miss y, si el escenario
+  // activo no tenía stale propio, el fallback era el run de OTRO escenario →
+  // se vaciaba la pantalla ~1s después de que el usuario vio las cifras.
+  // Ahora retenemos el último run REAL por escenario: un miss degrada a datos
+  // del mismo escenario (nunca de otro), y el gate original sólo queda para el
+  // arranque en frío legítimo, donde nunca hubo un run real que mostrar.
+  const lastRealRunRef = useRef<Map<string, typeof rawActiveRun>>(new Map());
+  const rawIsPlaceholder = rawActiveRun.scenarioId !== activeScenarioId;
+  if (!rawIsPlaceholder) {
+    // Los runs son objetos gordos (movimientos post-pipeline). Tope alineado con
+    // MAX_ENTRIES de `projectionRunCache` para no pinear heap de más — el
+    // renderer ya tiene historial de OOM con datasets reales.
+    lastRealRunRef.current.delete(activeScenarioId);
+    lastRealRunRef.current.set(activeScenarioId, rawActiveRun);
+    while (lastRealRunRef.current.size > 4) {
+      const oldest = lastRealRunRef.current.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      lastRealRunRef.current.delete(oldest);
+    }
+  }
+  const retainedRun = lastRealRunRef.current.get(activeScenarioId);
+  const activeRun = rawIsPlaceholder && retainedRun ? retainedRun : rawActiveRun;
   const activeRunIsPlaceholder = activeRun.scenarioId !== activeScenarioId;
+  // Cifras del run previo del MISMO escenario mientras el nuevo se computa.
+  const activeRunIsRecomputing = rawIsPlaceholder && Boolean(retainedRun);
   // Signal the splash gate. Preferred path: a REAL per-scenario run (not the
   // cross-scenario placeholder) — the splash releases straight into real data.
   // Fallback: if the worker hasn't posted the real run within a short grace,
@@ -1241,6 +1302,8 @@ const commitQuickAdjustment = useCallback((movement: FinancialMovement, kind: 'S
           </div>
         </div>
       )}
+
+      {activeRunIsRecomputing && <StaleDataBadge label="Recalculando escenario…" />}
 
 {!activeRunIsPlaceholder && <>
       {/* Daily-scan KPIs rescatados del Dashboard: YTD del año en curso +

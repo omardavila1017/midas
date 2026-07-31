@@ -40,6 +40,40 @@ describe('<FinancialProjectionDashboard />', () => {
     await waitFor(() => expect(screen.getByText('Caja final')).toBeTruthy());
     expect(screen.getByText('Días en déficit')).toBeTruthy();
   });
+
+  // Regresión: "aparecieron todos los números pero no duraron ni un segundo".
+  // `sourceKey` es huella de CONTENIDO de todos los inputs, así que una ola de
+  // datos posterior al boot (delta de bancos, backfill, revalidación) la cambia.
+  // Antes, ese instante hacía `source = null` y el tablero completo se
+  // reemplazaba por `ProjectionWarmupShell` durante el debounce de 12s MÁS el
+  // rebuild del canónico. Ahora se conservan las cifras del build previo
+  // mientras el nuevo se computa.
+  it('mantiene las cifras en pantalla cuando llega una ola de datos nueva', async () => {
+    const view = renderDashboard();
+    await flushProjectionWarmup();
+    await waitFor(() => expect(screen.getByText('Caja final')).toBeTruthy());
+
+    // Ola de fondo: basta mover la huella de los inputs (aquí el saldo inicial,
+    // el delta más barato) para que `sourceKey` cambie y `sourceState` deje de
+    // empatar — el mismo instante que antes vaciaba la pantalla.
+    view.rerender(
+      <FinancialProjectionDashboard
+        companyCode="all"
+        bankStatements={[bank()]}
+        clients={[client()]}
+        providers={[]}
+        cxpRecords={[]}
+        cobranzaRecords={[cobranza()]}
+        assumptions={assumptions}
+        budget={budget()}
+        startingBalance={10_001}
+      />,
+    );
+
+    // Sin await: éste es exactamente el instante en el que el tablero se vaciaba.
+    expect(screen.queryByLabelText('Calculando proyección')).toBeNull();
+    expect(screen.getByText('Caja final')).toBeTruthy();
+  });
 });
 
 function renderDashboard() {

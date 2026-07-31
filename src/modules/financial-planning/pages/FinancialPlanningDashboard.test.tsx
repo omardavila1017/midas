@@ -235,6 +235,50 @@ describe('<FinancialPlanningDashboard />', () => {
       ]));
     });
   });
+
+  // Regresión: "aparecieron todos los números pero no duraron ni un segundo".
+  // `bankStatements` (y providers/startingBalance/companyCode/bajioStatements)
+  // llegan de AppCore como arrays de estado crudos: CUALQUIER ola de fondo
+  // posterior al boot —delta de bancos, backfill de un año, revalidación—
+  // recommitea el array con identidad nueva. El preload effect bajaba
+  // `scenarioRunCacheReady` a false y todo el tablero ya pintado se sustituía
+  // por `PlanningWarmupShell`. Una vez pintado, el gate NO puede volver a
+  // cerrarse: el recálculo corre en segundo plano sobre las cifras visibles.
+  it('mantiene el tablero montado cuando una ola de datos cambia la identidad de las props', async () => {
+    const view = render(
+      <FinancialPlanningDashboard
+        companyCode="all"
+        bankStatements={[bank()]}
+        clients={[client()]}
+        providers={[]}
+        cxpRecords={[]}
+        assumptions={assumptions}
+        budget={budget()}
+        startingBalance={10_000}
+      />,
+    );
+
+    await flushPlanningWarmup();
+    expect(screen.getByText('Planeación Financiera')).toBeTruthy();
+
+    // Ola de fondo: mismo contenido, arrays nuevos (identidad distinta).
+    view.rerender(
+      <FinancialPlanningDashboard
+        companyCode="all"
+        bankStatements={[bank()]}
+        clients={[client()]}
+        providers={[]}
+        cxpRecords={[]}
+        assumptions={assumptions}
+        budget={budget()}
+        startingBalance={10_000}
+      />,
+    );
+
+    // Sin await: éste es exactamente el instante en el que el tablero se vaciaba.
+    expect(screen.queryByLabelText('Cargando planeación')).toBeNull();
+    expect(screen.getByText('Planeación Financiera')).toBeTruthy();
+  });
 });
 
 async function flushPlanningWarmup() {

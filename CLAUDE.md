@@ -814,6 +814,43 @@ Sólo tests — cero cambios de código de producción. 6 suites nuevas + extens
 
 Baseline re-verificado contra `main` `ba971ca`: typecheck limpio · 1551 pass / 12 skip / 158 files · build OK con el warning esperado. Único delta desde la corrida previa: PR #224 (`listPromesasPago`, 34 líneas) — auditado sin hallazgos (dedup+sort lexicográfico correcto sobre ISO `YYYY-MM-DD`; fechas centinela ya filtradas aguas arriba por `mapCobranza`; test cubre dedup/orden/undefined; el CSV de cruce es por-factura, sin agregación afectada). Sin correcciones de código; sólo se refrescó el baseline documentado. Los riesgos abiertos previos (#2 umbrales de fallo parcial, #3 `minLoadedDate`, #4 backfill incancelable, #6 retry por-slot, #7 catálogo compensaciones TLJ, `clientCompatible()` sin clave) siguen vigentes sin cambio de estado.
 
+## INVARIANTE DE ESTABILIDAD de los tableros financieros (2026-07-31)
+
+**Un tablero que ya pintó cifras reales NUNCA regresa a un estado de carga porque llegó data de fondo.** El recálculo corre detrás de las cifras visibles y las sustituye cuando está listo.
+
+Síntoma reportado (recurrente): *"aparecieron todos los números pero no se mantuvieron en la página por más de 1 segundo"* — el splash espera al 100%, así que el usuario ve el tablero completo y **~0.8–1.5 s después se vacía**, sin poder operar.
+
+**Causa raíz** — el splash sólo se suelta cuando TODOS los slots están `done`, así que por construcción la app abre con el tablero ya calculado. Justo después, cuatro recálculos de `AppCore` **gateados en `isBooted`** corren en timers de idle y cambian la IDENTIDAD/huella de los inputs de proyección:
+
+- `setProviders(derived)` — worker de derivación de proveedores, `scheduleIdleTask` 800 ms, gate literal `if (!isBooted) return` (`AppCore.tsx:2517/2537`).
+- `setClients(...)` — `recomputeClientCreditDaysFromCobranza`, 800 ms tras cerrar el slot de cobranza (`AppCore.tsx:2450`).
+- `setAuxiliarReconciliation(result)` — worker de conciliación, idle+1500 ms (`AppCore.tsx:1513`).
+- `setPaymentReconciliation(...)` — gate `if (!isBooted) return` + debounce + round-trip del worker (`AppCore.tsx:1284/1306`); su `cxpCoverage` es miembro de `projectionProps`.
+
+A eso se suman las olas normales post-boot (delta de bancos, backfill de años históricos, revalidación de compras/pagos). `accountableBankStatements` es el array de estado CRUDO, así que cualquier commit mueve su identidad.
+
+**Tres superficies vaciaban la pantalla** con ese disparador (las tres corregidas):
+
+1. **Proyección — `source` hard-null.** `const source = hasProjectionInputs && sourceState?.key === sourceKey ? sourceState.data : null` (`FinancialProjectionDashboard.tsx`). `sourceKey` es huella de CONTENIDO de todos los inputs; al moverse, `source` caía a `null` y el tablero completo se sustituía por `ProjectionWarmupShell` durante el **debounce de 12 s + el rebuild del canónico (~20 s)** — y se repetía con cada ola. Fix: `lastGoodSourceRef` conserva el último source bueno y se sigue mostrando mientras el nuevo se construye. Sin inputs (`!hasProjectionInputs`) NO hay fallback: un vacío legítimo sigue viéndose vacío.
+2. **Planeación — `setScenarioRunCacheReady(false)`.** El preload effect bajaba el gate en cada cambio de identidad de `bankStatements`/`providers`/`startingBalance`/`companyCode`/`bajioStatements` → `PlanningWarmupShell`. Fix: el gate sólo aplica al PRIMER arranque (`hasPaintedRef`); después el preload corre en segundo plano con el Inner montado.
+3. **Proyección — `activeRunIsPlaceholder` ocultaba TODO el cuerpo** (KPIs, chart, tabla, alertas) tras "Cargando proyección de …" y zeroeaba la caja final. Causa: `runCached` **no llamaba `rememberStale` en el camino rápido de cache**, así que un escenario servido siempre desde cache (lo normal — el warmup pre-siembra con `primeProjectionRunCache`) nunca tenía stale propio; al cambiar la llave, el fallback era el `universalPlaceholder` de OTRO escenario. Fix: `rememberStale` también en el cache-hit (`useScenarioRunWorker.ts`), cap de `lastResultByScenario` 2→4 (alineado con `MAX_ENTRIES`, base+activo+comparación), y `lastRealRunRef` (con el mismo tope de 4, los runs son objetos gordos) en el tablero para degradar a un run REAL del MISMO escenario. El gate original sobrevive sólo para el arranque en frío legítimo, que es su propósito (nunca mostrar data de Base etiquetada como Aprobado).
+
+Aviso al usuario: `StaleDataBadge` (`shared-finance/components/`) — chip discreto "Actualizando cifras…" / "Recalculando escenario…" en vez de vaciar la pantalla. Es informativo, no bloqueante.
+
+**Lado DISPARADOR (misma fecha, cambio aparte).** Las tres correcciones de arriba son del lado CONSUMIDOR (que el tablero no se vacíe). Encima se recortó el disparador para que el recálculo ni siquiera arranque cuando el contenido no cambió:
+
+- **Commit idempotente de `providers`** (`AppCore.tsx`, `applyResult` de la derivación). La derivación es determinista sobre los mismos records, así que las olas post-boot producían un catálogo IDÉNTICO cuyo commit igual movía la identidad del array — y `SOURCE_CACHE` (`financialProjectionService.ts`) está llaveado por **refId**, no por contenido, así que identidad nueva = miss = re-lectura de IDB o, en frío, debounce de 12 s + rebuild del canónico (~20 s). Ahora `setProviders(prev => sameByCacheKeyFields(prev, derived, PROVIDER_CACHE_KEY_FIELDS) ? prev : derived)`. `setProviderCatalogForCategoryLookup(derived)` sigue corriendo SIEMPRE (registro fuera de React que sí usa campos de categoría que la llave no hashea).
+- **Fuente única de campos: `src/modules/financial-projection/services/projectionCacheFingerprint.ts`** (módulo hoja, sin IDB — `AppCore` es eager). Exporta `PROVIDER_CACHE_KEY_FIELDS` / `CLIENT_CACHE_KEY_FIELDS` + `fields`/`primitive`/`stableStringify` + `sameByCacheKeyFields`. La llave del cache persistente consume las MISMAS listas, así que la comparación no puede desincronizarse de la llave (pinneado en `projectionCacheFingerprint.test.ts`: cada campo de la lista mueve la llave; los de fuera no). **Trade-off consciente:** un cambio que sólo toca campos fuera de la llave (`montoTotal2025`, `numPagos2025`, …) no re-commitea — no puede alterar ninguna cifra del motor.
+- **`clients` NO necesita guard:** `recomputeClientCreditDaysFromCobranza` ya devuelve **la misma referencia** cuando nada cambió (`collectionCalendarEngine.ts`), así que `setClients(prev => recompute(...))` ya hace bail-out en React. Envolverlo con la comparación de 7 campos sería **sólo pérdida**: dispararía únicamente cuando algo SÍ cambió y descartaría campos que la llave no hashea pero la UI sí usa (`creditDaysFromApi`/`frequencyFromApi` deshabilitan inputs, `commercialGroupName`).
+- **Amplificador cortado en Proyección:** el effect de rebuild depende de IDENTIDADES (`cacheProbeInput`, `cachedSource`), no de `sourceKey`, así que un recálculo que movía identidad sin mover la llave reiniciaba el debounce completo de 12 s y re-leía IDB para terminar con el MISMO resultado (moviendo además la identidad de `source` → re-preload de los runs). Ahora corta con `if (sourceState?.key === sourceKey) return;` — misma llave ⇒ mismo resultado es el contrato del cache. **El debounce de 12 s NO se tocó** (existe para coalescer las olas de boot; bajarlo revive el OOM del renderer documentado arriba).
+- **Pendiente (no corregido):** Planeación tiene el mismo effect sin ese corte (guarda `source` sin llave) — le queda una re-lectura de IDB por ola de identidad. No vacía pantalla (lo cubre `hasPaintedRef`).
+
+**Al tocar estos tableros:** cualquier gate nuevo que pueda devolver un shell de carga debe evaluarse sólo en el primer montaje, o degradar a los últimos datos buenos. Guardrails: `FinancialPlanningDashboard.test.tsx` y `FinancialProjectionDashboard.test.tsx` re-renderean con identidad/contenido de props nuevo y fallan si reaparece el shell.
+
+**Descartado por verificación adversarial** (no re-proponer sin evidencia nueva): la presión de memoria (`runtimeGuardian` 75%/90% → `clearProjectionRunCache`/`resetScenarioRunWorker`) NO produce este síntoma — `firePressure` tiene cooldown y el consumidor degrada a stale, no a vacío; y `tabDataPending` (`AppCore.tsx`) ya está guardado por `!datasetHasRecords[dataset]`.
+
+**Residual conocido (no corregido):** el `.catch` de `runCached` no dispara `setRunVersion`, así que un job rechazado por `resetScenarioRunWorker()` no agenda reintento explícito — las cifras retenidas se quedan hasta el siguiente render (que en esta app ocurre seguido). Se dejó así a propósito: bumpear ahí puede entrar en loop de reintentos contra un worker que falla de forma persistente.
+
 ## API client tuning
 
 `src/services/jdeClient.ts` (post 2026-05-14 retune):

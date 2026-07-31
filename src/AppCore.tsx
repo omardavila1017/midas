@@ -183,6 +183,7 @@ import {
 } from './services/storageHealthGuard';
 import { trackNavigation, onMemoryPressure, onMemoryEmergency } from './services/runtimeGuardian';
 import { clearProjectionSourceCache } from './modules/financial-projection/services/financialProjectionService';
+import { PROVIDER_CACHE_KEY_FIELDS, sameByCacheKeyFields } from './modules/financial-projection/services/projectionCacheFingerprint';
 import { clearProjectionRunCache } from './modules/financial-projection/services/projectionCache';
 import { resetScenarioRunWorker } from './modules/shared-finance/hooks/useScenarioRunWorker';
 
@@ -2534,9 +2535,29 @@ export default function App() {
     const jobId = nextProviderDerivationJobId();
     const applyResult = (derived: ReturnType<typeof deriveProvidersFromJde>) => {
       if (cancelled) return;
-      setProviders(derived);
+      // Commit IDEMPOTENTE (2026-07-31). La derivación es determinista sobre
+      // los mismos records, así que las olas post-boot (identidad nueva del
+      // array de records, contenido igual) producían un catálogo IDÉNTICO cuyo
+      // commit movía la identidad de `providers`. Eso basta para tirar todo el
+      // camino caliente aguas abajo: `SOURCE_CACHE` está llaveado por refId de
+      // los arrays (financialProjectionService), así que identidad nueva =
+      // miss = re-lectura de IDB o, en frío, debounce de 12 s + rebuild del
+      // canónico (~20 s) con los números ya pintados en pantalla. Ver
+      // "INVARIANTE DE ESTABILIDAD de los tableros financieros" en CLAUDE.md.
+      //
+      // Comparamos EXACTAMENTE los campos que hashea la llave del cache de
+      // proyección (misma lista, mismo módulo → no se pueden desincronizar).
+      // Trade-off consciente: un cambio que sólo toque campos FUERA de la
+      // llave (montoTotal2025, numPagos2025, frecuenciaHistorica…) no
+      // re-commitea el estado — no puede alterar ninguna cifra del motor y el
+      // siguiente cambio real lo re-sincroniza.
+      setProviders(prev => (
+        sameByCacheKeyFields(prev, derived, PROVIDER_CACHE_KEY_FIELDS) ? prev : derived
+      ));
       // Empuja al módulo de Planeación para que `bucketForMovement` resuelva
       // categoría sin tener que recibir providers por argumento en cada render.
+      // Va SIEMPRE (no depende del guard): es un registro fuera de React que
+      // sí consume los campos de categoría que la llave no hashea.
       setProviderCatalogForCategoryLookup(derived);
     };
     const cancelIdle = scheduleIdleTask(() => {

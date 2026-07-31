@@ -109,6 +109,7 @@ import { type ScenarioForecastRun } from '../services/scenarioForecastRun';
 import KpiCard from '../../../components/ui/KpiCard';
 import PageHeader from '../../../components/ui/PageHeader';
 import DashboardLoadingShell from '../../shared-finance/components/DashboardLoadingShell';
+import StaleDataBadge from '../../shared-finance/components/StaleDataBadge';
 import EmptyState from '../../shared-finance/components/EmptyState';
 import { useNavigateToTab } from '../../shared-finance/components/NavigationContext';
 import { useScenarioSelection } from '../../shared-finance/components/ScenarioSelectionContext';
@@ -312,20 +313,38 @@ export default function FinancialPlanningDashboard(props: Props) {
   // fields the preload actually consumes.
   const latestProps = useRef(props);
   latestProps.current = props;
+  // INVARIANTE DE ESTABILIDAD (2026-07-31): una vez que el tablero pintó cifras
+  // reales NUNCA regresa al warm-up shell porque llegó data de fondo.
+  //
+  // Las deps de abajo (bancos, proveedores, saldo inicial, cía, Bajío) cambian
+  // de IDENTIDAD con cada ola posterior al boot — `accountableBankStatements` es
+  // el array de estado crudo de AppCore, así que un delta de bancos, un backfill
+  // o una revalidación basta. Bajar `scenarioRunCacheReady` a `false` en ese
+  // momento reemplazaba TODO el tablero por `PlanningWarmupShell`: el usuario
+  // veía sus cifras desaparecer ~1s después de que aparecieron, y volvía a
+  // pasar con cada ola. El preload sigue corriendo en segundo plano; el Inner se
+  // queda montado y `useScenarioRunWorker` ya sirve stale-while-recompute hasta
+  // que el run nuevo entra. El gate sólo aplica al PRIMER arranque.
+  const hasPaintedRef = useRef(false);
+  const [refreshingAfterPaint, setRefreshingAfterPaint] = useState(false);
   useEffect(() => {
     if (!source) {
-      setScenarioRunCacheReady(false);
+      if (!hasPaintedRef.current) setScenarioRunCacheReady(false);
       return;
     }
     let cancelled = false;
-    setScenarioRunCacheReady(false);
+    if (hasPaintedRef.current) setRefreshingAfterPaint(true);
+    else setScenarioRunCacheReady(false);
     void (async () => {
       await preloadPlanningScenarioRuns({
         source,
         props: latestProps.current,
         today,
       });
-      if (!cancelled) setScenarioRunCacheReady(true);
+      if (!cancelled) {
+        setScenarioRunCacheReady(true);
+        setRefreshingAfterPaint(false);
+      }
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -375,7 +394,16 @@ export default function FinancialPlanningDashboard(props: Props) {
     return <PlanningWarmupShell />;
   }
 
-  return <PlanningDashboardInner {...props} today={today} source={source} />;
+  // A partir de aquí el tablero ya pintó: el gate de arriba no puede volver a
+  // cerrarse por una ola de datos de fondo (ver INVARIANTE DE ESTABILIDAD).
+  hasPaintedRef.current = true;
+
+  return (
+    <>
+      {refreshingAfterPaint && <StaleDataBadge />}
+      <PlanningDashboardInner {...props} today={today} source={source} />
+    </>
+  );
 }
 
 async function preloadPlanningScenarioRuns(input: {

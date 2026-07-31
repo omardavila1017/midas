@@ -5,6 +5,15 @@ import type {
 import type { ScenarioForecastRun } from '../../financial-planning/services/scenarioForecastRun';
 import { todayISO } from '../../../formatters';
 import { BUILD_ID } from '../../../config/buildId';
+// Las listas de campos + la serialización viven en un módulo hoja para que los
+// guards de idempotencia de AppCore comparen EXACTAMENTE lo que la llave hashea.
+import {
+  CLIENT_CACHE_KEY_FIELDS,
+  PROVIDER_CACHE_KEY_FIELDS,
+  fields,
+  primitive,
+  stableStringify,
+} from './projectionCacheFingerprint';
 
 const DB_NAME = 'midas-financial-projection-cache';
 const DB_VERSION = 1;
@@ -144,18 +153,11 @@ export function projectionSourcePersistentCacheKey(input: FinancialProjectionSou
     `assumptions=${stableStringify(input.assumptions)}`,
     `budget=${budgetFingerprint(input.budget)}`,
     `banks=${fingerprintArray(input.bankStatements, bankStatementFingerprint)}`,
-    // Client fields that drive projection. `updatedAt` doesn't exist on
-    // Client (was always undefined → no signal). `frequency`, `paymentDayName`
-    // and `commercialGroupId` are patched at runtime by
-    // recomputeClientCreditDaysFromCobranza (JDE 2026-05-19 overlay) — without
-    // them in the fingerprint the persistent cache returned stale projections
-    // after the cobranza overlay updated cadence / payment-day-name.
-    `clients=${fingerprintArray(input.clients, (item) => fields(item, ['id', 'name', 'paymentDay', 'paymentDayName', 'creditDays', 'frequency', 'commercialGroupId']))}`,
-    // `montoPromedioPago`/`gastoMinimoMensual` are patched at runtime by
-    // enrichProvidersWithRecentSpend (rolling window from PagoProveedor)
-    // without touching `lastUpdatedAt`, so they must be fingerprinted directly.
-    // `paymentPeriod` and `clasificacionAlberto` drive payment scheduling.
-    `providers=${fingerprintArray(input.providers, (item) => fields(item, ['id', 'name', 'type', 'risk', 'flexibility', 'paymentPeriod', 'score', 'clasificacionAlberto', 'montoPromedioPago', 'gastoMinimoMensual', 'lastUpdatedAt']))}`,
+    // Las listas de campos viven en `projectionCacheFingerprint.ts` (con el
+    // porqué de cada una) porque los guards de idempotencia de AppCore las
+    // consumen para decidir si un recommit puede invalidar esta llave.
+    `clients=${fingerprintArray(input.clients, (item) => fields(item, CLIENT_CACHE_KEY_FIELDS))}`,
+    `providers=${fingerprintArray(input.providers, (item) => fields(item, PROVIDER_CACHE_KEY_FIELDS))}`,
     // `cxp` y `cobranza` son ledger-posted desde JDE — no se editan in-place,
     // sólo entran/salen records vía upsert por (cia, noFactura). Como Rol, la
     // longitud es señal estructural suficiente: cualquier mutación real cambia
@@ -469,18 +471,6 @@ function bankStatementFingerprint(statement: FinancialProjectionSourceInput['ban
     + `:mov=len:${movs.length}:max:${maxFecha}`;
 }
 
-function fields(value: unknown, keys: string[]): string {
-  const record = value && typeof value === 'object' ? value as Record<string, unknown> : {};
-  return keys.map((key) => `${key}=${primitive(record[key])}`).join(',');
-}
-
-function primitive(value: unknown): string {
-  if (value === null || value === undefined) return '';
-  if (typeof value === 'number') return Number.isFinite(value) ? String(value) : '';
-  if (typeof value === 'string' || typeof value === 'boolean') return String(value);
-  return stableStringify(value);
-}
-
 function budgetFingerprint(value: unknown): string {
   if (!value || typeof value !== 'object') return '';
   const budget = value as {
@@ -535,21 +525,6 @@ function mapFingerprint(value?: Map<unknown, unknown>): string {
     Array.from(value.entries()).sort(([a], [b]) => String(a).localeCompare(String(b))),
     ([key, entry]) => `${primitive(key)}=${unknownFingerprint(entry)}`,
   );
-}
-
-function stableStringify(value: unknown): string {
-  if (value === null || value === undefined) return '';
-  if (typeof value !== 'object') return primitive(value);
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
-  if (value instanceof Set) return `Set(${Array.from(value).sort().map(stableStringify).join(',')})`;
-  if (value instanceof Map) {
-    return `Map(${Array.from(value.entries())
-      .sort(([a], [b]) => String(a).localeCompare(String(b)))
-      .map(([key, entry]) => `${stableStringify(key)}:${stableStringify(entry)}`)
-      .join(',')})`;
-  }
-  const record = value as Record<string, unknown>;
-  return `{${Object.keys(record).sort().map((key) => `${key}:${stableStringify(record[key])}`).join(',')}}`;
 }
 
 function hashString(value: string): string {

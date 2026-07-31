@@ -304,7 +304,12 @@ export function useScenarioRunWorker(): ScenarioRunController {
     const m = lastResultByScenario.current;
     m.delete(scenarioId);
     m.set(scenarioId, result);
-    while (m.size > 2) {
+    // Cap alineado con MAX_ENTRIES de `projectionRunCache` (4). Con 2, el trío
+    // base + activo + comparación no cabía y el escenario desalojado perdía su
+    // stale propio → caía al `universalPlaceholder` de otro escenario y el
+    // tablero se ocultaba. Los runs retenidos son los MISMOS objetos que el LRU
+    // ya mantiene vivos, así que el costo de heap adicional es marginal.
+    while (m.size > 4) {
       const oldest = m.keys().next().value as string | undefined;
       if (oldest === undefined) break;
       m.delete(oldest);
@@ -330,7 +335,20 @@ export function useScenarioRunWorker(): ScenarioRunController {
     options: ScenarioRunOptions = {},
   ): T => {
     const cached = projectionRunCache.get(cacheKey) as T | undefined;
-    if (cached !== undefined) return cached;
+    if (cached !== undefined) {
+      // Registrar TAMBIÉN en el camino rápido. Antes sólo `computeSync` y el
+      // `.then()` del worker alimentaban `lastResultByScenario`, así que un
+      // escenario servido siempre desde cache (el caso normal: el warmup
+      // pre-siembra la cache con `primeProjectionRunCache`) NUNCA dejaba un
+      // stale propio. Cuando la llave cambiaba —una ola de datos mueve la
+      // huella de los inputs— el fallback caía al `universalPlaceholder`, que
+      // puede ser el run de OTRO escenario; el tablero lo detecta como
+      // `activeRunIsPlaceholder` y OCULTA todo el cuerpo detrás de "Cargando
+      // proyección de …". Con el stale propio registrado, el escenario activo
+      // conserva sus cifras mientras el run nuevo se computa.
+      rememberStale(scenarioId, cached as unknown as ScenarioForecastRun);
+      return cached;
+    }
 
     const computeSync = (): T => {
       const result = buildScenarioForecastRun(makeArgs());
