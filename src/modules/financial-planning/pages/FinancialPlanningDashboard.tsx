@@ -40,6 +40,11 @@ import { AddRowPopover } from '../components/AddRowPopover';
 import { ChangeLogDrawer } from '../components/ChangeLogDrawer';
 import { MergeDialog } from '../components/MergeDialog';
 import { applyMerge, buildMergeDiff, type MergeDiffEntry } from '../services/scenarioMerge';
+import {
+  PLANNING_DEFAULT_GRANULARITY,
+  planningRunCacheKey,
+  planningSharedRunInputsKey,
+} from '../services/planningRunCacheKey';
 import { FirstSimulationNudge } from '../components/FirstSimulationNudge';
 import { MovementPickerModal } from '../components/MovementPickerModal';
 import { AdjustmentEditorPopover } from '../components/AdjustmentEditorPopover';
@@ -69,8 +74,6 @@ import {
   saveScenarioRunToPersistentCache,
 } from '../../financial-projection/services/financialProjectionPersistentCache';
 import {
-  auxiliarTaxCoverageFingerprint,
-  cxpPaymentCoverageFingerprint,
   defaultTaxStore,
   loadTaxStore,
   TAX_STORE_CHANGED_EVENT,
@@ -375,30 +378,6 @@ export default function FinancialPlanningDashboard(props: Props) {
   return <PlanningDashboardInner {...props} today={today} source={source} />;
 }
 
-/**
- * Llave de la corrida persistida de un escenario de Planeación.
- *
- * Vive en UNA función porque se arma en DOS lugares —el precalentado
- * (`preloadPlanningScenarioRuns`) y el dashboard interno— y basta con que uno
- * omita un tramo para que el precalentado quede inerte: lee una llave que
- * nadie pide después. Eso es exactamente lo que pasaba desde que el lado
- * interno ganó `trend:` y `g=` sin que el precalentado los agregara — la
- * corrida guardada en IndexedDB nunca se encontraba y Planeación la
- * recomputaba en cada entrada.
- */
-function planningRunCacheKey(args: {
-  scenarioId: string;
-  includeManualEntries: boolean;
-  sharedRunInputsKey: string;
-  customKey: string;
-  overrideKey: string;
-  trendTag: string;
-  granularity: ProjectionGranularity;
-}): string {
-  const manual = args.includeManualEntries ? 'm1' : 'm0';
-  return `planning-run:${args.scenarioId}:${manual}|${args.sharedRunInputsKey}|${args.customKey}|${args.overrideKey}|${args.trendTag}|g=${args.granularity}`;
-}
-
 async function preloadPlanningScenarioRuns(input: {
   source: FinancialProjectionSourceData;
   props: Props;
@@ -441,46 +420,36 @@ async function preloadPlanningScenarioRuns(input: {
   const initialCash = calculateInitialCash(props.bankStatements, props.startingBalance, { companyCode: props.companyCode });
   const supplierInitialCash = calculateCurrentBankCash(props.bankStatements, props.companyCode, initialCash);
   const minimumCash = minimumCashFor(props.providers, props.payrollMonthlyActualJDE);
-  const sharedRunInputsKey = [
-    fingerprintArray(source.movements, (m) => m.id + ':' + (m.adjustedAmount ?? m.projectedAmount)),
-    fingerprintArray(bootstrap.adjustments, (a) => a.id + ':' + a.status + ':' + a.createdAt),
-    fingerprintArray(bootstrap.manualEntries, (m) => m.id + ':' + (m.updatedAt ?? m.createdAt ?? '')),
-    [
-      fingerprintArray(taxStore.obligations, (o) => o.id + ':' + o.pendingAmount + ':' + o.status + ':' + o.paymentPlan.length),
-      fingerprintArray(taxStore.adjustments, (a) => a.id + ':' + a.kind + ':' + a.amount + ':' + a.createdAt),
-      fingerprintArray(taxStore.taxRateOverrides, (r) => r.targetType + ':' + r.targetKey + ':' + r.rate + ':' + r.updatedAt),
-      taxStore.overdueBalance,
-    ].join(':'),
-    fingerprintArray(props.providers, (provider) => provider.id + ':' + (provider.score ?? '') + ':' + (provider.lastUpdatedAt ?? '')),
-    fingerprintArray(
-      props.cobranzaPayments ?? [],
-      (payment) => payment.idPago + ':' + payment.importeRecibo + ':' + payment.pendienteAplicar,
-    ),
-    fingerprintArray(
-      props.bajioStatements ?? [],
-      (s) => s.cia + ':' + s.cuenta + ':' + s.fechaEstadoCuenta + ':' + s.movimientos.length,
-    ),
-    auxiliarTaxCoverageFingerprint(props.auxiliarReconciliation),
-    cxpPaymentCoverageFingerprint(props.cxpPaymentCoverage),
+  const sharedRunInputsKey = planningSharedRunInputsKey({
+    movements: source.movements,
+    adjustments: bootstrap.adjustments,
+    manualEntries: bootstrap.manualEntries,
+    taxStore,
+    providers: props.providers,
+    cobranzaPayments: props.cobranzaPayments,
+    bajioStatements: props.bajioStatements,
+    auxiliarReconciliation: props.auxiliarReconciliation,
+    cxpPaymentCoverage: props.cxpPaymentCoverage,
     yearStart,
     yearEnd,
     today,
     initialCash,
     supplierInitialCash,
     minimumCash,
-    'monthly',
-  ].join('|');
+    granularity: PLANNING_DEFAULT_GRANULARITY,
+  });
 
   await Promise.all([baseScenario, approvedScenario].map(async (scenario) => {
     const scenarioCustomRows = bootstrap.customRows.filter((row) => row.scenarioId === scenario.id);
     const scenarioOverrides = bootstrap.cellOverrides.filter((override) => override.scenarioId === scenario.id);
     const customKey = fingerprintArray(scenarioCustomRows, (row) => row.id + ':' + (row.updatedAt ?? ''));
     const overrideKey = fingerprintArray(scenarioOverrides, (override) => `${override.conceptKey}@${override.bucketKey}:${override.value}:${override.updatedAt ?? ''}`);
-    // Precalentado siempre con la granularidad default (mensual) y tendencia
-    // OFF: es el estado en el que abre Planeación. Base siempre corre con
-    // `trend:0` (el top-off es no-base), así que su llave empata exacto; la
-    // Aprobada corre con `trend:1` y se recomputa — mismo contrato que el
-    // warmup de Proyección.
+    // Precalentado siempre con la granularidad default y tendencia OFF: es el
+    // estado en el que abre Planeación. Base siempre corre con `trend:0` (el
+    // top-off es no-base), así que su llave empata exacto; la Aprobada corre
+    // con `trend:1` y se recomputa — mismo contrato que el warmup de
+    // Proyección. `includeManualEntries: true` espeja los 4 call sites de
+    // `buildScenarioRun`, que hoy pasan `true` sin excepción.
     const cacheKey = planningRunCacheKey({
       scenarioId: scenario.id,
       includeManualEntries: true,
@@ -488,7 +457,7 @@ async function preloadPlanningScenarioRuns(input: {
       customKey,
       overrideKey,
       trendTag: 'trend:0',
-      granularity: 'monthly',
+      granularity: PLANNING_DEFAULT_GRANULARITY,
     });
     const cached = await loadScenarioRunFromPersistentCache(cacheKey);
     if (cached) primeProjectionRunCache(cacheKey, cached);
@@ -537,7 +506,9 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
   // sólo commitea la última selección. UNA sola fuente de verdad
   // (`granularity`) — no se parte en deferred/immediate para no arriesgar
   // bucket keys desalineadas (números financieros silenciosamente mal).
-  const [granularity, setGranularityState] = useState<ProjectionGranularity>('monthly');
+  // Default compartido con el precalentado (`planningRunCacheKey.ts`): si los
+  // dos divergen, el warm-start desde IndexedDB queda inerte otra vez.
+  const [granularity, setGranularityState] = useState<ProjectionGranularity>(PLANNING_DEFAULT_GRANULARITY);
   const [granularityPending, startGranularityTransition] = useTransition();
   const setGranularity = useCallback(
     (next: ProjectionGranularity) => {
@@ -750,36 +721,16 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
   // full pipeline. Mirrors `FinancialProjectionDashboard` so the modules
   // share a cache across navigation.
   const sharedRunInputsKey = useMemo(() => {
-    const movementsKey = fingerprintArray(source.movements, (m) => m.id + ':' + (m.adjustedAmount ?? m.projectedAmount));
-    const adjustmentsKey = fingerprintArray(storedAdjustments, (a) => a.id + ':' + a.status + ':' + a.createdAt);
-    const manualKey = fingerprintArray(manualEntries, (m) => m.id + ':' + (m.updatedAt ?? m.createdAt ?? ''));
-    const taxKey = [
-      fingerprintArray(taxStore.obligations, (o) => o.id + ':' + o.pendingAmount + ':' + o.status + ':' + o.paymentPlan.length),
-      fingerprintArray(taxStore.adjustments, (a) => a.id + ':' + a.kind + ':' + a.amount + ':' + a.createdAt),
-      fingerprintArray(taxStore.taxRateOverrides, (r) => r.targetType + ':' + r.targetKey + ':' + r.rate + ':' + r.updatedAt),
-      taxStore.overdueBalance,
-    ].join(':');
-    const providerKey = fingerprintArray(props.providers, (provider) => provider.id + ':' + (provider.score ?? '') + ':' + (provider.lastUpdatedAt ?? ''));
-    const cobranzaPaymentsKey = fingerprintArray(
-      props.cobranzaPayments ?? [],
-      (payment) => payment.idPago + ':' + payment.importeRecibo + ':' + payment.pendienteAplicar,
-    );
-    const bajioKey = fingerprintArray(
-      props.bajioStatements ?? [],
-      (s) => s.cia + ':' + s.cuenta + ':' + s.fechaEstadoCuenta + ':' + s.movimientos.length,
-    );
-    const auxiliarKey = auxiliarTaxCoverageFingerprint(props.auxiliarReconciliation);
-    const cxpCoverageKey = cxpPaymentCoverageFingerprint(props.cxpPaymentCoverage);
-    return [
-      movementsKey,
-      adjustmentsKey,
-      manualKey,
-      taxKey,
-      providerKey,
-      cobranzaPaymentsKey,
-      bajioKey,
-      auxiliarKey,
-      cxpCoverageKey,
+    return planningSharedRunInputsKey({
+      movements: source.movements,
+      adjustments: storedAdjustments,
+      manualEntries,
+      taxStore,
+      providers: props.providers,
+      cobranzaPayments: props.cobranzaPayments,
+      bajioStatements: props.bajioStatements,
+      auxiliarReconciliation: props.auxiliarReconciliation,
+      cxpPaymentCoverage: props.cxpPaymentCoverage,
       yearStart,
       yearEnd,
       today,
@@ -787,7 +738,7 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
       supplierInitialCash,
       minimumCash,
       granularity,
-    ].join('|');
+    });
   }, [
     source.movements,
     storedAdjustments,
