@@ -418,7 +418,29 @@ function prorateCitiConcentradoraByClient(
 
   for (const [key, group] of groups) {
     const clientWeights = weightsByGroup.get(key);
-    if (!clientWeights || clientWeights.size === 0) continue; // fallback: deja el lump
+    if (!clientWeights || clientWeights.size === 0) {
+      // Fallback: deja el lump sin desglosar. Se EMITE diagnóstico antes de
+      // salir — sin esto el `continue` se saltaba el `diagnostics.push` de
+      // abajo, así que el peor caso (cero cobranza que empate con el grupo:
+      // mes fuera de la ventana de backfill, toda la cobranza filtrada, o un
+      // mismatch de cía) no aparecía ni en `window.__midas__.citiProrrateo` ni
+      // en el aviso de consola. Es exactamente el síntoma reportado —una fila
+      // gigante a nombre de la cuenta y cero filas de cliente— fallando en
+      // silencio, que es lo que esta capa existe para impedir.
+      diagnostics.push({
+        cia: group.cia,
+        ym: group.ym,
+        depositTotal: group.total,
+        matchedByAmount: 0,
+        matchedDeposits: 0,
+        leftoverPool: group.total,
+        leftoverExpected: 0,
+        ratio: null,
+        mode: 'sin-desglosar',
+        clients: 0,
+      });
+      continue;
+    }
 
     // (A) 1:1 por importe exacto y ÚNICO. Dos clientes con el mismo importe
     // pendiente son ambiguos → no se atribuye ninguno (cae al remanente).

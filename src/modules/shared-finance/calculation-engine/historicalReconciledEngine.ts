@@ -21,6 +21,7 @@ import {
   findClientForCobranza,
 } from '../../../domain/collectionCalendarEngine';
 import { bankMovementKey } from '../../../domain/bankMovementKey';
+import { normalizeCia } from '../../../domain/cia';
 import { isCorningAbono } from '../../../domain/bankStatements';
 import { classifyBankConcept } from '../../../domain/bankConceptClassifier';
 import { resolveCategoryForGlAccount } from '../../../config/glAccountFlowCatalog';
@@ -167,7 +168,16 @@ export function buildHistoricalReconciledMovements({ monthly, inputs }: BuildArg
       // Se marca antes de los filtros interno/neutro a propósito: la
       // presencia del estado de cuenta no depende de la clasificación de una
       // línea individual.
-      bankCoverage.add(`${statement.cia}::${ym}`);
+      // La cía se normaliza en los TRES lados de este join (aquí, y las dos
+      // consultas de abajo). Hoy las tres fuentes ya emiten 5 dígitos, así que
+      // es un no-op; el blindaje existe porque el modo de falla de un mismatch
+      // de padding aquí NO es un mes sin desglosar sino DOBLE CONTEO de ingreso
+      // (~2×): el mes se leería como "sin estado de cuenta" y se emitirían los
+      // sintéticos `cobranza-historic:`/`auxiliar-historic:` ENCIMA de las
+      // líneas `bank:` que ya lo cubren — justo el defecto que los comentarios
+      // de abajo dicen haber cerrado. Misma clase que el doble conteo por cía
+      // de CXP (mantenimiento 2026-07-21); barato blindarlo en lógica de dinero.
+      bankCoverage.add(`${normalizeCia(statement.cia)}::${ym}`);
       // Filtra traspasos internos antes de emitir el FinancialMovement —
       // mismo criterio que el Dashboard. Movimientos clasificados como
       // 'internal' nunca llegan a la tabla, gráfica ni drilldowns.
@@ -485,7 +495,7 @@ export function buildHistoricalReconciledMovements({ monthly, inputs }: BuildArg
     // efectivo. Emitir aquí el sintético duplicaría el cobro (doble conteo
     // que inflaba `realIncome` ~2× en el chart del Dashboard). El sintético
     // solo rellena cía/meses sin estado de cuenta cargado.
-    if (bankCoverage.has(`${record.cia}::${ym}`)) continue;
+    if (bankCoverage.has(`${normalizeCia(record.cia)}::${ym}`)) continue;
     const facturaKey = cxcFacturaKey(record);
     if (cobradaBancoKeysHistoric.has(facturaKey)) continue;
     const amount = Math.abs(record.importeBrutoPesos);
@@ -568,7 +578,7 @@ export function buildHistoricalReconciledMovements({ monthly, inputs }: BuildArg
     // Si el banco cubre el mes para esta cia, los movimientos ya están en
     // el paso 1. Sólo emitimos aux-historic cuando NO hay estado de cuenta:
     // el GL es la única fuente de la verdad realizada para ese período.
-    if (bankCoverage.has(`${line.cia}::${ym}`)) continue;
+    if (bankCoverage.has(`${normalizeCia(line.cia)}::${ym}`)) continue;
     const monto = Math.abs(line.importe);
     if (!Number.isFinite(monto) || monto <= 0) continue;
     const isInflow = line.flujo === 'ingreso';

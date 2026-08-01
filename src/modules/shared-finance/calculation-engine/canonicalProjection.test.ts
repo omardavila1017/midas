@@ -1731,6 +1731,32 @@ describe('prorateCitiConcentradoraByClient — atribución exacta y no-dilución
     expect(feb?.mode).toBe('sin-desglosar');
   });
 
+  it('reporta el periodo aunque NO haya ninguna cobranza que empate con el grupo', () => {
+    // Peor caso y el más silencioso: cero pesos para el (cía, mes) — el mes cae
+    // fuera de la ventana de backfill, toda la cobranza queda filtrada, o la
+    // cía no empata. El depósito se deja íntegro como una sola fila a nombre de
+    // la cuenta y ninguna fila de cliente: EXACTAMENTE el síntoma reportado.
+    // Antes ese grupo salía del bucle antes de registrar diagnóstico, así que
+    // no aparecía ni en `window.__midas__.citiProrrateo` ni en el aviso de
+    // consola — el reparto fallaba sin dejar rastro.
+    const movements = buildCanonicalProjection(inputs({
+      deposits: [{ importe: 5_000_000, fecha: '2026-02-14', referencia: 'REF-SOLO' }],
+      cobranza: [],
+    })).movements;
+    // Sin pesos no se desglosa nada: el depósito se conserva tal cual.
+    expect(citiInflow(movements).some((m) => m.id.startsWith('citi-prorrateo:'))).toBe(false);
+    expect(citiInflow(movements).reduce((s, m) => s + m.projectedAmount, 0)).toBeCloseTo(5_000_000, 2);
+
+    const diagnostics = (window as unknown as { __midas__?: { citiProrrateo?: { ym: string; mode: string; leftoverPool: number; leftoverExpected: number; clients: number }[] } })
+      .__midas__?.citiProrrateo ?? [];
+    const feb = diagnostics.find((d) => d.ym === '2026-02');
+    expect(feb).toBeTruthy();
+    expect(feb!.mode).toBe('sin-desglosar');
+    expect(feb!.leftoverPool).toBeCloseTo(5_000_000, 2);
+    expect(feb!.leftoverExpected).toBe(0);
+    expect(feb!.clients).toBe(0);
+  });
+
   it('identifica varios depósitos del mismo mes, cada uno con su cliente y su fecha', () => {
     const movements = buildCanonicalProjection(inputs({
       deposits: [

@@ -363,6 +363,56 @@ describe('buildHistoricalReconciledMovements (MOTOR 1)', () => {
     expect(coveredMv.some((m) => m.id.startsWith('cobranza-historic:'))).toBe(false);
   });
 
+  it('la cobertura bancaria empata aunque la cía llegue sin padding (blindaje anti doble conteo)', () => {
+    // Las tres fuentes hoy emiten la cía con padding a 5 dígitos, así que este
+    // caso no está vivo — pero si alguna derivara, el mismatch NO daría error:
+    // el mes se leería como "sin estado de cuenta" y los sintéticos se
+    // emitirían ENCIMA de las líneas `bank:` que ya lo cubren (doble conteo de
+    // ingreso ~2×). El join normaliza en los tres lados; esto lo pinea.
+    const inputs = {
+      companyCode: 'all',
+      // Estado de cuenta con la cía SIN padding …
+      bankStatements: [bankStatement({
+        cia: '11',
+        cuenta: 'CTA-A',
+        movimientos: [
+          bankMovement({ cia: '11', cuenta: 'CTA-A', tipoMovimiento: 'ABONO', importe: 4_000, fechaOperacion: '2026-04-10', concepto: 'DEPOSITO' }),
+        ],
+      })],
+      clients: [],
+      providers: [],
+      cxpRecords: [],
+      // … y las dos fuentes de relleno con la cía padded.
+      cobranzaRecords: [cobranzaRecord({
+        cia: '00011',
+        noCliente: '1',
+        nombreCliente: 'Cliente Historico',
+        noFactura: 'CXC-H',
+        fechaFactura: '2026-03-10',
+        fechaCobro: '2026-04-10',
+        importeBrutoPesos: 4_000,
+      })],
+      auxiliarReconLines: [auxLine({
+        glKey: 'gl-egreso',
+        cia: '00011',
+        flujo: 'egreso',
+        fechaContable: '2026-04-17',
+        importe: -250,
+        tipoDocto: 'PV',
+        contraparte: 'PROVEEDOR X SA',
+      })],
+      assumptions,
+      budget: null,
+      startingBalance: 0,
+      asOfDate: '2026-05-01',
+    };
+    const monthly = buildCanonicalProjection(inputs).monthly;
+    const mv = buildHistoricalReconciledMovements({ monthly, inputs });
+
+    expect(mv.some((m) => m.id.startsWith('cobranza-historic:'))).toBe(false);
+    expect(mv.some((m) => m.id.startsWith('auxiliar-historic:'))).toBe(false);
+  });
+
   it('emite auxiliar-historic: sin banco y omite líneas GL con matchTier interno', () => {
     const inputs = {
       companyCode: 'all',
