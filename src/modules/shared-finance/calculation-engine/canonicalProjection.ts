@@ -170,9 +170,9 @@ const CITI_MIN_PRORRATEO_RATIO = 0.5;
 const CITI_UNIDENTIFIED_NAME = 'Cobranza Citi por identificar';
 
 /** Cómo se resolvió un (cía, mes) del prorrateo. Sólo diagnóstico. */
-type CitiAttributionMode = 'exacto' | 'remanente-cubierto' | 'prorrateo' | 'sin-desglosar';
+export type CitiAttributionMode = 'exacto' | 'remanente-cubierto' | 'prorrateo' | 'sin-desglosar';
 
-interface CitiAttributionDiagnostic {
+export interface CitiAttributionDiagnostic {
   cia: string;
   ym: string;
   /** Σ depósitos sin cruzar de la concentradora (el pool). */
@@ -589,14 +589,42 @@ function prorateCitiConcentradoraByClient(
 }
 
 /**
+ * Buzón de una sola posición con el diagnóstico de la ÚLTIMA corrida del
+ * prorrateo. Existe porque el motor corre normalmente dentro de
+ * `financialProjectionSource.worker.ts`, donde no hay `window`: la publicación
+ * de abajo no hacía nada y `window.__midas__.citiProrrateo` quedaba VACÍO en
+ * producción aunque el reparto ya hubiera corrido (verificado en el QA
+ * desplegado) — la superficie que el propio aviso de consola manda consultar.
+ * El worker lo vacía con `takeCitiAttributionDiagnostics()` y lo adjunta a su
+ * respuesta; el hub del worker compartido lo republica en el hilo principal.
+ *
+ * Se VACÍA al leerlo a propósito: `buildFinancialProjectionSourceData` está
+ * memoizado, así que un job que pega en el memo NO vuelve a correr el motor —
+ * devolver el diagnóstico de una corrida anterior lo haría pasar por el de
+ * ésta. Sin corrida nueva no se reporta nada.
+ */
+let pendingCitiDiagnostics: CitiAttributionDiagnostic[] | null = null;
+
+/**
+ * Devuelve (y limpia) el diagnóstico de la última corrida del prorrateo Citi,
+ * o `null` si el motor no volvió a correr desde la lectura previa.
+ */
+export function takeCitiAttributionDiagnostics(): CitiAttributionDiagnostic[] | null {
+  const out = pendingCitiDiagnostics;
+  pendingCitiDiagnostics = null;
+  return out;
+}
+
+/**
  * Publica el diagnóstico del prorrateo Citi en `window.__midas__.citiProrrateo`
  * y avisa en consola de los (cía, mes) que quedaron SIN desglosar. Esto es lo
  * que faltaba cuando el defecto de 3M pasó meses sin detectarse: el reparto
  * fallaba en silencio y la fila se veía plausible. Best-effort: en el worker
- * (sin `window`) no hace nada.
+ * (sin `window`) el buzón de arriba es el que lo lleva al hilo principal.
  */
 function publishCitiAttributionDiagnostics(diagnostics: CitiAttributionDiagnostic[]): void {
   if (diagnostics.length === 0) return;
+  pendingCitiDiagnostics = diagnostics;
   const undistributed = diagnostics.filter((d) => d.mode === 'sin-desglosar' && d.leftoverPool > 0);
   if (undistributed.length > 0) {
     console.warn(

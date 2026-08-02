@@ -1,4 +1,5 @@
 import { buildFinancialProjectionSourceData } from '../modules/financial-projection/services/financialProjectionService';
+import { takeCitiAttributionDiagnostics } from '../modules/shared-finance/calculation-engine/canonicalProjection';
 import type {
   FinancialProjectionSourceWorkerRequest,
   FinancialProjectionSourceWorkerResponse,
@@ -17,10 +18,16 @@ self.onmessage = (event: MessageEvent<FinancialProjectionSourceWorkerRequest>) =
     performance.measure?.(`projectionSource:${jobId}`, `projectionSource:${jobId}:start`, `projectionSource:${jobId}:end`);
     // eslint-disable-next-line no-console
     console.info(`[financialProjection.worker] done jobId=${jobId} ${elapsed.toFixed(0)}ms · movements=${result.movements.length} suppliers=${result.suppliers.length} customers=${result.customers.length}`);
-    const response: FinancialProjectionSourceWorkerResponse = { jobId, result };
+    // Sin `window` en el worker, la publicación del motor es no-op: el
+    // diagnóstico viaja en el sobre para que el hub lo republique.
+    const citiDiagnostics = takeCitiAttributionDiagnostics() ?? undefined;
+    const response: FinancialProjectionSourceWorkerResponse = { jobId, result, citiDiagnostics };
     self.postMessage(response);
   } catch (error) {
     const elapsed = performance.now() - t0;
+    // Un fallo posterior al prorrateo deja el buzón lleno: se descarta para que
+    // el siguiente job no reporte como suyo el diagnóstico de esta corrida.
+    takeCitiAttributionDiagnostics();
     // eslint-disable-next-line no-console
     console.warn(`[financialProjection.worker] FAILED jobId=${jobId} ${elapsed.toFixed(0)}ms`, error);
     const response: FinancialProjectionSourceWorkerResponse = {

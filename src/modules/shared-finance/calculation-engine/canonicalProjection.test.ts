@@ -14,6 +14,7 @@ import {
   buildCanonicalProjection,
   buildHistoricalReconciledMovements,
   buildShortTermProjectionMovements,
+  takeCitiAttributionDiagnostics,
 } from './canonicalProjection';
 
 const assumptions: CashFlowAssumptions = {
@@ -1773,6 +1774,25 @@ describe('prorateCitiConcentradoraByClient — atribución exacta y no-dilución
     // Cada línea lleva la fecha de SU depósito, no la del más grande del mes.
     const eLine = citiInflow(movements).find((m) => /CLIENTE E/i.test(m.counterpartyName ?? ''));
     expect(eLine?.actualDate).toBe('2026-02-25');
+  });
+
+  it('deja el diagnóstico en el buzón que vacía el worker, y sólo una vez por corrida', () => {
+    // El motor corre dentro de `financialProjectionSource.worker.ts`, donde no
+    // hay `window`: la publicación directa es no-op y la clave documentada
+    // quedaba VACÍA en producción. El buzón es el que lo cruza al hilo
+    // principal. Se vacía al leerlo porque `buildFinancialProjectionSourceData`
+    // está memoizado — un job que pega en el memo NO corre el motor, y
+    // devolverle el diagnóstico anterior lo haría pasar por el de esa corrida.
+    takeCitiAttributionDiagnostics(); // limpia lo que dejaron los casos previos
+    buildCanonicalProjection(inputs({
+      deposits: [{ importe: TRES_M, fecha: '2026-02-12', referencia: 'REF-3M' }],
+      cobranza: [{ noCliente: '103246', nombreCliente: '3M MEXICO S.A. DE C.V.', importe: TRES_M, fechaCobro: '2026-02-12' }],
+    }));
+
+    const first = takeCitiAttributionDiagnostics();
+    expect(first?.find((d) => d.ym === '2026-02')?.mode).toBe('exacto');
+    // Segunda lectura sin corrida nueva: nada que reportar (no se recicla).
+    expect(takeCitiAttributionDiagnostics()).toBeNull();
   });
 });
 
