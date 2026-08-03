@@ -29,22 +29,14 @@
 import { computeBaseCashFlow } from '../../../domain/dashboardEngine';
 import type { ComputeInputs } from '../../../domain/dashboardEngine';
 import { toYearMonth } from '../../../domain/cashFlowEngine';
-import {
-  buildClientLookup,
-  findClientForCobranza,
-} from '../../../domain/collectionCalendarEngine';
-import { isInternalCounterparty } from '../../../domain/netCashFlowEngine';
-import { isPersonName } from '../../../domain/personNameHeuristic';
-import { VIAJES_ESPECIALES_GROUP_ID } from '../../../domain/viajesEspecialesCatalog';
 import { findBankAccount } from '../../../domain/bankAccountsCatalog';
 import { normalizeCia } from '../../../domain/cia';
+import { createCitiClientResolver, selectCitiCollectionByClient } from './citiClientCollection';
 import { calculateConfidenceBand } from './financialProjectionEngine';
 import type { FinancialMovement } from '../types';
 import { buildHistoricalReconciledMovements } from './historicalReconciledEngine';
 import { buildShortTermProjectionMovements } from './shortTermProjectionEngine';
 import {
-  cleanDate,
-  clientDisplayCounterparty,
   CITI_CLIENT_SUBROLE,
   INCOME_SUBCAT_CITI,
   type BuildArgs,
@@ -337,30 +329,16 @@ function prorateCitiConcentradoraByClient(
   }
 
   // 3) Pesos por cliente desde la cobranza JDE (fechaCobro en ese cía/mes).
-  const clientLookup = buildClientLookup(inputs.clients);
-  const weightsByGroup = new Map<string, Map<string, { name: string; amount: number }>>();
-  for (const rec of inputs.cobranzaRecords ?? []) {
-    const cobroDate = cleanDate(rec.fechaCobro);
-    if (!cobroDate) continue;
-    const key = `${normalizeCia(rec.cia)}::${cobroDate.slice(0, 7)}`;
-    if (!groups.has(key)) continue;
-    if (isInternalCounterparty(rec.rfc, rec.nombreCliente)) continue;
-    const amount = Math.abs(rec.importeBrutoPesos);
-    if (!Number.isFinite(amount) || amount <= 0) continue;
-    const match = findClientForCobranza(rec, clientLookup);
-    // Viajes Especiales no son clientes comerciales Citi — fuera del peso.
-    if (match?.client.commercialGroupId === VIAJES_ESPECIALES_GROUP_ID) continue;
-    const display = match
-      ? clientDisplayCounterparty(match.client)
-      : { id: rec.noCliente, name: rec.nombreCliente || 'Cliente sin nombre' };
-    if (!display.id) continue;
-    if (isPersonName(display.name ?? '')) continue;
-    let clientWeights = weightsByGroup.get(key);
-    if (!clientWeights) { clientWeights = new Map(); weightsByGroup.set(key, clientWeights); }
-    const existing = clientWeights.get(display.id);
-    if (existing) existing.amount += amount;
-    else clientWeights.set(display.id, { name: display.name ?? 'Cliente', amount });
-  }
+  //
+  // La selección vive en `citiClientCollection.ts` porque el drilldown de la UI
+  // TIENE que listar exactamente las facturas que produjeron este peso. Con la
+  // selección duplicada, el panel podría mostrar otro set sin que nada truene.
+  // `amount` se muta abajo (paso 4) — el helper devuelve objetos nuevos.
+  const weightsByGroup = selectCitiCollectionByClient({
+    records: inputs.cobranzaRecords ?? [],
+    wantsGroup: (key) => groups.has(key),
+    resolveClient: createCitiClientResolver(inputs.clients),
+  });
 
   // 4) Descontar de la cobranza esperada lo ya atribuido por cruce directo.
   //

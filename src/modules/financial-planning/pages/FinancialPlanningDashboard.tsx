@@ -1595,6 +1595,11 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
           onClose={() => { setDetailMovement(null); setDetailAnchor(null); }}
           invoiceContext={{
             cxpRecords: props.cxpRecords,
+            // Sin esto el drawer no puede desglosar NINGÚN ingreso: la sección
+            // "Facturas CXC JDE" existía pero recibía la lista vacía, así que
+            // las líneas de cobranza (incluidas las del prorrateo Citi) sólo
+            // mostraban el total.
+            cobranzaRecords: props.cobranzaRecords,
             clients: props.clients,
             assumptions: props.assumptions,
             budget: props.budget,

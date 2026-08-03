@@ -18,6 +18,8 @@ import type {
 } from '../../../domain/types';
 import type { CobranzaRecord } from '../../../services/jdeTypes';
 import { projectClientMonth } from '../../../domain/collectionEngine';
+import { buildCitiCellBreakdown, type CitiCellBreakdown } from '../../shared-finance/calculation-engine/citiClientCollection';
+import { INCOME_SUBCAT_CITI } from '../../shared-finance/calculation-engine/canonicalProjectionShared';
 import {
   bankAccountBusinessUnitLabel,
   bankAccountFlowLabel,
@@ -314,6 +316,13 @@ function InvoiceDetailSection({
   }
 
   if (movement.category === 'AR_COLLECTION') {
+    // Línea del prorrateo Citi: NO tiene `sourceObjectId` (un folio único)
+    // porque su origen es el DEPÓSITO bancario, no una factura. El respaldo se
+    // reconstruye con el helper compartido, de modo que las facturas listadas
+    // son exactamente las que el motor usó como peso.
+    const citi = buildCitiBreakdownForMovement(movement, context);
+    if (citi) return <CitiInvoiceBreakdown breakdown={citi} />;
+
     const cxcRecords = findCobranzaRecords(context.cobranzaRecords ?? [], movement);
     if (cxcRecords.length > 0) {
       return (
@@ -635,6 +644,101 @@ function findCxpRecords(records: CXPRecord[], movement: FinancialMovement): CXPR
   if (exact.length > 0) return exact;
   // Fallback: si la empresa no coincidió, devolvemos cualquier match por folio.
   return records.filter((record) => record.noFactura === movement.sourceObjectId);
+}
+
+/**
+ * Respaldo por facturas de una línea `citi-prorrateo:`. Devuelve `null` cuando
+ * el movimiento NO es una atribución Citi por cliente (la fila "por
+ * identificar" no trae `counterpartyId`) o cuando no llegó cobranza en el
+ * contexto — en esos casos el drawer sigue con su comportamiento previo.
+ */
+function buildCitiBreakdownForMovement(
+  movement: FinancialMovement,
+  context: InvoiceContext,
+): CitiCellBreakdown | null {
+  if (movement.subcategory !== INCOME_SUBCAT_CITI) return null;
+  if (!movement.counterpartyId) return null;
+  const records = context.cobranzaRecords;
+  if (!records || records.length === 0) return null;
+  const date = movement.actualDate ?? movement.adjustedDate ?? movement.projectedDate;
+  if (!date || date.length < 7) return null;
+  return buildCitiCellBreakdown({
+    records,
+    clients: context.clients,
+    cia: movement.companyId,
+    yearMonth: date.slice(0, 7),
+    clientId: movement.counterpartyId,
+    attributedAmount: effectiveAmount(movement),
+  });
+}
+
+/**
+ * Desglose de facturas de una celda Citi.
+ *
+ * El renglón "Factor aplicado" es load-bearing, no decorativo: en el reparto
+ * proporcional las facturas NO suman el importe atribuido, y sin declararlo el
+ * desglose se leería como un error de captura. Con factor 1 se dice que el
+ * depósito se acreditó completo.
+ */
+function CitiInvoiceBreakdown({ breakdown }: { breakdown: CitiCellBreakdown }) {
+  const { invoices, invoicedTotal, attributedAmount, factor } = breakdown;
+  // Los importes vienen de JDE al centavo, así que 0.5% de holgura sólo absorbe
+  // el redondeo del reparto, nunca una diferencia real.
+  const isFullyCredited = Math.abs(factor - 1) <= 0.005;
+  return (
+    <SectionCard title={invoices.length === 1 ? 'Factura CXC JDE' : `Facturas CXC JDE (${invoices.length})`}>
+      <div className="px-3 pt-2 pb-1 text-[11px] text-[var(--gray-500)]">
+        Facturas de este cliente cobradas en el periodo, que son las que el motor usó para atribuirle el depósito de la concentradora.
+      </div>
+      <table className="w-full text-[11px]">
+        <thead>
+          <tr className="text-[10px] uppercase tracking-[0.06em] text-[var(--gray-400)]">
+            <th className="px-3 py-1.5 text-left font-medium">Folio</th>
+            <th className="py-1.5 text-left font-medium">Factura</th>
+            <th className="py-1.5 text-left font-medium">Cobro</th>
+            <th className="py-1.5 text-left font-medium">Recibo</th>
+            <th className="px-3 py-1.5 text-right font-medium">Importe</th>
+          </tr>
+        </thead>
+        <tbody>
+          {invoices.map((invoice, idx) => (
+            <tr key={`${invoice.noFactura}-${idx}`} className="border-t border-[var(--gray-100)]">
+              <td className="px-3 py-1.5 font-medium text-[var(--gray-950)]">{invoice.noFactura || 'sin folio'}</td>
+              <td className="py-1.5 text-[var(--gray-500)]">{fmtSafeDate(invoice.fechaFactura)}</td>
+              <td className="py-1.5 text-[var(--gray-500)]">{fmtSafeDate(invoice.fechaCobro)}</td>
+              <td className="py-1.5 text-[var(--gray-500)]">{invoice.noRecibo ?? '—'}</td>
+              <td className="px-3 py-1.5 text-right tabular-nums text-[var(--gray-950)]">
+                {fmtCurrency(invoice.importeBrutoPesos)}
+              </td>
+            </tr>
+          ))}
+          <tr className="border-t border-[var(--gray-300)]">
+            <td colSpan={4} className="px-3 py-1.5 text-[var(--gray-500)]">Suma de facturas</td>
+            <td className="px-3 py-1.5 text-right font-semibold tabular-nums text-[var(--gray-950)]">
+              {fmtCurrency(invoicedTotal)}
+            </td>
+          </tr>
+          <tr>
+            <td colSpan={4} className="px-3 pb-1.5 text-[var(--gray-500)]">Importe atribuido</td>
+            <td className="px-3 pb-1.5 text-right font-semibold tabular-nums text-[var(--gray-950)]">
+              {fmtCurrency(attributedAmount)}
+            </td>
+          </tr>
+          <tr>
+            <td colSpan={4} className="px-3 pb-2 text-[var(--gray-500)]">Factor aplicado</td>
+            <td className="px-3 pb-2 text-right font-semibold tabular-nums text-[var(--gray-950)]">
+              {factor.toFixed(3)}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <div className="px-3 pb-3 text-[11px] text-[var(--gray-500)]">
+        {isFullyCredited
+          ? 'Las facturas suman el importe atribuido: el depósito se acreditó completo.'
+          : `El depósito del periodo no alcanza a cubrir toda la cobranza sin atribuir, así que a este cliente se le atribuyó el ${fmtPctInt(factor * 100)} de sus facturas. El resto de su cobro entró por otra cuenta, se compensó, o cayó en otro periodo.`}
+      </div>
+    </SectionCard>
+  );
 }
 
 function findCobranzaRecords(records: CobranzaRecord[], movement: FinancialMovement): CobranzaRecord[] {

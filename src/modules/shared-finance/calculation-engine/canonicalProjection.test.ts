@@ -9,6 +9,7 @@ import type { BankAccountStatement, BankStatementLine, CobranzaRecord, ComprasRe
 import { isRealShortTermApiMovement } from '../../financial-planning/services/scenarioForecastRun';
 import { buildHistoricalMonths } from '../../../domain/cashFlowEngine';
 import { bankMovementKey } from '../../../domain/bankMovementKey';
+import { buildCitiCellBreakdown } from './citiClientCollection';
 import type { PayrollCostRecord, PurchaseReceiptRecord } from '../types';
 import {
   buildCanonicalProjection,
@@ -1897,6 +1898,31 @@ describe('prorateCitiConcentradoraByClient — depósito tipificado como cobranz
     const movements = buildCanonicalProjection(inputs()).movements;
     expect(citiFeb(movements).reduce((s, m) => s + m.projectedAmount, 0))
       .toBeCloseTo(TRES_M + RESTO, 2);
+  });
+
+  it('el desglose del drilldown corresponde a la línea que emitió el motor (fuente única)', () => {
+    // Invariante del helper compartido: el panel reconstruye las facturas con
+    // la MISMA selección que produjo el peso, así que el desglose siempre
+    // corresponde a la cifra mostrada. Si alguien duplica la selección en la
+    // UI, este test es el que se pone rojo.
+    const base = inputs();
+    const movements = buildCanonicalProjection(base).movements;
+    const linea3M = citiFeb(movements).find((m) => /3M MEXICO/i.test(m.counterpartyName ?? ''))!;
+    expect(linea3M.counterpartyId).toBeTruthy();
+
+    const breakdown = buildCitiCellBreakdown({
+      records: base.cobranzaRecords,
+      clients: base.clients,
+      cia: linea3M.companyId,
+      yearMonth: (linea3M.actualDate ?? linea3M.projectedDate).slice(0, 7),
+      clientId: linea3M.counterpartyId!,
+      attributedAmount: linea3M.projectedAmount,
+    })!;
+
+    expect(breakdown.invoices.map((i) => i.noFactura)).toEqual(['RI-301306']);
+    expect(breakdown.invoicedTotal).toBeCloseTo(TRES_M, 2);
+    // Depósito acreditado completo → las facturas suman lo atribuido.
+    expect(breakdown.factor).toBeCloseTo(1, 3);
   });
 
   it('no re-prorratea el depósito que YA tiene cliente por cruce banco↔factura (sin doble conteo)', () => {
