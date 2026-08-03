@@ -75,8 +75,16 @@ export interface FinancialProjectionSourceInput {
   startingBalance?: number;
   asOfDate?: string;
   /**
-   * Si false, el canonical no entrena el motor predictivo. Planning no usa
-   * `predictive`, así que pasar false ahorra varios cientos de ms.
+   * Si false, el canonical no entrena el motor predictivo (`canonical.predictive`
+   * queda null) y se ahorran varios cientos de ms.
+   *
+   * OJO: **Proyección Y Planeación SÍ lo consumen** — `source.canonical.predictive`
+   * es lo que alimenta `trendAvailable` y, con él, el top-off de tendencia
+   * (`forecast:trend:`) que va SIEMPRE en los escenarios no-Base. Apagarlo NO es
+   * gratis para esos tableros: cambia las cifras proyectadas. Sólo pásalo `false`
+   * desde un consumidor que no lea `predictive` (hoy: KpisObjectivesDashboard).
+   * Es parte de la llave del memo y del cache persistente, así que un build sin
+   * predictivo ya no se le puede servir a un tablero que sí lo necesita.
    */
   enablePredictive?: boolean;
 }
@@ -169,6 +177,20 @@ function sourceCacheKey(input: FinancialProjectionSourceInput, asOfDate: string)
     input.companyCode,
     asOfDate,
     input.startingBalance,
+    // `enablePredictive` CAMBIA la salida (`canonical.predictive` = null cuando
+    // esta apagado, via dashboardEngine), asi que es parte de la llave: sin el,
+    // los dos variantes comparten entrada y el que llegue primero le sirve su
+    // resultado al otro. La direccion que muerde: KpisObjectivesDashboard
+    // construye con `enablePredictive:false` en el hilo principal, y con
+    // SOURCE_CACHE_LIMIT=1 esa entrada es la que Proyeccion/Planeacion recogen
+    // por `tryGetCachedFinancialProjectionSourceData` -> `predictive` ausente
+    // -> `trendAvailable=false` -> el top-off de tendencia (`forecast:trend:`,
+    // siempre activo fuera de Base) desaparece de los escenarios y los meses
+    // futuros salen mas bajos, segun que tab se abrio primero. El cache
+    // PERSISTENTE ya llavea por esto (`financialProjectionPersistentCache.ts`);
+    // el memo de modulo era el inconsistente. Regla: todo input que mueva la
+    // salida va en la llave.
+    `predictive=${input.enablePredictive !== false ? '1' : '0'}`,
     ...ids,
   ].join('|');
 }
