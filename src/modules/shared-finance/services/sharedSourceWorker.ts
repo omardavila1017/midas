@@ -23,6 +23,8 @@ import type {
 let sharedWorker: Worker | null = null;
 let sharedJobSeq = 0;
 const sharedListeners = new Set<(data: FinancialProjectionSourceWorkerResponse) => void>();
+/** Jobs posteados que aún no recibieron respuesta. Ver `failInFlightJobs`. */
+const inFlightJobIds = new Set<number>();
 
 /**
  * Republica en el hilo principal el diagnóstico del prorrateo Citi que viene
@@ -49,6 +51,38 @@ function republishCitiDiagnostics(data: FinancialProjectionSourceWorkerResponse)
   }
 }
 
+/**
+ * Falla los jobs en vuelo cuando el worker muere sin responder.
+ *
+ * Un `onerror` (excepción no capturada, el chunk del módulo que no carga tras
+ * un redeploy con la pestaña abierta, OOM dentro del worker) NO produce
+ * respuesta: cada call site filtra por su `jobId`, así que sin esto se quedaban
+ * esperando PARA SIEMPRE. Y como el singleton muerto seguía cacheado,
+ * `postToSharedSourceWorker` devolvía `true` para todo job posterior — el
+ * fallback síncrono nunca se disparaba y Proyección/Planeación/Impuestos
+ * quedaban en su shell de carga el resto de la sesión, sin recuperación salvo
+ * recargar.
+ *
+ * Es el mismo trato que ya da el hub hermano de este directorio
+ * (`useScenarioRunWorker.getSharedWorker`): rechazar lo que está en vuelo con
+ * el error del evento. Los tres call sites ya tienen rama `data.error` (el hook
+ * de Impuestos reconstruye síncrono; los dos tableros avisan y sueltan su job),
+ * así que esto sólo vuelve ALCANZABLE un camino que ya existía.
+ */
+function failInFlightJobs(message: string): void {
+  const failed = [...inFlightJobIds];
+  inFlightJobIds.clear();
+  for (const jobId of failed) {
+    for (const listener of sharedListeners) {
+      try {
+        listener({ jobId, error: message });
+      } catch {
+        /* un suscriptor no puede tumbar a los demás */
+      }
+    }
+  }
+}
+
 /** Lazily spawn the singleton; returns `null` when `Worker` is unavailable. */
 export function getSharedSourceWorker(): Worker | null {
   if (typeof Worker === 'undefined') return null;
@@ -59,12 +93,24 @@ export function getSharedSourceWorker(): Worker | null {
       { type: 'module' },
     );
     worker.onmessage = (event: MessageEvent<FinancialProjectionSourceWorkerResponse>) => {
+      inFlightJobIds.delete(event.data.jobId);
       republishCitiDiagnostics(event.data);
       for (const listener of sharedListeners) listener(event.data);
     };
     worker.onerror = (event) => {
       // eslint-disable-next-line no-console
       console.warn('[projection.source] shared worker exception', event.message);
+      // `terminate()` antes de soltar el singleton: un `onerror` no siempre mata
+      // al worker, y dejarlo vivo y huérfano con su copia del bundle pesado
+      // (~200MB) mientras el próximo job levanta otro es justo el doble consumo
+      // que este singleton existe para evitar.
+      try {
+        worker.terminate();
+      } catch {
+        /* ignore */
+      }
+      if (sharedWorker === worker) sharedWorker = null;
+      failInFlightJobs(event.message || 'source worker failed');
     };
     sharedWorker = worker;
     return worker;
@@ -96,9 +142,11 @@ export function postToSharedSourceWorker(req: FinancialProjectionSourceWorkerReq
   const worker = getSharedSourceWorker();
   if (!worker) return false;
   try {
+    inFlightJobIds.add(req.jobId);
     worker.postMessage(req);
     return true;
   } catch (err) {
+    inFlightJobIds.delete(req.jobId);
     // eslint-disable-next-line no-console
     console.warn('[projection.source] shared worker post failed', err);
     return false;

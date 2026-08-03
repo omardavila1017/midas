@@ -16,9 +16,10 @@ class FakeWorker {
   onmessage: ((event: MessageEvent<FinancialProjectionSourceWorkerResponse>) => void) | null = null;
   onerror: ((event: unknown) => void) | null = null;
   posted: unknown[] = [];
+  terminated = false;
   constructor() { FakeWorker.last = this; }
   postMessage(msg: unknown) { this.posted.push(msg); }
-  terminate() { /* no-op */ }
+  terminate() { this.terminated = true; }
 }
 
 const diagnostics = [
@@ -67,6 +68,58 @@ describe('sharedSourceWorker — republicación del diagnóstico Citi', () => {
     FakeWorker.last!.onmessage!({ data: { jobId: 2 } } as MessageEvent<FinancialProjectionSourceWorkerResponse>);
 
     expect(midasKey()).toEqual(diagnostics);
+  });
+
+  it('falla los jobs en vuelo cuando el worker muere sin responder', async () => {
+    const hub = await loadHub();
+    const received: FinancialProjectionSourceWorkerResponse[] = [];
+    hub.subscribeSharedSourceWorker((data) => received.push(data));
+
+    hub.postToSharedSourceWorker({ jobId: 1, input: {} as never });
+    hub.postToSharedSourceWorker({ jobId: 2, input: {} as never });
+    // El job 2 sí respondió; sólo el 1 queda en vuelo.
+    FakeWorker.last!.onmessage!({ data: { jobId: 2 } } as MessageEvent<FinancialProjectionSourceWorkerResponse>);
+    received.length = 0;
+
+    FakeWorker.last!.onerror!({ message: 'boom' });
+
+    // Sin esto el call site espera su jobId PARA SIEMPRE: `onerror` no produce
+    // respuesta y su rama `data.error` (fallback síncrono) nunca se alcanza.
+    expect(received).toEqual([{ jobId: 1, error: 'boom' }]);
+  });
+
+  it('suelta el worker muerto para que el siguiente job levante uno nuevo', async () => {
+    const hub = await loadHub();
+    hub.postToSharedSourceWorker({ jobId: 1, input: {} as never });
+    const dead = FakeWorker.last!;
+
+    FakeWorker.last!.onerror!({ message: 'boom' });
+
+    // Terminado: un `onerror` no siempre mata al worker, y dejarlo vivo con su
+    // copia del bundle pesado mientras se levanta otro duplica el consumo que
+    // este singleton existe para evitar.
+    expect(dead.terminated).toBe(true);
+    // El singleton muerto seguía cacheado, así que `post` devolvía `true` para
+    // todo job posterior y el fallback síncrono nunca se disparaba.
+    expect(hub.postToSharedSourceWorker({ jobId: 2, input: {} as never })).toBe(true);
+    expect(FakeWorker.last).not.toBe(dead);
+    expect(FakeWorker.last!.posted).toEqual([{ jobId: 2, input: {} }]);
+  });
+
+  it('no re-notifica un job ya respondido si el worker muere después', async () => {
+    const hub = await loadHub();
+    const received: FinancialProjectionSourceWorkerResponse[] = [];
+    hub.subscribeSharedSourceWorker((data) => received.push(data));
+
+    hub.postToSharedSourceWorker({ jobId: 1, input: {} as never });
+    FakeWorker.last!.onmessage!({ data: { jobId: 1 } } as MessageEvent<FinancialProjectionSourceWorkerResponse>);
+    received.length = 0;
+
+    FakeWorker.last!.onerror!({ message: 'boom' });
+
+    // Un error posterior no puede convertir en fallo un job que ya entregó su
+    // resultado: el call site lo tomaría como error de su corrida vigente.
+    expect(received).toEqual([]);
   });
 
   it('conserva las demás claves de diagnóstico de __midas__', async () => {
