@@ -120,6 +120,9 @@ import {
 } from '../../shared-finance/components/tone';
 import type { MidasProposalSuggestion } from '../../midas-ai';
 import { createFinancialAdjustment } from '../services/financialPlanningService';
+import { buildCitiCellBreakdown, type CitiCellBreakdown } from '../../shared-finance/calculation-engine/citiClientCollection';
+import { INCOME_SUBCAT_CITI } from '../../shared-finance/calculation-engine/canonicalProjectionShared';
+import { CitiInvoiceBreakdown } from '../../shared-finance/components/CitiInvoiceBreakdown';
 
 interface Props {
   companyCode: string;
@@ -1545,12 +1548,18 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
       {selectedCell ? (
         <PlanningCellDetailPanel
           movements={selectedCellMovements}
+          cobranzaRecords={props.cobranzaRecords}
+          clients={props.clients}
           conceptLabel={rows.find((r) => r.conceptKey === selectedCell.conceptKey)?.label ?? selectedCell.conceptKey}
           scenarioName={activeScenario.name}
           bucketLabel={engineBucketLabel(selectedCell.bucketKey, granularity)}
-          onSelectMovement={(movement) => {
+          // El anchor es OBLIGATORIO: `MovementDrillDownDrawer` hace
+          // `if (!movement || !anchor || !pos) return null`, así que pasarlo en
+          // null (como estaba) dejaba el drilldown sin abrir nunca — el
+          // movimiento se seleccionaba y no se veía nada.
+          onSelectMovement={(movement, anchor) => {
             setDetailMovement(movement);
-            setDetailAnchor(null);
+            setDetailAnchor(anchor);
           }}
           onClose={() => setSelectedCell(null)}
         />
@@ -1790,11 +1799,19 @@ function ProposalActionBar({
   );
 }
 
-function PlanningCellDetailPanel({
+/**
+ * Panel de detalle del pie de página de una celda. Exportado SÓLO para poder
+ * renderizarlo en test: es el eslabón que `d5b30a9` dejó sin cubrir (el
+ * desglose existía dentro de un componente inalcanzable), y ese defecto sólo se
+ * manifiesta montando de verdad. No lo consume nadie más.
+ */
+export function PlanningCellDetailPanel({
   movements,
   conceptLabel,
   scenarioName,
   bucketLabel,
+  cobranzaRecords,
+  clients,
   onSelectMovement,
   onClose,
 }: {
@@ -1802,9 +1819,33 @@ function PlanningCellDetailPanel({
   conceptLabel: string;
   scenarioName: string;
   bucketLabel: string;
-  onSelectMovement: (movement: FinancialMovement) => void;
+  cobranzaRecords?: CobranzaRecord[];
+  clients: Client[];
+  onSelectMovement: (movement: FinancialMovement, anchor: DOMRect) => void;
   onClose: () => void;
 }) {
+  // Respaldo por factura de las líneas del prorrateo Citi. `null` para todo lo
+  // demás, así que el resto de los movimientos se pinta igual que antes.
+  const citiBreakdowns = useMemo(() => {
+    const out = new Map<string, CitiCellBreakdown>();
+    if (!cobranzaRecords || cobranzaRecords.length === 0) return out;
+    for (const movement of movements) {
+      if (movement.subcategory !== INCOME_SUBCAT_CITI) continue;
+      if (!movement.counterpartyId) continue;
+      const date = movement.actualDate ?? movement.adjustedDate ?? movement.projectedDate;
+      if (!date || date.length < 7) continue;
+      const breakdown = buildCitiCellBreakdown({
+        records: cobranzaRecords,
+        clients,
+        cia: movement.companyId,
+        yearMonth: date.slice(0, 7),
+        clientId: movement.counterpartyId,
+        attributedAmount: effectiveAmount(movement),
+      });
+      if (breakdown) out.set(movement.id, breakdown);
+    }
+    return out;
+  }, [movements, cobranzaRecords, clients]);
   const inflows = movements.filter((movement) => movement.type === 'INFLOW');
   const outflows = movements.filter((movement) => movement.type === 'OUTFLOW');
   const total = movements.reduce((sum, movement) => sum + effectiveAmount(movement), 0);
@@ -1876,11 +1917,14 @@ function PlanningCellDetailPanel({
         ) : (
           <div className="space-y-2">
             {movements.map((movement) => (
-              <button
+              <div
                 key={movement.id}
+                className="rounded-xl border border-[var(--gray-200)] bg-white"
+              >
+              <button
                 type="button"
-                onClick={() => onSelectMovement(movement)}
-                className="w-full rounded-xl border border-[var(--gray-200)] bg-white p-3 text-left hover:bg-[var(--gray-50)]"
+                onClick={(event) => onSelectMovement(movement, event.currentTarget.getBoundingClientRect())}
+                className="w-full p-3 text-left hover:bg-[var(--gray-50)]"
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
@@ -1905,6 +1949,15 @@ function PlanningCellDetailPanel({
                   <span>{movement.status}</span>
                 </div>
               </button>
+              {/* Desglose por factura INLINE: es donde el usuario está mirando.
+                  El drilldown (segundo clic) sigue existiendo para el resto del
+                  detalle del movimiento. */}
+              {citiBreakdowns.get(movement.id) ? (
+                <div className="border-t border-[var(--gray-200)] px-3 pb-3 pt-2">
+                  <CitiInvoiceBreakdown breakdown={citiBreakdowns.get(movement.id)!} compact />
+                </div>
+              ) : null}
+              </div>
             ))}
           </div>
         )}

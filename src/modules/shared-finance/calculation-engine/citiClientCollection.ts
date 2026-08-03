@@ -132,10 +132,17 @@ export function selectCitiCollectionByClient(args: {
  * que el motor aplicó.
  *
  * `factor = importe atribuido / Σ facturas`. Vale 1 cuando el depósito se
- * acreditó completo (coincidencia exacta o remanente cubierto) y < 1 en el
- * reparto proporcional. Publicarlo es lo que evita que el desglose MIENTA: sin
- * él, unas facturas que no suman el total del renglón se leen como error de
- * captura en vez de como el reparto que son.
+ * acreditó completo (coincidencia exacta o remanente cubierto) y < 1 por DOS
+ * causas distintas: el reparto proporcional, o que el motor haya descontado del
+ * peso lo que ya se atribuyó a ese cliente por su propio depósito identificado
+ * (ese caso NO es dilución: la parte faltante ya está en otro movimiento de la
+ * MISMA celda, porque el `bank:` cruzado cae en la fila del mismo cliente).
+ * Publicarlo es lo que evita que el desglose MIENTA: sin él, unas facturas que
+ * no suman el total del renglón se leen como error de captura.
+ *
+ * `invoices` es SIEMPRE el set completo del cliente en el periodo — se lee de
+ * los records, no del peso ya mutado por el motor. Eso es deliberado: es lo que
+ * el usuario pidió auditar ("ese monto total respaldado en facturas").
  */
 export interface CitiCellBreakdown {
   invoices: CitiCollectionInvoice[];
