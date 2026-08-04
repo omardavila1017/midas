@@ -173,6 +173,28 @@ describe('PlanningCellDetailPanel · desglose de facturas Citi en el pie de pág
     expect(screen.queryByText('Suma de facturas')).toBeNull();
   });
 
+  it('no cuelga el desglose a un `cxc:` del bucket Citi (una factura, no el set del mes)', () => {
+    // `subcategory === 'Clientes Citi'` NO identifica la línea del prorrateo: el
+    // mismo bucket lo llevan el `cxc:` abierto, el `bank:` cruzado y el `rol:`
+    // proyectado del mismo cliente. Cada uno tiene su propio documento, así que
+    // listarles el set COMPLETO de la cobranza del mes con un factor de reparto
+    // afirma un respaldo que no es el suyo.
+    renderPanel(
+      [citiMovement({
+        id: 'cxc:00011:103246:RI-301306',
+        sourceSystem: 'JDE',
+        sourceObjectId: 'RI-301306',
+        status: 'PROJECTED_BASE',
+        concept: 'Factura CXC RI-301306 · 3M MEXICO',
+      })],
+      TRESM_FEB,
+    );
+
+    expect(screen.queryByText(/respalda/i)).toBeNull();
+    expect(screen.queryByText('Suma de facturas')).toBeNull();
+    expect(screen.queryByText('Factor aplicado')).toBeNull();
+  });
+
   it('no rompe ni pinta tabla cuando la cobranza del mes no está cargada', () => {
     renderPanel([citiMovement()], []);
     expect(screen.queryByText(/respalda/i)).toBeNull();

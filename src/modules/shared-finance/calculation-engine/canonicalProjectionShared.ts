@@ -200,6 +200,28 @@ const VIAJES_ESPECIALES_SUBROLE = 'viajes_especiales';
 export const CITI_CLIENT_SUBROLE = 'clientes_citi';
 
 /**
+ * Prefijo del `id` de las líneas sintéticas del prorrateo Citi. Lo emite
+ * `prorateCitiConcentradoraByClient` y lo consumen `movementFamily`
+ * (cashFlowBankReconciliation), `sourceAttribution` y el desglose por factura
+ * de la UI.
+ */
+export const CITI_PRORRATEO_ID_PREFIX = 'citi-prorrateo:';
+
+/**
+ * ¿Es el `id` de una línea del prorrateo Citi?
+ *
+ * Existe porque `subcategory === INCOME_SUBCAT_CITI` NO alcanza para decidirlo:
+ * ese bucket también lo llevan el `bank:` cruzado, el `cxc:` abierto y el `rol:`
+ * proyectado del mismo cliente. Sólo la línea del prorrateo se respalda con el
+ * SET COMPLETO de la cobranza del mes (su origen es el depósito, no una
+ * factura); las otras tres tienen su propio documento, así que colgarles ese
+ * desglose afirmaría un respaldo que no es el suyo.
+ */
+export function isCitiProrrateoMovementId(id: string | undefined): boolean {
+  return !!id && id.startsWith(CITI_PRORRATEO_ID_PREFIX);
+}
+
+/**
  * Si el cliente pertenece a un grupo comercial, devuelve el GRUPO PADRE como
  * counterparty. Esto colapsa las subsidiarias debajo de su padre en la tabla
  * de Planeación. Si no hay grupo, se queda con el cliente individual.

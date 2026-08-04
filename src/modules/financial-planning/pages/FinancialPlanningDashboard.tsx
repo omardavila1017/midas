@@ -121,7 +121,7 @@ import {
 import type { MidasProposalSuggestion } from '../../midas-ai';
 import { createFinancialAdjustment } from '../services/financialPlanningService';
 import { buildCitiCellBreakdown, type CitiCellBreakdown } from '../../shared-finance/calculation-engine/citiClientCollection';
-import { INCOME_SUBCAT_CITI } from '../../shared-finance/calculation-engine/canonicalProjectionShared';
+import { INCOME_SUBCAT_CITI, isCitiProrrateoMovementId } from '../../shared-finance/calculation-engine/canonicalProjectionShared';
 import { CitiInvoiceBreakdown } from '../../shared-finance/components/CitiInvoiceBreakdown';
 
 interface Props {
@@ -1830,6 +1830,12 @@ export function PlanningCellDetailPanel({
     const out = new Map<string, CitiCellBreakdown>();
     if (!cobranzaRecords || cobranzaRecords.length === 0) return out;
     for (const movement of movements) {
+      // El `id` decide, no la subcategoría: el bucket `Clientes Citi` lo llevan
+      // también el `bank:` cruzado, el `cxc:` abierto y el `rol:` proyectado del
+      // mismo cliente. Sólo la línea del prorrateo se respalda con el set
+      // COMPLETO de la cobranza del mes; colgárselo a las otras afirmaría un
+      // respaldo que no es el suyo (un `cxc:` es UNA factura, con su folio).
+      if (!isCitiProrrateoMovementId(movement.id)) continue;
       if (movement.subcategory !== INCOME_SUBCAT_CITI) continue;
       if (!movement.counterpartyId) continue;
       const date = movement.actualDate ?? movement.adjustedDate ?? movement.projectedDate;

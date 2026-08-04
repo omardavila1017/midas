@@ -38,6 +38,7 @@ import { buildHistoricalReconciledMovements } from './historicalReconciledEngine
 import { buildShortTermProjectionMovements } from './shortTermProjectionEngine';
 import {
   CITI_CLIENT_SUBROLE,
+  CITI_PRORRATEO_ID_PREFIX,
   INCOME_SUBCAT_CITI,
   type BuildArgs,
   type CanonicalProjectionInputs,
@@ -458,7 +459,7 @@ function prorateCitiConcentradoraByClient(
       synthetic.push(citiLine({
         // El id del depósito hace única la línea aunque el mismo cliente
         // reciba varios depósitos identificados en el mes.
-        id: `citi-prorrateo:${group.cia}:${clientId}:${deposit.movement.id}`,
+        id: `${CITI_PRORRATEO_ID_PREFIX}${group.cia}:${clientId}:${deposit.movement.id}`,
         cia: group.cia,
         date: deposit.date,
         clientId,
@@ -495,7 +496,7 @@ function prorateCitiConcentradoraByClient(
         mode = 'remanente-cubierto';
         for (const [clientId, info] of clientWeights) {
           synthetic.push(citiLine({
-            id: `citi-prorrateo:${group.cia}:${clientId}:${group.ym}`,
+            id: `${CITI_PRORRATEO_ID_PREFIX}${group.cia}:${clientId}:${group.ym}`,
             cia: group.cia,
             date: group.repDate,
             clientId,
@@ -507,7 +508,7 @@ function prorateCitiConcentradoraByClient(
           }));
         }
         synthetic.push(citiLine({
-          id: `citi-prorrateo:${group.cia}:sin-identificar:${group.ym}`,
+          id: `${CITI_PRORRATEO_ID_PREFIX}${group.cia}:sin-identificar:${group.ym}`,
           cia: group.cia,
           date: group.repDate,
           name: CITI_UNIDENTIFIED_NAME,
@@ -524,7 +525,7 @@ function prorateCitiConcentradoraByClient(
           const amount = leftoverPool * (info.amount / leftoverExpected);
           if (!(amount > 0)) continue;
           synthetic.push(citiLine({
-            id: `citi-prorrateo:${group.cia}:${clientId}:${group.ym}`,
+            id: `${CITI_PRORRATEO_ID_PREFIX}${group.cia}:${clientId}:${group.ym}`,
             cia: group.cia,
             date: group.repDate,
             clientId,

@@ -125,6 +125,32 @@ describe('MovementDrillDownDrawer · desglose de facturas Citi', () => {
     expect(screen.queryByText(/no alcanza/i)).toBeNull();
   });
 
+  it('NO cuelga el desglose del mes a un `cxc:` del mismo cliente — ése tiene su propio folio', () => {
+    // El bucket `Clientes Citi` lo llevan también `cxc:`, `bank:` y `rol:`. Un
+    // `cxc:` es UNA factura (`sourceObjectId` = folio) y el drawer ya la resolvía
+    // exacto; el desglose del prorrateo la tapaba con las 5 del mes + un factor
+    // de reparto, afirmando un respaldo que no es el suyo.
+    render(
+      <MovementDrillDownDrawer
+        movement={citiMovement({
+          id: 'cxc:00011:55768551:RI-302663',
+          sourceSystem: 'JDE',
+          sourceObjectId: 'RI-302663',
+          status: 'PROJECTED_BASE',
+          concept: 'Factura CXC RI-302663 · ARGO PROYECTOS Y ESTRUCTURAS',
+        })}
+        anchor={anchor}
+        onClose={() => {}}
+        invoiceContext={context(ARGO_FEB)}
+      />,
+    );
+    // Sección exacta por folio, no el desglose del periodo.
+    expect(screen.queryByText('Factor aplicado')).toBeNull();
+    expect(screen.queryByText('Suma de facturas')).toBeNull();
+    expect(screen.getByText('Factura CXC JDE')).toBeTruthy();
+    expect(screen.queryByText('RI-301711')).toBeNull();
+  });
+
   it('no rompe cuando no llega cobranza en el contexto (comportamiento previo)', () => {
     render(
       <MovementDrillDownDrawer

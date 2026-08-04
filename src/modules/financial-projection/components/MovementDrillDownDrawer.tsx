@@ -20,7 +20,7 @@ import type { CobranzaRecord } from '../../../services/jdeTypes';
 import { projectClientMonth } from '../../../domain/collectionEngine';
 import { buildCitiCellBreakdown, type CitiCellBreakdown } from '../../shared-finance/calculation-engine/citiClientCollection';
 import { CitiInvoiceBreakdown } from '../../shared-finance/components/CitiInvoiceBreakdown';
-import { INCOME_SUBCAT_CITI } from '../../shared-finance/calculation-engine/canonicalProjectionShared';
+import { INCOME_SUBCAT_CITI, isCitiProrrateoMovementId } from '../../shared-finance/calculation-engine/canonicalProjectionShared';
 import {
   bankAccountBusinessUnitLabel,
   bankAccountFlowLabel,
@@ -652,11 +652,17 @@ function findCxpRecords(records: CXPRecord[], movement: FinancialMovement): CXPR
  * el movimiento NO es una atribución Citi por cliente (la fila "por
  * identificar" no trae `counterpartyId`) o cuando no llegó cobranza en el
  * contexto — en esos casos el drawer sigue con su comportamiento previo.
+ *
+ * El `id` es lo que decide, no la subcategoría: el bucket `Clientes Citi` lo
+ * llevan también el `bank:` cruzado, el `cxc:` abierto y el `rol:` proyectado
+ * del mismo cliente, y ésos SÍ tienen su propio documento (`sourceObjectId` =
+ * folio para `cxc:`), que este desglose tapaba con el set completo del mes.
  */
 function buildCitiBreakdownForMovement(
   movement: FinancialMovement,
   context: InvoiceContext,
 ): CitiCellBreakdown | null {
+  if (!isCitiProrrateoMovementId(movement.id)) return null;
   if (movement.subcategory !== INCOME_SUBCAT_CITI) return null;
   if (!movement.counterpartyId) return null;
   const records = context.cobranzaRecords;
