@@ -21,21 +21,23 @@
  */
 import type { Client } from '../../../domain/types';
 import type { CobranzaRecord } from '../../../services/jdeTypes';
+import type { CitiCollectionInvoice, FinancialMovement } from '../types';
+import { effectiveAmount } from './financialProjectionEngine';
 import { buildClientLookup, findClientForCobranza } from '../../../domain/collectionCalendarEngine';
 import { isInternalCounterparty } from '../../../domain/netCashFlowEngine';
 import { isPersonName } from '../../../domain/personNameHeuristic';
 import { VIAJES_ESPECIALES_GROUP_ID } from '../../../domain/viajesEspecialesCatalog';
 import { normalizeCia } from '../../../domain/cia';
-import { cleanDate, clientDisplayCounterparty } from './canonicalProjectionShared';
+import {
+  cleanDate,
+  clientDisplayCounterparty,
+  isCitiProrrateoMovementId,
+} from './canonicalProjectionShared';
 
-/** Factura que respalda el importe de un cliente en el periodo. */
-export interface CitiCollectionInvoice {
-  noFactura: string;
-  fechaFactura: string;
-  fechaCobro: string;
-  noRecibo?: string;
-  importeBrutoPesos: number;
-}
+/** Factura que respalda el importe de un cliente en el periodo. Definida en
+ *  `../types` porque `FinancialMovement` la referencia (`citiInvoices`); se
+ *  re-exporta aquí para no mover los imports de los consumidores. */
+export type { CitiCollectionInvoice } from '../types';
 
 /**
  * Cobranza de un cliente en un (cía, mes). `amount` arranca como Σ de
@@ -151,6 +153,91 @@ export interface CitiCellBreakdown {
   factor: number;
 }
 
+/**
+ * Por qué una línea Citi NO pudo desglosarse. Existe porque las tres causas se
+ * veían IDÉNTICAS en pantalla —la celda mostraba sólo el total, sin tabla y sin
+ * explicación— y desde ahí no se distingue "el motor no repartió este depósito"
+ * de "la cobranza no está cargada" ni de "la cifra se calculó con otra carga".
+ * Es la misma regla que el resto del módulo: dato incompleto, nunca silencio.
+ */
+export type CitiCellUnavailableReason =
+  /** La línea no identifica cliente: es el lump de la concentradora o la fila
+   *  "por identificar" que el motor deja cuando no pudo repartir el periodo. */
+  | 'sin-cliente'
+  /** No llegó cobranza JDE a la superficie (sesión sin ese dataset cargado). */
+  | 'sin-cobranza-cargada'
+  /** Cliente sin facturas con cobro en el periodo entre los records cargados:
+   *  la cifra y el desglose vienen de dos cargas distintas. */
+  | 'sin-facturas';
+
+export type CitiCellDetail =
+  | { status: 'ok'; breakdown: CitiCellBreakdown }
+  | { status: 'no-disponible'; reason: CitiCellUnavailableReason };
+
+/**
+ * Decisión ÚNICA de las dos superficies que pintan el desglose (el panel del pie
+ * de la celda en Planeación y el drilldown del movimiento). Antes cada una
+ * repetía los guards por su cuenta y ambas devolvían `null` indistinto, así que
+ * un fallo sólo se manifestaba como una celda sin tabla.
+ *
+ * Devuelve `null` cuando el movimiento NO es una línea Citi — ahí no hay nada
+ * que decir y el resto del detalle se pinta igual que siempre.
+ */
+export function resolveCitiCellDetail(args: {
+  movement: FinancialMovement;
+  records: CobranzaRecord[] | undefined;
+  clients: Client[];
+}): CitiCellDetail | null {
+  const { movement } = args;
+  // La compuerta es el PREFIJO DEL ID, no la subcategoría: el bucket "Clientes
+  // Citi" lo comparten cuatro familias del mismo cliente (`citi-prorrateo:`,
+  // `bank:` cruzado, `cxc:` abierto, `rol:` proyectado) y sólo la primera se
+  // respalda con el set completo de la cobranza del mes. A las otras tres no se
+  // les cuelga ni la tabla ni la nota — tienen su propio documento.
+  if (!isCitiProrrateoMovementId(movement.id)) return null;
+  const date = movement.actualDate ?? movement.adjustedDate ?? movement.projectedDate;
+  if (!date || date.length < 7) return null;
+
+  // Camino BUENO: el motor ya guardó las facturas que usó como peso. No se
+  // re-deriva NADA, así que da igual cómo haya evolucionado el catálogo de
+  // clientes desde que corrió el motor — que es justo lo que rompía el
+  // desglose (ver `citiInvoices` en `../types`).
+  if (movement.citiInvoices && movement.citiInvoices.length > 0) {
+    return { status: 'ok', breakdown: breakdownFrom(movement.citiInvoices, effectiveAmount(movement)) };
+  }
+
+  if (!movement.counterpartyId) return { status: 'no-disponible', reason: 'sin-cliente' };
+  if (!args.records || args.records.length === 0) {
+    return { status: 'no-disponible', reason: 'sin-cobranza-cargada' };
+  }
+  const breakdown = buildCitiCellBreakdown({
+    records: args.records,
+    clients: args.clients,
+    cia: movement.companyId,
+    yearMonth: date.slice(0, 7),
+    clientId: movement.counterpartyId,
+    attributedAmount: effectiveAmount(movement),
+  });
+  if (!breakdown) return { status: 'no-disponible', reason: 'sin-facturas' };
+  return { status: 'ok', breakdown };
+}
+
+/** Ordena, suma y calcula el factor. Único lugar donde se arma el desglose,
+ *  lo alimente el respaldo del motor o la re-derivación de respaldo. */
+export function breakdownFrom(
+  invoices: CitiCollectionInvoice[],
+  attributedAmount: number,
+): CitiCellBreakdown {
+  const invoicedTotal = invoices.reduce((sum, invoice) => sum + invoice.importeBrutoPesos, 0);
+  return {
+    invoices: [...invoices].sort((a, b) => a.fechaCobro.localeCompare(b.fechaCobro)
+      || a.noFactura.localeCompare(b.noFactura)),
+    invoicedTotal,
+    attributedAmount,
+    factor: invoicedTotal > 0 ? attributedAmount / invoicedTotal : 0,
+  };
+}
+
 export function buildCitiCellBreakdown(args: {
   records: CobranzaRecord[];
   clients: Client[];
@@ -167,12 +254,5 @@ export function buildCitiCellBreakdown(args: {
   });
   const entry = byGroup.get(key)?.get(args.clientId);
   if (!entry || entry.invoices.length === 0) return null;
-  const invoicedTotal = entry.amount;
-  return {
-    invoices: [...entry.invoices].sort((a, b) => a.fechaCobro.localeCompare(b.fechaCobro)
-      || a.noFactura.localeCompare(b.noFactura)),
-    invoicedTotal,
-    attributedAmount: args.attributedAmount,
-    factor: invoicedTotal > 0 ? args.attributedAmount / invoicedTotal : 0,
-  };
+  return breakdownFrom(entry.invoices, args.attributedAmount);
 }

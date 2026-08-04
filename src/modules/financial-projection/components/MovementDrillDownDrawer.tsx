@@ -18,9 +18,11 @@ import type {
 } from '../../../domain/types';
 import type { CobranzaRecord } from '../../../services/jdeTypes';
 import { projectClientMonth } from '../../../domain/collectionEngine';
-import { buildCitiCellBreakdown, type CitiCellBreakdown } from '../../shared-finance/calculation-engine/citiClientCollection';
-import { CitiInvoiceBreakdown } from '../../shared-finance/components/CitiInvoiceBreakdown';
-import { INCOME_SUBCAT_CITI, isCitiProrrateoMovementId } from '../../shared-finance/calculation-engine/canonicalProjectionShared';
+import { resolveCitiCellDetail } from '../../shared-finance/calculation-engine/citiClientCollection';
+import {
+  CitiBreakdownUnavailableNote,
+  CitiInvoiceBreakdown,
+} from '../../shared-finance/components/CitiInvoiceBreakdown';
 import {
   bankAccountBusinessUnitLabel,
   bankAccountFlowLabel,
@@ -320,9 +322,23 @@ function InvoiceDetailSection({
     // Línea del prorrateo Citi: NO tiene `sourceObjectId` (un folio único)
     // porque su origen es el DEPÓSITO bancario, no una factura. El respaldo se
     // reconstruye con el helper compartido, de modo que las facturas listadas
-    // son exactamente las que el motor usó como peso.
-    const citi = buildCitiBreakdownForMovement(movement, context);
-    if (citi) return <CitiInvoiceBreakdown breakdown={citi} />;
+    // son exactamente las que el motor usó como peso. Cuando no hay desglose se
+    // declara la causa — antes caía al camino genérico de abajo, que para una
+    // línea Citi acaba en "revisa la configuración del cliente" y manda a
+    // buscar donde no está.
+    const citi = resolveCitiCellDetail({
+      movement,
+      records: context.cobranzaRecords,
+      clients: context.clients,
+    });
+    if (citi?.status === 'ok') return <CitiInvoiceBreakdown breakdown={citi.breakdown} />;
+    if (citi) {
+      return (
+        <SectionCard title="Desglose por factura no disponible">
+          <CitiBreakdownUnavailableNote reason={citi.reason} />
+        </SectionCard>
+      );
+    }
 
     const cxcRecords = findCobranzaRecords(context.cobranzaRecords ?? [], movement);
     if (cxcRecords.length > 0) {
@@ -645,38 +661,6 @@ function findCxpRecords(records: CXPRecord[], movement: FinancialMovement): CXPR
   if (exact.length > 0) return exact;
   // Fallback: si la empresa no coincidió, devolvemos cualquier match por folio.
   return records.filter((record) => record.noFactura === movement.sourceObjectId);
-}
-
-/**
- * Respaldo por facturas de una línea `citi-prorrateo:`. Devuelve `null` cuando
- * el movimiento NO es una atribución Citi por cliente (la fila "por
- * identificar" no trae `counterpartyId`) o cuando no llegó cobranza en el
- * contexto — en esos casos el drawer sigue con su comportamiento previo.
- *
- * El `id` es lo que decide, no la subcategoría: el bucket `Clientes Citi` lo
- * llevan también el `bank:` cruzado, el `cxc:` abierto y el `rol:` proyectado
- * del mismo cliente, y ésos SÍ tienen su propio documento (`sourceObjectId` =
- * folio para `cxc:`), que este desglose tapaba con el set completo del mes.
- */
-function buildCitiBreakdownForMovement(
-  movement: FinancialMovement,
-  context: InvoiceContext,
-): CitiCellBreakdown | null {
-  if (!isCitiProrrateoMovementId(movement.id)) return null;
-  if (movement.subcategory !== INCOME_SUBCAT_CITI) return null;
-  if (!movement.counterpartyId) return null;
-  const records = context.cobranzaRecords;
-  if (!records || records.length === 0) return null;
-  const date = movement.actualDate ?? movement.adjustedDate ?? movement.projectedDate;
-  if (!date || date.length < 7) return null;
-  return buildCitiCellBreakdown({
-    records,
-    clients: context.clients,
-    cia: movement.companyId,
-    yearMonth: date.slice(0, 7),
-    clientId: movement.counterpartyId,
-    attributedAmount: effectiveAmount(movement),
-  });
 }
 
 function findCobranzaRecords(records: CobranzaRecord[], movement: FinancialMovement): CobranzaRecord[] {

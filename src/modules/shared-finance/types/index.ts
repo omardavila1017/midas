@@ -38,6 +38,22 @@ export type TaxStatus = 'PROJECTED' | 'CONFIRMED' | 'PAID' | 'PENDING';
 export type TaxSource = 'CALCULATED' | 'JDE' | 'MANUAL' | 'SCENARIO';
 export type TaxPaymentPlanStatus = 'DRAFT' | 'APPROVED' | 'PAID';
 
+/**
+ * Factura de cobranza que respalda el importe atribuido a un cliente Citi.
+ *
+ * Vive aquí (y no en `calculation-engine/citiClientCollection.ts`, que la
+ * re-exporta) porque `FinancialMovement` la referencia: el motor adjunta estas
+ * facturas a la línea que emite, y el módulo de cálculo importa de `../types`,
+ * así que definirla allá cerraría el ciclo.
+ */
+export interface CitiCollectionInvoice {
+  noFactura: string;
+  fechaFactura: string;
+  fechaCobro: string;
+  noRecibo?: string;
+  importeBrutoPesos: number;
+}
+
 export interface FinancialMovement {
   id: string;
   sourceSystem: FinancialSourceSystem;
@@ -74,6 +90,24 @@ export interface FinancialMovement {
   status: FinancialDataStatus;
   lockState: LockState;
   comments?: string[];
+  /**
+   * Facturas que respaldan el importe de una línea `citi-prorrateo:`, guardadas
+   * POR EL MOTOR al emitirla.
+   *
+   * Existe porque la UI no puede volver a derivarlas: la llave de cliente sale
+   * de `clientDisplayCounterparty`, que depende del estado de `clients`, y
+   * `AppCore` MUTA ese catálogo después del boot (cuelga `jdeAccounts`, aplica
+   * el grupo comercial del padre JDE). Comprobado con datos reales de CARRIER
+   * MEXICO: el mismo registro de cobranza resuelve a `46055218` sin catálogo, a
+   * `catalog-12-carrier-…` con el catálogo bundleado y a `jde-padre-5240062`
+   * una vez agrupado. Con el run servido del caché, el `counterpartyId` de la
+   * línea es de un estado y la búsqueda de la UI de otro → no empataba y NINGÚN
+   * cliente mostraba desglose.
+   *
+   * Guardarlo aquí elimina la clase completa: la UI lee lo que el motor
+   * decidió en vez de recalcular una llave que se mueve.
+   */
+  citiInvoices?: CitiCollectionInvoice[];
   createdAt: string;
   updatedAt: string;
 }

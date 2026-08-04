@@ -33,7 +33,7 @@ import { findBankAccount } from '../../../domain/bankAccountsCatalog';
 import { normalizeCia } from '../../../domain/cia';
 import { createCitiClientResolver, selectCitiCollectionByClient } from './citiClientCollection';
 import { calculateConfidenceBand } from './financialProjectionEngine';
-import type { FinancialMovement } from '../types';
+import type { CitiCollectionInvoice, FinancialMovement } from '../types';
 import { buildHistoricalReconciledMovements } from './historicalReconciledEngine';
 import { buildShortTermProjectionMovements } from './shortTermProjectionEngine';
 import {
@@ -367,6 +367,15 @@ function prorateCitiConcentradoraByClient(
     id: string; cia: string; date: string;
     clientId?: string; name: string; amount: number;
     concept: string; rule: string; comment: string;
+    /**
+     * Facturas que respaldan el importe. Se adjuntan a la línea para que la UI
+     * NO tenga que re-derivar la llave del cliente: esa llave sale de
+     * `clientDisplayCounterparty`, que cambia cuando `AppCore` muta el catálogo
+     * después del boot, y con el run servido del caché los dos lados dejaban de
+     * empatar — ningún cliente mostraba desglose. Ver `citiInvoices` en
+     * `../types`.
+     */
+    invoices?: CitiCollectionInvoice[];
   }): FinancialMovement => ({
     id: args.id,
     sourceSystem: 'BANK',
@@ -391,6 +400,7 @@ function prorateCitiConcentradoraByClient(
     status: 'REAL',
     lockState: 'LOCKED',
     comments: [args.comment],
+    ...(args.invoices && args.invoices.length > 0 ? { citiInvoices: args.invoices } : {}),
     createdAt: `${args.date}T00:00:00.000Z`,
     updatedAt: `${args.date}T00:00:00.000Z`,
   });
@@ -468,6 +478,7 @@ function prorateCitiConcentradoraByClient(
         concept: `Cobro Citi ${info.name} (depósito concentradora ${deposit.date})`,
         rule: 'Depósito concentradora Citi identificado por importe exacto de la cobranza JDE',
         comment: 'El importe del depósito coincide al centavo con la cobranza sin atribuir de un solo cliente, así que se le acredita completo. No depende del folio ni del recibo.',
+        invoices: info.invoices,
       }));
       clientWeights.delete(clientId);
       dropIds.add(deposit.movement.id);
@@ -505,6 +516,7 @@ function prorateCitiConcentradoraByClient(
             concept: `Cobro Citi ${info.name} (depósito concentradora ${group.ym})`,
             rule: 'Atribución del depósito concentradora Citi por la cobranza JDE sin atribuir',
             comment: 'El depósito del mes alcanza para cubrir la cobranza sin atribuir, así que cada cliente recibe su importe real. El excedente queda en la fila por identificar.',
+            invoices: info.invoices,
           }));
         }
         synthetic.push(citiLine({
@@ -534,6 +546,7 @@ function prorateCitiConcentradoraByClient(
             concept: `Cobro Citi ${info.name} (prorrateo depósito concentradora ${group.ym})`,
             rule: 'Prorrateo depósito concentradora Citi por cobranza JDE',
             comment: 'Atribución por cliente del depósito real a la concentradora Citi, prorrateada según la cobranza JDE sin atribuir del periodo. El total mensual del banco se conserva exacto.',
+            invoices: info.invoices,
           }));
         }
         for (const deposit of leftoverDeposits) dropIds.add(deposit.movement.id);

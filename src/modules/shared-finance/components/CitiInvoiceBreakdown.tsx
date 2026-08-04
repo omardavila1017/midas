@@ -15,7 +15,41 @@
  * "el depósito no alcanza" sería falso.
  */
 import { fmtCurrency, fmtDate, fmtPctInt } from '../../../formatters';
-import type { CitiCellBreakdown } from '../calculation-engine/citiClientCollection';
+import type {
+  CitiCellBreakdown,
+  CitiCellUnavailableReason,
+} from '../calculation-engine/citiClientCollection';
+
+/**
+ * Cuando NO hay desglose, la celda no puede quedarse mostrando sólo el total:
+ * así se ven idénticas las tres causas y no hay por dónde empezar a revisar.
+ * Cada texto dice qué pasó Y qué hacer, sin afirmar una causa que no se conoce.
+ */
+const UNAVAILABLE_COPY: Record<CitiCellUnavailableReason, string> = {
+  'sin-cliente':
+    'Este renglón es el depósito de la concentradora sin cliente identificado, así que no hay facturas que desglosar: el motor no pudo repartir el periodo por cliente. Los clientes con reparto sí aparecen como renglones propios.',
+  'sin-cobranza-cargada':
+    'La cobranza JDE no está cargada en esta sesión, así que el desglose no se puede reconstruir. Revisa "Salud de datos" y vuelve a entrar.',
+  'sin-facturas':
+    'No hay facturas de este cliente con fecha de cobro en el periodo entre los registros cargados. El importe se calculó con una carga de cobranza distinta a la actual: resincroniza en "Salud de datos".',
+};
+
+export function CitiBreakdownUnavailableNote({
+  reason,
+  compact = false,
+}: {
+  reason: CitiCellUnavailableReason;
+  compact?: boolean;
+}) {
+  return (
+    <div
+      className={`${compact ? 'pt-1' : 'px-3 py-2'} text-[10.5px] leading-snug text-[var(--gray-500)]`}
+      data-citi-unavailable={reason}
+    >
+      {UNAVAILABLE_COPY[reason]}
+    </div>
+  );
+}
 
 function safeDate(value: string | undefined | null): string {
   if (!value) return '—';

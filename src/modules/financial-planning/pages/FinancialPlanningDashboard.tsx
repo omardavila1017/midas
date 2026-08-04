@@ -120,9 +120,16 @@ import {
 } from '../../shared-finance/components/tone';
 import type { MidasProposalSuggestion } from '../../midas-ai';
 import { createFinancialAdjustment } from '../services/financialPlanningService';
-import { buildCitiCellBreakdown, type CitiCellBreakdown } from '../../shared-finance/calculation-engine/citiClientCollection';
-import { INCOME_SUBCAT_CITI, isCitiProrrateoMovementId } from '../../shared-finance/calculation-engine/canonicalProjectionShared';
-import { CitiInvoiceBreakdown } from '../../shared-finance/components/CitiInvoiceBreakdown';
+import {
+  resolveCitiCellDetail,
+  type CitiCellBreakdown,
+  type CitiCellDetail,
+  type CitiCellUnavailableReason,
+} from '../../shared-finance/calculation-engine/citiClientCollection';
+import {
+  CitiBreakdownUnavailableNote,
+  CitiInvoiceBreakdown,
+} from '../../shared-finance/components/CitiInvoiceBreakdown';
 
 interface Props {
   companyCode: string;
@@ -1550,6 +1557,8 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
           movements={selectedCellMovements}
           cobranzaRecords={props.cobranzaRecords}
           clients={props.clients}
+          cellOverrideValue={overrideFor(selectedCell.conceptKey, selectedCell.bucketKey)?.value}
+          cellHasValue={baseValueFor(selectedCell.conceptKey, selectedCell.bucketKey) !== 0}
           conceptLabel={rows.find((r) => r.conceptKey === selectedCell.conceptKey)?.label ?? selectedCell.conceptKey}
           scenarioName={activeScenario.name}
           bucketLabel={engineBucketLabel(selectedCell.bucketKey, granularity)}
@@ -1812,6 +1821,8 @@ export function PlanningCellDetailPanel({
   bucketLabel,
   cobranzaRecords,
   clients,
+  cellOverrideValue,
+  cellHasValue = false,
   onSelectMovement,
   onClose,
 }: {
@@ -1821,34 +1832,28 @@ export function PlanningCellDetailPanel({
   bucketLabel: string;
   cobranzaRecords?: CobranzaRecord[];
   clients: Client[];
+  /** Valor del `CellOverride` de la celda, si tiene uno. Una celda editada a
+   *  mano pinta cifra SIN movimientos detrás: hay que decirlo, no dejarla como
+   *  "no hay movimientos". */
+  cellOverrideValue?: number;
+  /** La celda pinta una cifra distinta de 0. Con `movements` vacío eso sólo
+   *  puede ser una corrida cuya granularidad/ventana ya no es la de la vista. */
+  cellHasValue?: boolean;
   onSelectMovement: (movement: FinancialMovement, anchor: DOMRect) => void;
   onClose: () => void;
 }) {
   // Respaldo por factura de las líneas del prorrateo Citi. `null` para todo lo
   // demás, así que el resto de los movimientos se pinta igual que antes.
-  const citiBreakdowns = useMemo(() => {
-    const out = new Map<string, CitiCellBreakdown>();
-    if (!cobranzaRecords || cobranzaRecords.length === 0) return out;
+  //
+  // La decisión (y el POR QUÉ cuando no hay desglose) vive en
+  // `resolveCitiCellDetail`: el drilldown la comparte, y los tres guards que
+  // antes hacían `continue` en silencio ahora se explican en pantalla — una
+  // celda sin tabla no dice nada sobre cuál de las tres causas ocurrió.
+  const citiDetails = useMemo(() => {
+    const out = new Map<string, CitiCellDetail>();
     for (const movement of movements) {
-      // El `id` decide, no la subcategoría: el bucket `Clientes Citi` lo llevan
-      // también el `bank:` cruzado, el `cxc:` abierto y el `rol:` proyectado del
-      // mismo cliente. Sólo la línea del prorrateo se respalda con el set
-      // COMPLETO de la cobranza del mes; colgárselo a las otras afirmaría un
-      // respaldo que no es el suyo (un `cxc:` es UNA factura, con su folio).
-      if (!isCitiProrrateoMovementId(movement.id)) continue;
-      if (movement.subcategory !== INCOME_SUBCAT_CITI) continue;
-      if (!movement.counterpartyId) continue;
-      const date = movement.actualDate ?? movement.adjustedDate ?? movement.projectedDate;
-      if (!date || date.length < 7) continue;
-      const breakdown = buildCitiCellBreakdown({
-        records: cobranzaRecords,
-        clients,
-        cia: movement.companyId,
-        yearMonth: date.slice(0, 7),
-        clientId: movement.counterpartyId,
-        attributedAmount: effectiveAmount(movement),
-      });
-      if (breakdown) out.set(movement.id, breakdown);
+      const detail = resolveCitiCellDetail({ movement, records: cobranzaRecords, clients });
+      if (detail) out.set(movement.id, detail);
     }
     return out;
   }, [movements, cobranzaRecords, clients]);
@@ -1917,8 +1922,29 @@ export function PlanningCellDetailPanel({
       </div>
       <div className="max-h-[480px] overflow-auto p-3">
         {movements.length === 0 ? (
-          <div className="rounded-xl bg-[var(--gray-50)] px-3 py-8 text-center text-[12px] text-[var(--gray-400)]">
-            No hay movimientos ligados a esta celda.
+          // Tres causas distintas producían este mismo mensaje, y desde él no se
+          // podía diagnosticar ninguna: la celda es una edición manual (no tiene
+          // movimientos detrás por definición), el renglón está vacío en el
+          // periodo (lo esperado — un cliente sin cobranza aplicada ese mes), o
+          // la celda pinta cifra de una corrida cuya granularidad/ventana ya no
+          // es la actual. Se declara cuál, igual que en el desglose Citi.
+          <div className="rounded-xl bg-[var(--gray-50)] px-3 py-6 text-center text-[12px] text-[var(--gray-400)]">
+            {cellOverrideValue !== undefined ? (
+              <>
+                El número de esta celda es una <strong className="font-semibold">edición manual</strong>
+                {' '}({fmtCompact(cellOverrideValue)}), así que no tiene movimientos detrás.
+              </>
+            ) : cellHasValue ? (
+              <>
+                La celda muestra cifra pero sus movimientos no corresponden a esta vista: el escenario
+                se está recalculando o cambió la granularidad. Vuelve a abrirla en un momento.
+              </>
+            ) : (
+              <>
+                Este renglón no tiene movimientos en el periodo. Para un cliente Citi eso es lo
+                esperado cuando no tuvo cobranza aplicada en el mes.
+              </>
+            )}
           </div>
         ) : (
           <div className="space-y-2">
@@ -1958,9 +1984,19 @@ export function PlanningCellDetailPanel({
               {/* Desglose por factura INLINE: es donde el usuario está mirando.
                   El drilldown (segundo clic) sigue existiendo para el resto del
                   detalle del movimiento. */}
-              {citiBreakdowns.get(movement.id) ? (
+              {citiDetails.get(movement.id) ? (
                 <div className="border-t border-[var(--gray-200)] px-3 pb-3 pt-2">
-                  <CitiInvoiceBreakdown breakdown={citiBreakdowns.get(movement.id)!} compact />
+                  {citiDetails.get(movement.id)!.status === 'ok' ? (
+                    <CitiInvoiceBreakdown
+                      breakdown={(citiDetails.get(movement.id) as { breakdown: CitiCellBreakdown }).breakdown}
+                      compact
+                    />
+                  ) : (
+                    <CitiBreakdownUnavailableNote
+                      reason={(citiDetails.get(movement.id) as { reason: CitiCellUnavailableReason }).reason}
+                      compact
+                    />
+                  )}
                 </div>
               ) : null}
               </div>

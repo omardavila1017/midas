@@ -83,12 +83,12 @@ const ACEROMEX_ENE = [
   }),
 ];
 
-function renderPanel(
+function renderResult(
   movements: FinancialMovement[],
   cobranzaRecords: CobranzaRecord[] | undefined,
   onSelectMovement = vi.fn(),
 ) {
-  render(
+  return render(
     <PlanningCellDetailPanel
       movements={movements}
       cobranzaRecords={cobranzaRecords}
@@ -100,6 +100,14 @@ function renderPanel(
       onClose={() => {}}
     />,
   );
+}
+
+function renderPanel(
+  movements: FinancialMovement[],
+  cobranzaRecords: CobranzaRecord[] | undefined,
+  onSelectMovement = vi.fn(),
+) {
+  renderResult(movements, cobranzaRecords, onSelectMovement);
   return onSelectMovement;
 }
 
@@ -195,12 +203,102 @@ describe('PlanningCellDetailPanel · desglose de facturas Citi en el pie de pág
     expect(screen.queryByText('Factor aplicado')).toBeNull();
   });
 
-  it('no rompe ni pinta tabla cuando la cobranza del mes no está cargada', () => {
-    renderPanel([citiMovement()], []);
+  // Las tres causas de "celda sin tabla" se veían IDÉNTICAS: sólo el total, sin
+  // una palabra. Desde ahí no se distingue un depósito que el motor no repartió
+  // de una cobranza que no se cargó ni de una cifra calculada con otra carga —
+  // que es exactamente en lo que se atoró el reporte de este defecto.
+  it('declara que la cobranza no está cargada en vez de callarse', () => {
+    const { unmount } = renderResult([citiMovement()], []);
     expect(screen.queryByText(/respalda/i)).toBeNull();
+    expect(screen.getByText(/La cobranza JDE no está cargada en esta sesión/i)).toBeTruthy();
+    unmount();
 
     renderPanel([citiMovement()], undefined);
+    expect(screen.getByText(/La cobranza JDE no está cargada en esta sesión/i)).toBeTruthy();
+  });
+
+  it('declara que el renglón es el depósito sin cliente identificado', () => {
+    // La fila que el motor emite para el excedente que ninguna cobranza explica
+    // (`citi-prorrateo:{cia}:sin-identificar:{ym}`): sí es del prorrateo, pero
+    // no tiene cliente, así que no hay facturas que desglosar.
+    renderPanel(
+      [citiMovement({
+        id: 'citi-prorrateo:00011:sin-identificar:2026-02',
+        counterpartyId: undefined,
+        counterpartyName: 'Cobranza Citi por identificar',
+        counterpartyType: 'BANK',
+      })],
+      TRESM_FEB,
+    );
+
     expect(screen.queryByText(/respalda/i)).toBeNull();
+    expect(screen.getByText(/depósito de la concentradora sin cliente identificado/i)).toBeTruthy();
+  });
+
+  it('declara el desfase cuando el cliente no tiene facturas con cobro en el periodo', () => {
+    // La cifra la produjo el motor con una carga de cobranza y el panel lee otra
+    // (ventana distinta / caché resincronizado): el desglose y el número no
+    // vienen del mismo dato, y eso NO se puede pintar como celda vacía.
+    renderPanel([citiMovement()], ACEROMEX_ENE);
+
+    expect(screen.queryByText(/respalda/i)).toBeNull();
+    expect(screen.getByText(/No hay facturas de este cliente con fecha de cobro en el periodo/i)).toBeTruthy();
+  });
+
+  // "No hay movimientos ligados a esta celda" también tenía tres causas y era un
+  // callejón sin salida: es el mensaje que se ve al abrir una celda de un cliente
+  // Citi y no dice si el renglón está vacío por diseño, si la cifra es manual, o
+  // si la corrida que la pintó ya no corresponde a la vista.
+  describe('celda sin movimientos', () => {
+    it('dice que la cifra es una edición manual cuando la celda trae override', () => {
+      render(
+        <PlanningCellDetailPanel
+          movements={[]}
+          clients={[]}
+          cellOverrideValue={1_000_000}
+          cellHasValue
+          conceptLabel="3M MEXICO"
+          scenarioName="Aprobado"
+          bucketLabel="feb 2026"
+          onSelectMovement={vi.fn()}
+          onClose={() => {}}
+        />,
+      );
+
+      expect(screen.getByText(/edición manual/i)).toBeTruthy();
+    });
+
+    it('distingue "cifra sin movimientos de esta vista" de un renglón vacío', () => {
+      const { unmount } = render(
+        <PlanningCellDetailPanel
+          movements={[]}
+          clients={[]}
+          cellHasValue
+          conceptLabel="3M MEXICO"
+          scenarioName="Escenario Base"
+          bucketLabel="feb 2026"
+          onSelectMovement={vi.fn()}
+          onClose={() => {}}
+        />,
+      );
+      expect(screen.getByText(/el escenario\s+se está recalculando o cambió la granularidad/i)).toBeTruthy();
+      unmount();
+
+      // Sin cifra: es el caso ESPERADO (cliente sin cobranza aplicada ese mes) y
+      // no debe leerse como falla — el handoff lo documenta para ARGO en enero.
+      render(
+        <PlanningCellDetailPanel
+          movements={[]}
+          clients={[]}
+          conceptLabel="ARGO PROYECTOS Y ESTRUCTURAS"
+          scenarioName="Escenario Base"
+          bucketLabel="ene 2026"
+          onSelectMovement={vi.fn()}
+          onClose={() => {}}
+        />,
+      );
+      expect(screen.getByText(/es lo\s+esperado cuando no tuvo cobranza aplicada en el mes/i)).toBeTruthy();
+    });
   });
 
   it('entrega un anchor real al seleccionar el movimiento (el drilldown lo exige)', () => {
