@@ -121,13 +121,15 @@ function LoginShell({ children }: { children: ReactNode }) {
         {children}
         <p
           className="mt-6 text-center text-[10px] font-medium uppercase tracking-[0.12em] text-[var(--gray-400)]"
-          title={`Versión automática (MAJOR.MINOR.#PRs) · build ${BUILD_ID}`}
+          title={`Versión = número de PR desplegado · build ${BUILD_ID}`}
         >
-          {/* El build id hace VERIFICABLE que un deploy llegó. La versión de
-              git se congela en el deploy real (llega por rsync sin `.git`), así
-              que sin esto no se distingue "el fix no sirvió" de "el fix no está
-              desplegado" — que fue justo la confusión con los PRs #239/#240. */}
-          Midas v{APP_VERSION} · {BUILD_ID.slice(0, 7)}
+          {/* `V1.<#PR>`: el número de PR es lo que hace VERIFICABLE que un deploy
+              llegó — cambia con cada merge y viaja en `version.json` (commiteado),
+              no en git, porque el deploy se alimenta por rsync sin `.git`. Sin
+              esto no se distingue "el fix no sirvió" de "el fix no está
+              desplegado" — que fue justo la confusión con los PRs #239/#240.
+              El build id (hash del código) queda en el tooltip. */}
+          V{APP_VERSION}
         </p>
       </div>
     </div>
