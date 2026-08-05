@@ -960,7 +960,9 @@ describe('Nómina (TRESS) — mapNominaRow', () => {
       { ...baseRow, IDConcepto: 91, Concepto: 'IMSS EMPLEADO', TipoConcepto: 'Deducción', Monto: 2_500 },
       { ...baseRow, IDConcepto: 200, Concepto: 'IMSS PATRONAL', TipoConcepto: 'Aportación Patronal', Monto: 18_000 },
     ];
-    const mapped = periodo.map(mapNominaRow);
+    // Arrow explícito: `mapNominaRow` toma un 2º parámetro opcional
+    // (`sourcePeriod`) y `.map` le pasaría el índice.
+    const mapped = periodo.map(row => mapNominaRow(row));
 
     const percepciones = mapped.filter(r => r.cashTreatment === 'CASH_OUT').reduce((s, r) => s + r.amount, 0);
     const deducciones = mapped.filter(r => r.cashTreatment === 'DEDUCTION').reduce((s, r) => s + r.amount, 0);

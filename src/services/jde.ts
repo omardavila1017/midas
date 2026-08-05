@@ -2479,7 +2479,14 @@ const KEPT_NOMINA_FIELDS_NORM: ReadonlySet<string> = new Set(
   Array.from(KEPT_NOMINA_FIELDS, normKey),
 );
 
-function mapNominaRow(raw: RawRecord): PayrollCostRecord {
+/**
+ * `sourcePeriod` (`YYYY-MM`) es el periodo de TRESS bajo el que se PIDIÓ la
+ * fila. Se pasa desde `fetchNomina` porque el crudo no lo trae: el API devuelve
+ * `Mes` como nombre ("AGOSTO") y su `FechaPago` puede caer en el mes siguiente.
+ * Sin él, `mergeNominaBatch` no puede distinguir "lo que este lote cubre" de
+ * "el mes en el que cayó el pago" — y borraba el mes siguiente completo.
+ */
+function mapNominaRow(raw: RawRecord, sourcePeriod?: string): PayrollCostRecord {
   const idEmpresaRaw = pick(raw, ['IDEmpresa', 'idEmpresa', 'id_empresa', 'cia', 'compania']);
   const empresa = toStr(pick(raw, ['Empresa', 'empresa', 'nombreEmpresa', 'razonSocial']));
   const monto = toNum(pick(raw, ['Monto', 'monto', 'importe', 'amount']));
@@ -2548,13 +2555,18 @@ function mapNominaRow(raw: RawRecord): PayrollCostRecord {
     periodStartDate: fechaInicial || undefined,
     periodEndDate: fechaFinal || undefined,
     payrollPeriod: typeof periodo === 'number' ? periodo : toStr(periodo) || mes,
-    payrollType: tipoNomina,
+    // TRESS dejó de mandar `TipoNomina` y ahora manda `Turno` con los MISMOS
+    // valores ("Semanal"/"Quincenal"/…). Sin este fallback `payrollType` sale
+    // vacío: la pestaña de Nómina pierde el filtro por tipo y la huella del
+    // merge queda sin partición. `turno` se conserva aparte (pass-through).
+    payrollType: tipoNomina || turno || '',
     conceptId: typeof idConcepto === 'number' ? idConcepto : toStr(idConcepto),
     conceptName: concepto,
     conceptType,
     cashTreatment,
     amount: monto,
     turno,
+    sourcePeriod,
   };
 }
 
@@ -2674,7 +2686,9 @@ export async function fetchNomina(
     const list = unwrapList(raw);
     captureNominaShape(list);
     const rows = stripAllToWhitelistNorm(list, KEPT_NOMINA_FIELDS_NORM);
-    return dropExcludedByCia(rows.map(mapNominaRow));
+    // El periodo SOLICITADO viaja con cada fila: es lo que este lote cubre.
+    const sourcePeriod = `${r.anio}-${String(r.mes).padStart(2, '0')}`;
+    return dropExcludedByCia(rows.map(row => mapNominaRow(row, sourcePeriod)));
   };
 
   const fetchWithRetry = async (r: NominaRequest): Promise<PayrollCostRecord[]> => {

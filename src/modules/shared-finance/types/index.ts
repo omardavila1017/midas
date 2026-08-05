@@ -192,6 +192,16 @@ export interface PayrollCostRecord {
   costCenter?: string;
   /** Turno del grupo de empleados (columna nueva TRESS 2026-07). Informativo. */
   turno?: string;
+  /**
+   * Periodo de TRESS bajo el que se pidió esta fila (`YYYY-MM`), NO el mes de
+   * `paymentDate`. Son distintos: un request de 2026-02 devuelve periodos de
+   * febrero cuya `FechaPago` cae en marzo (aguinaldos/finiquitos, periodos 312/
+   * 852/872). `year`/`month` siguen saliendo de `paymentDate` porque el efectivo
+   * sale ese día; `sourcePeriod` existe para que `mergeNominaBatch` sepa qué
+   * cubre realmente el lote y no borre el mes siguiente. Ausente en registros
+   * persistidos antes de este campo (el merge los trata como legacy).
+   */
+  sourcePeriod?: string;
 }
 
 export type FinancialScenarioKind = 'BASE' | 'APPROVED' | 'DRAFT';

@@ -242,6 +242,74 @@ describe('mergeNominaBatch', () => {
     const existing = [rec({})];
     expect(mergeNominaBatch(existing, [])).toBe(existing);
   });
+
+  /**
+   * REGRESIÓN — el lote de un mes NO puede borrar el mes siguiente.
+   *
+   * Cifras REALES del API TRESS (QA, 2026-08-05, idEmpresa=1):
+   *   request 2026-02 → 955 filas: 915 con FechaPago en feb + 40 en MARZO
+   *                     (periodos 312/852/872 = aguinaldo/finiquito)
+   *   request 2026-03 → 1254 filas: 982 en marzo + 272 en abril
+   *   overlap exacto entre el desborde de feb y lo propio de marzo = 0
+   *
+   * Con la huella vieja (`year|month|cia|payrollType`, mes derivado de
+   * `paymentDate`) el lote de febrero declaraba cobertura de marzo y lo
+   * borraba. `plan()` va en orden descendente, así que el efecto era en
+   * cascada y sobrevivía ~20%: medido en el deploy, 3,455 filas descargadas
+   * por mes quedaban en ~130 guardadas.
+   */
+  describe('cobertura por periodo solicitado (no por mes de paymentDate)', () => {
+    const febBatch = [
+      // Periodo propio de febrero, pagado en febrero.
+      ...Array.from({ length: 3 }, (_, i) => rec({
+        sourcePeriod: '2026-02', year: 2026, month: 2, paymentDate: '2026-02-12',
+        payrollPeriod: 6, conceptId: 100 + i, conceptName: 'FEB-PROPIO',
+      })),
+      // Aguinaldo de periodo de febrero cuya FechaPago cae en MARZO.
+      rec({
+        sourcePeriod: '2026-02', year: 2026, month: 3, paymentDate: '2026-03-04',
+        payrollPeriod: 312, conceptId: 900, conceptName: 'FEB-DESBORDE',
+      }),
+    ];
+    const marBatch = Array.from({ length: 5 }, (_, i) => rec({
+      sourcePeriod: '2026-03', year: 2026, month: 3, paymentDate: '2026-03-11',
+      payrollPeriod: 10, conceptId: 200 + i, conceptName: 'MAR-PROPIO',
+    }));
+
+    it('mergear febrero DESPUÉS de marzo conserva marzo completo', () => {
+      // Orden real de `plan()`: descendente → marzo entra antes que febrero.
+      const merged = mergeNominaBatch(mergeNominaBatch([], marBatch), febBatch);
+      expect(merged.filter(r => r.conceptName === 'MAR-PROPIO')).toHaveLength(5);
+      expect(merged.filter(r => r.conceptName === 'FEB-PROPIO')).toHaveLength(3);
+      expect(merged.filter(r => r.conceptName === 'FEB-DESBORDE')).toHaveLength(1);
+      expect(merged).toHaveLength(9);
+    });
+
+    it('re-pedir un mes reemplaza SOLO ese periodo, sin duplicar', () => {
+      const primera = mergeNominaBatch(mergeNominaBatch([], marBatch), febBatch);
+      const refetchFeb = mergeNominaBatch(primera, febBatch);
+      expect(refetchFeb).toHaveLength(9);
+      expect(refetchFeb.filter(r => r.conceptName === 'FEB-DESBORDE')).toHaveLength(1);
+      expect(refetchFeb.filter(r => r.conceptName === 'MAR-PROPIO')).toHaveLength(5);
+    });
+
+    it('un record legacy sin sourcePeriod cae al proxy year-month y se purga', () => {
+      const legacy = [rec({
+        sourcePeriod: undefined, year: 2026, month: 3, paymentDate: '2026-03-11',
+        payrollPeriod: 10, conceptId: 777, conceptName: 'LEGACY',
+      })];
+      const merged = mergeNominaBatch(legacy, marBatch);
+      expect(merged.find(r => r.conceptName === 'LEGACY')).toBeUndefined();
+      expect(merged).toHaveLength(5);
+    });
+
+    it('distinto payrollType en el mismo periodo no se pisa', () => {
+      const semanal = rec({ sourcePeriod: '2026-02', year: 2026, month: 2, payrollType: 'Semanal', conceptId: 1 });
+      const quincenal = rec({ sourcePeriod: '2026-02', year: 2026, month: 2, payrollType: 'Quincenal', conceptId: 1 });
+      const merged = mergeNominaBatch([semanal], [quincenal]);
+      expect(merged).toHaveLength(2);
+    });
+  });
 });
 
 describe('refineBatch', () => {

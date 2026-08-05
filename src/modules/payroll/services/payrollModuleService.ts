@@ -209,10 +209,12 @@ export function refineBatch(records: PayrollCostRecord[]): PayrollCostRecord[] {
  * Mergea un batch nuevo (resultado de `fetchNomina`) con los existentes.
  *
  * Estrategia:
- *   1. Identifica qué combinación (anio, mes, cia, tipoNomina) cubre el
+ *   1. Identifica qué combinación (sourcePeriod, cia, payrollType) cubre el
  *      batch nuevo y elimina del existente cualquier record que matchee
  *      esa misma combinación. Esto evita que registros viejos del mismo
- *      periodo persistan tras un refresh.
+ *      periodo persistan tras un refresh. `sourcePeriod` es el periodo
+ *      SOLICITADO a TRESS — ver el comentario dentro de la función: usar el
+ *      mes de `paymentDate` costaba ~80% de la nómina.
  *   2. Concatena los registros nuevos (ya refinados por `refineBatch`).
  *
  * Mantiene orden estable: existentes primero (sin los desplazados), luego
@@ -224,15 +226,33 @@ export function mergeNominaBatch(
 ): PayrollCostRecord[] {
   if (incoming.length === 0) return existing;
 
-  // Construye la huella (year, month, cia, payrollType) que el batch nuevo
-  // cubre. Cualquier record existente con la misma huella es reemplazado.
+  // La cobertura se mide por PERIODO SOLICITADO (`sourcePeriod`), no por el mes
+  // de `paymentDate`.
+  //
+  // Por qué: un request a TRESS de 2026-02 devuelve periodos de febrero cuya
+  // `FechaPago` cae en MARZO (aguinaldo/finiquito — periodos 312/852/872;
+  // medido: 40 de 955 filas). Como `year`/`month` salen de `paymentDate`, la
+  // huella vieja `year|month|cia|payrollType` hacía que el lote de febrero
+  // declarara cobertura de marzo y BORRARA marzo completo, dejando sólo esas 40
+  // filas. Con `plan()` en orden descendente (mes actual primero) el efecto era
+  // en cascada — ago→jul borra ago→jun borra jul… — y sobrevivía ~20% de la
+  // nómina: 3,455 filas descargadas por mes quedaban en ~130 guardadas.
+  //
+  // Los lotes de meses distintos son DISJUNTOS (cero solapamiento verificado
+  // contra el API: los periodos del desborde no aparecen en el mes siguiente),
+  // así que acotar la cobertura al periodo pedido no duplica nada.
+  const periodOf = (r: PayrollCostRecord): string =>
+    r.sourcePeriod ?? `${r.year}-${String(r.month).padStart(2, '0')}`;
+
   const coveredFingerprints = new Set<string>();
   for (const r of incoming) {
-    coveredFingerprints.add(`${r.year}|${r.month}|${r.cia}|${r.payrollType}`);
+    coveredFingerprints.add(`${periodOf(r)}|${r.cia}|${r.payrollType}`);
   }
 
   const filtered = existing.filter(r => {
-    const fp = `${r.year}|${r.month}|${r.cia}|${r.payrollType}`;
+    // Un record legacy (persistido antes de `sourcePeriod`) cae al proxy
+    // `year-month`. Es correcto purgarlo: su lote se re-pide y lo repone.
+    const fp = `${periodOf(r)}|${r.cia}|${r.payrollType}`;
     return !coveredFingerprints.has(fp);
   });
 

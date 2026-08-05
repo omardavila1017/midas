@@ -23,6 +23,12 @@ export default defineConfig({
     // la suite existente corra en el modo local/backend previo; las pruebas del
     // modo online lo prenden por-test con `__setMidasUsersEnabledForTests(true)`.
     env: { TZ: 'America/Mexico_City', VITE_MIDAS_USERS_ENABLED: 'false' },
+    // Node 26 expone un `localStorage` global propio que devuelve `undefined`
+    // sin `--localstorage-file` y TAPA el de jsdom → 333 tests caían con
+    // "Cannot read properties of undefined (reading 'clear')" por la versión de
+    // Node, no por el código. `setup.ts` instala una Storage en memoria sólo si
+    // la presente no sirve. Ver el docblock de src/test/setup.ts.
+    setupFiles: ['./src/test/setup.ts'],
     exclude: [...configDefaults.exclude, '.claude/**', 'tests-e2e/**', '**/tests-e2e/**'],
     coverage: {
       provider: 'v8',

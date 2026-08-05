@@ -17,6 +17,7 @@ import { compraEstado } from './domain/comprasInsights';
 import { selectComprasForProjection } from './modules/financial-projection/services/comprasProjectionFilter';
 import { subscribeProjectionFirstPaint } from './modules/financial-projection/services/projectionBootSignal';
 import { buildProviderSpendIndex } from './domain/providerRecentSpend';
+import { computePayrollMonthlyFloor } from './domain/payrollOperatingFloor';
 import { deriveProvidersFromJde } from './domain/providerDerivation';
 import {
   nextProviderDerivationJobId,
@@ -1694,61 +1695,16 @@ export default function App() {
   const payrollMonthlyActualJDE = useMemo(() => {
     if (!isBooted) return undefined;
     if (nominaRecordsDeferred.length === 0) return undefined;
+    // Piso de nómina = promedio de las últimas 4 semanas CERRADAS × 4.33.
+    // Antes era UNA sola semana, pero la nómina alterna semana normal / semana
+    // con quincena, así que el piso oscilaba ~$41M–$65M según el día en que se
+    // abría la app contra un gasto real de ~$49.7M/mes. El detalle (con las
+    // cifras medidas en BD) vive en `payrollOperatingFloor.ts`.
     // Company filter removed → never scope payroll by cia (all companies).
-    const ciaFilter = '';
-    // Piso de nómina = lo que valió la ÚLTIMA semana de nómina cerrada × 4.33
-    // (semanas/mes). Refleja el run-rate reciente en vez del promedio de 3
-    // meses (que quedaba obsoleto). Agrupamos el cash-out por semana ISO
-    // (lunes) según la fecha de pago real del periodo.
-    const WEEKS_PER_MONTH = 4.33;
-    const weekKey = (iso: string): string | null => {
-      if (!iso || iso.length < 10) return null;
-      const d = new Date(`${iso.slice(0, 10)}T00:00:00Z`);
-      if (Number.isNaN(d.getTime())) return null;
-      // Lunes de la semana (getUTCDay: 0=domingo … 6=sábado).
-      const dow = (d.getUTCDay() + 6) % 7;
-      d.setUTCDate(d.getUTCDate() - dow);
-      return d.toISOString().slice(0, 10);
-    };
-    const grossByWeek = new Map<string, number>();
-    const cashCountByWeek = new Map<string, number>();
-    const reducCountByWeek = new Map<string, number>();
-    for (const r of nominaRecordsDeferred) {
-      if (ciaFilter && r.cia !== ciaFilter) continue;
-      const dateIso = r.paymentDate || r.periodEndDate || `${r.year}-${String(r.month).padStart(2, '0')}-01`;
-      const wk = weekKey(dateIso);
-      if (!wk) continue;
-      if (r.cashTreatment === 'CASH_OUT') {
-        grossByWeek.set(wk, (grossByWeek.get(wk) ?? 0) + r.amount);
-        cashCountByWeek.set(wk, (cashCountByWeek.get(wk) ?? 0) + 1);
-      } else if (r.cashTreatment === 'DEDUCTION' || r.cashTreatment === 'WITHHOLDING_PAYABLE') {
-        reducCountByWeek.set(wk, (reducCountByWeek.get(wk) ?? 0) + 1);
-      }
-    }
-    // todayISO(): la fecha UTC cruza medianoche 6h antes en CST — con ella,
-    // un domingo desde las 18:00 `currentWeek` apuntaba a la semana SIGUIENTE
-    // y la semana en curso (parcial) dejaba de excluirse.
-    const currentWeek = weekKey(todayISO());
-    // Una semana es "cerrada" si tiene cash-out y sus deducciones ya se
-    // contabilizaron (mismo guard que el cálculo mensual previo), y NO es la
-    // semana en curso (posible nómina parcial). El guard sólo nos puede llevar
-    // a una semana MÁS antigua (segura), nunca a una parcial.
-    const PARTIAL_RATIO_THRESHOLD = 0.3;
-    const closedWeeks = Array.from(grossByWeek.keys())
-      .filter((wk) => {
-        if (wk === currentWeek) return false;
-        if ((grossByWeek.get(wk) ?? 0) <= 0) return false;
-        const cashCnt = cashCountByWeek.get(wk) ?? 0;
-        if (cashCnt === 0) return false;
-        const reducCnt = reducCountByWeek.get(wk) ?? 0;
-        return reducCnt / cashCnt >= PARTIAL_RATIO_THRESHOLD;
-      })
-      .sort()
-      .reverse();
-    if (closedWeeks.length === 0) return undefined;
-    const lastWeekGross = grossByWeek.get(closedWeeks[0]) ?? 0;
-    const monthly = lastWeekGross * WEEKS_PER_MONTH;
-    return monthly > 0 ? monthly : undefined;
+    return computePayrollMonthlyFloor(nominaRecordsDeferred, {
+      todayIso: todayISO(),
+      ciaFilter: '',
+    }).monthly;
   }, [isBooted, nominaRecordsDeferred, selectedCia]);
 
   const confirmPayment = (p: ConfirmedPayment) => setConfirmedPayments(prev => [...prev, p]);
