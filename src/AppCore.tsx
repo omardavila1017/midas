@@ -3158,9 +3158,9 @@ export default function App() {
     if (!storeHydrated) return;
     if (companies.length === 0) return;
     if (!idbHydratedDatasets.has('auxiliar')) return;
-    // Allowlist explícita para auxiliar contable — NO usamos
-    // `filterActiveCompanies` aquí porque incluye cía 33 (multicarga) que
-    // está en la exclusión global. La lista vive en auxiliarReconciliationConfig.
+    // Allowlist explícita para auxiliar contable (auxiliarReconciliationConfig).
+    // Cía 33 (multicarga) salió de la allowlist el 2026-08-05 junto con la
+    // reactivación de su exclusión global — ya no se fetchea en ningún módulo.
     const activeCias = companies
       .filter(c => c.activa !== false && isAuxiliarAllowlistedCia(c.cia))
       .map(c => c.cia);

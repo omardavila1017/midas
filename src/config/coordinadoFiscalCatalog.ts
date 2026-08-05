@@ -23,8 +23,8 @@
  *      los RFC de ambos coordinados quedaron confirmados (ver `docs/fiscal/`).
  *   2. Los registros de cía autoritativos que ya viven en este repo:
  *        - `AUXILIAR_CIA_ALLOWLIST` (`domain/auxiliarReconciliationConfig.ts`):
- *          00001 TAMAULIPAS · 00011 SIR · 00033 MULTICARGA · 00038 STDN ·
- *          00042 TICH · 00043 SES.
+ *          00001 TAMAULIPAS · 00011 SIR · 00038 STDN · 00042 TICH · 00043 SES
+ *          (00033 MULTICARGA se retiró 2026-08-05 — exclusión global).
  *        - El mapa TRESS `idEmpresa` (`services/jdeTypes.ts`):
  *          1 Federal(=Tamaulipas) · 11 SIR · 17 SIT · 33 Multicarga · 42 TICH.
  *        - `bankAccountsCatalog.json` (razón social × `unidadNegocio`).

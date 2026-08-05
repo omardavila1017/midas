@@ -1926,10 +1926,10 @@ export async function fetchAuxiliarContable(
   req: AuxiliarContableRequest,
   config: JdeClientConfig = {},
 ): Promise<AuxiliarContableRecord[]> {
-  // Allowlist explícita — solo 6 cías. Bloqueamos cualquier otra ANTES de
-  // pegarle al API. Cía 33 (multicarga) se incluye explícitamente aquí pese
-  // a estar en la exclusión global; por eso NO usamos `dropExcludedByCia`
-  // downstream — el filtro de allowlist ya es el gate canónico para auxiliar.
+  // Allowlist explícita — solo 5 cías. Bloqueamos cualquier otra ANTES de
+  // pegarle al API. Cía 33 (multicarga) salió de la allowlist el 2026-08-05
+  // (exclusión global reactivada); el filtro de allowlist sigue siendo el
+  // gate canónico para auxiliar — no usamos `dropExcludedByCia` downstream.
   if (!isAuxiliarAllowlistedCia(req.cia)) return [];
   // El path debe ir en PascalCase exacto: el endpoint JDE está registrado
   // como /JDEdwards/AuxiliarContable y responde 404 a `/auxiliarcontable`.

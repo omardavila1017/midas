@@ -9,8 +9,8 @@ import {
 } from './companyExclusion';
 
 // Reglas explícitas para ejercitar la LÓGICA de match con independencia del
-// default de producción (que hoy está vacío — nada se excluye). Espejan lo que
-// alguna vez estuvo configurado (empresa 33 + multicarga).
+// default de producción. Coinciden con el default vigente (empresa 33 +
+// multicarga, reactivado 2026-08-05).
 const SAMPLE_RULES: ExclusionRules = {
   ciaNumbers: [33],
   namePatterns: ['multicarga'],
@@ -59,26 +59,27 @@ describe('companyExclusion — matching logic (3 match modes)', () => {
   });
 });
 
-describe('companyExclusion — default rules are empty (nothing excluded)', () => {
-  it('default EXCLUSION_RULES exclude nothing', () => {
-    expect(EXCLUSION_RULES.ciaNumbers).toEqual([]);
-    expect(EXCLUSION_RULES.namePatterns).toEqual([]);
-    expect(EXCLUSION_RULES.unidadesNegocio).toEqual([]);
+describe('companyExclusion — default rules exclude Multicarga / empresa 33 (2026-08-05)', () => {
+  it('default EXCLUSION_RULES carry the Multicarga values', () => {
+    expect(EXCLUSION_RULES.ciaNumbers).toEqual([33]);
+    expect(EXCLUSION_RULES.namePatterns).toEqual(['multicarga']);
+    expect(EXCLUSION_RULES.unidadesNegocio).toEqual(['MULTICARGA']);
   });
 
-  it('empresa 33 and multicarga now pass through with the default rules', () => {
-    expect(matchesExclusionIdentity({ cia: '00033' })).toBe(false);
-    expect(matchesExclusionIdentity({ nombre: 'MULTICARGA SA DE CV' })).toBe(false);
-    expect(matchesExclusionIdentity({ unidadNegocio: 'MULTICARGA' })).toBe(false);
+  it('empresa 33 and multicarga are dropped with the default rules', () => {
+    expect(matchesExclusionIdentity({ cia: '00033' })).toBe(true);
+    expect(matchesExclusionIdentity({ nombre: 'MULTICARGA SA DE CV' })).toBe(true);
+    expect(matchesExclusionIdentity({ unidadNegocio: 'MULTICARGA' })).toBe(true);
+    expect(matchesExclusionIdentity({ cia: '00011', nombre: 'Senda' })).toBe(false);
   });
 
-  it('filterActiveCompanies still drops only inactive companies by default', () => {
+  it('filterActiveCompanies drops Multicarga and inactive companies by default', () => {
     const companies = [
       { cia: '00011', nombre: 'Senda', activa: true },
       { cia: '00033', nombre: 'Multicarga', activa: true },
       { cia: '00012', nombre: 'Inactiva', activa: false },
     ];
     const kept = filterActiveCompanies(companies);
-    expect(kept.map(c => c.cia)).toEqual(['00011', '00033']);
+    expect(kept.map(c => c.cia)).toEqual(['00011']);
   });
 });

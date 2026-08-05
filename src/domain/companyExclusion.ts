@@ -31,16 +31,17 @@ export interface ExclusionRules {
 }
 
 /**
- * Reglas de exclusión global. **Vacías por decisión de negocio (2026-06-04):
- * ya NO se excluye nada — Multicarga / empresa 33 y BanBajío vuelven a contar
- * en todo el sistema.** El mecanismo se conserva intacto (tres modos de match)
- * para poder reactivar exclusiones a futuro: basta agregar un número de cia,
- * un substring de nombre, o una unidadNegocio al arreglo correspondiente.
+ * Reglas de exclusión global. **Multicarga / empresa 33 excluida por decisión
+ * de negocio (2026-08-05, Santiago: "no los queremos ni jalar ni son
+ * relevantes en nada de Midas")** — blanket, sin frontera de fecha, en los
+ * tres modos de match. Reactiva los valores originales del roadmap que se
+ * vaciaron el 2026-06-04. BanBajío NO se re-excluye (su switch era aparte y
+ * sigue contando en `accountableBankStatements`).
  */
 export const EXCLUSION_RULES: ExclusionRules = {
-  ciaNumbers: [],
-  namePatterns: [],
-  unidadesNegocio: [],
+  ciaNumbers: [33],
+  namePatterns: ['multicarga'],
+  unidadesNegocio: ['MULTICARGA'],
 };
 
 /**

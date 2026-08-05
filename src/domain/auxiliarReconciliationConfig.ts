@@ -96,16 +96,15 @@ export const AUX_IVA_PARAMS = {
 /**
  * Allowlist de cías a fetchear para AuxiliarContable (decisión 2026-05-25).
  *
- *   00001 TAMAULIPAS · 00011 SIR · 00033 MULTICARGA · 00038 STDN
- *   00043 SES · 00042 TICH
+ *   00001 TAMAULIPAS · 00011 SIR · 00038 STDN · 00042 TICH · 00043 SES
  *
- * Las demás cías se ignoran. Cía 33 (multicarga) está en la exclusión global
- * pero para auxiliar contable se incluye explícitamente — el bypass vive en
- * el boot loader (AppCore) y en `fetchAuxiliarContable` (jde.ts), no se toca
- * `EXCLUSION_RULES`.
+ * Las demás cías se ignoran. Cía 33 (MULTICARGA) se RETIRÓ el 2026-08-05:
+ * la exclusión global de Multicarga se reactivó (`EXCLUSION_RULES`,
+ * companyExclusion.ts) y el bypass que la incluía aquí pese a la exclusión
+ * cayó con ella — Multicarga no se fetchea en NINGÚN módulo de Midas.
  */
 export const AUXILIAR_CIA_ALLOWLIST: readonly string[] = [
-  '00001', '00011', '00033', '00038', '00042', '00043',
+  '00001', '00011', '00038', '00042', '00043',
 ] as const;
 
 /** Numeric form (padding-agnostic) for membership checks. */

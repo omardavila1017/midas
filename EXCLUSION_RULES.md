@@ -5,30 +5,31 @@ The single source of truth is
 re-implement this filter anywhere else, and do **not** apply it inside
 `canonicalProjection.ts` (double-filtering UI + engine is a bug).
 
-## Current state (2026-06-04): nothing is excluded
+## Current state (2026-08-05): Multicarga / empresa 33 is excluded
 
-By business decision, **`EXCLUSION_RULES` is empty** — Multicarga / empresa 33
-and BanBajío now count everywhere (bancos, gastos, proyección, KPIs, histórico).
+By business decision (Santiago: "no los queremos ni jalar ni son relevantes en
+nada de Midas"), **`EXCLUSION_RULES` excludes Multicarga / empresa 33 again**
+— blanket, all three match modes, everywhere (bancos, gastos, proyección,
+KPIs, histórico). This restores the original roadmap values that were emptied
+on 2026-06-04.
 
 ```ts
 export const EXCLUSION_RULES: ExclusionRules = {
-  ciaNumbers: [],
-  namePatterns: [],
-  unidadesNegocio: [],
+  ciaNumbers: [33],
+  namePatterns: ['multicarga'],
+  unidadesNegocio: ['MULTICARGA'],
 };
 ```
 
-The matching mechanism is preserved (see below) so exclusions can be
-re-enabled at any time by adding values to the arrays.
-
-> **BanBajío** was a *separate* switch from this catalog: it lived in
-> `excludeBajio` / `isBajioStatement` (`src/domain/bankStatements.ts`) and was
-> applied in `AppCore.tsx` (`accountableBankStatements`). As of 2026-06-04 the
-> accountable bank set **includes** Bajío too; `isBajioStatement` is kept only
+> **BanBajío is NOT re-excluded.** It was a *separate* switch from this
+> catalog: it lived in `excludeBajio` / `isBajioStatement`
+> (`src/domain/bankStatements.ts`) and was applied in `AppCore.tsx`
+> (`accountableBankStatements`). Since 2026-06-04 the accountable bank set
+> **includes** Bajío and that stays unchanged; `isBajioStatement` is kept only
 > to feed the Fideicomiso DINA module (which still re-injects CORNING + DINA
 > into non-base scenarios). See CLAUDE.md.
 
-## Matching mechanism (for when exclusions are re-enabled)
+## Matching mechanism
 
 An entity is excluded if **any** of three independent modes matches:
 
@@ -56,12 +57,12 @@ are dropped too.
   delegate to these base fetches.
 - **Bank-statement display chokepoint** — the `bankStatements` memo in
   `src/AppCore.tsx` filters excluded accounts (by `cia`) right where
-  `excludeBajio` ran. With empty rules this is a no-op, but it stays so a
-  re-enabled rule covers persisted IDB/localStorage caches and manual uploads
-  that bypass `fetchBankStatements`.
+  `excludeBajio` ran. This covers persisted IDB/localStorage caches and manual
+  uploads that bypass `fetchBankStatements`, so stale Multicarga rows cached
+  before re-enabling are also hidden.
 
-## How to re-enable an exclusion
+## How to change an exclusion
 
-Edit the `EXCLUSION_RULES` constant in `src/domain/companyExclusion.ts` and add
-a cia number, a name substring, or a unidadNegocio to the relevant array. There
-is no date boundary — the match is blanket.
+Edit the `EXCLUSION_RULES` constant in `src/domain/companyExclusion.ts` and
+add/remove a cia number, a name substring, or a unidadNegocio in the relevant
+array. There is no date boundary — the match is blanket.

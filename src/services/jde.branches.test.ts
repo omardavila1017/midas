@@ -18,8 +18,10 @@
  *     y `config` (con default `{}`).
  *   • 272 `splitIntoFixedDayWindows` con `winEnd > end` — los dos callers usan
  *     `windowDays = 1`, así que `winEnd === cursor <= end` siempre.
- *   • 746 `matchesExclusionIdentity` en `fetchBankStatements` — el catálogo de
- *     exclusión está VACÍO a propósito (Riesgo #9 de CLAUDE.md).
+ *   • 746 `matchesExclusionIdentity` en `fetchBankStatements` — las fixtures
+ *     de estos tests no traen identidad Multicarga/33, así que la rama de
+ *     exclusión (reactivada 2026-08-05) no se ejercita aquí; la cubre
+ *     `companyExclusion.test.ts`.
  *   • 1026 `results[i] || []` en el merge de `fetchBankStatementsRange` — todo
  *     índice queda asignado por el reader del cache o por el worker.
  *   • 1055 (`firstDate.get(key) ?? …` y su cuerpo) — `firstDate` se siembra al
