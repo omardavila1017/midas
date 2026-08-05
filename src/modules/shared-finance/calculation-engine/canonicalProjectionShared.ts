@@ -311,12 +311,55 @@ export function cxcFacturaKey(record: CobranzaRecord): string {
   return `${record.cia}::${record.noFactura}`;
 }
 
+/**
+ * Clasificaciones que EXISTEN en JDE pero que NO dicen en qué se gastó: son
+ * cajones de sastre o el CANAL de pago, no la naturaleza del egreso. Medido
+ * contra la BD (`jde.Pago_Proveedor` 2026): bajo "Servicios" conviven casetas
+ * (PASE, $25.5M), prestaciones sindicales ($40.8M) y bancos; bajo "Bancario"
+ * conviven IMSS/INFONAVIT pagados por ventanilla bancaria, capital e intereses
+ * del convenio concursal ("CM CAPITAL", "INTERESES ORD") y compra de dólares.
+ *
+ * NO se descartan (siguen siendo el último recurso, mejor que "sin categoría"):
+ * sólo pierden la carrera contra un valor que sí describe el gasto. Sin esto,
+ * un genérico no-vacío en el PRIMER campo tapaba al específico del segundo y el
+ * egreso caía en "Proveedores sin categoría".
+ */
+const GENERIC_JDE_PROVIDER_CATEGORIES = [
+  /^SERVICIOS$/i,
+  /^VARIOS$/i,
+  /^BANCARIO$/i,
+  /^INDIRECTOS\s+NEGOCIO$/i,
+  /^CONVENIOS$/i,
+  /^PROYECTOS$/i,
+  // Nivel PADRE de la taxonomía de compras (`jde.Compras.Desc_Categoria`): es
+  // el árbol de arriba, el gasto lo describe `Desc_Familia`. "Directos" e
+  // "Indirectos" no significan nada por sí solos ("Directos" tapaba ~$120M de
+  // Flota); "Combustibles" sí generaliza, pero su familia es igual de buena.
+  /^DIRECTOS$/i,
+  /^INDIRECTOS$/i,
+];
+
+function isGenericJdeProviderCategory(value: string): boolean {
+  return GENERIC_JDE_PROVIDER_CATEGORIES.some((pattern) => pattern.test(value));
+}
+
+/**
+ * Primera clasificación utilizable de la cadena, prefiriendo la que DESCRIBE el
+ * gasto sobre la genérica (ver `GENERIC_JDE_PROVIDER_CATEGORIES`). El orden de
+ * los argumentos sigue mandando entre valores del mismo nivel de especificidad.
+ */
 export function usableJdeProviderCategory(...values: Array<string | null | undefined>): string | undefined {
+  let genericFallback: string | undefined;
   for (const value of values) {
     const normalized = normalizeJdeProviderCategory(value);
-    if (normalized) return normalized;
+    if (!normalized) continue;
+    if (isGenericJdeProviderCategory(normalized)) {
+      genericFallback ??= normalized;
+      continue;
+    }
+    return normalized;
   }
-  return undefined;
+  return genericFallback;
 }
 
 function normalizeJdeProviderCategory(value: string | null | undefined): string | undefined {
@@ -324,7 +367,15 @@ function normalizeJdeProviderCategory(value: string | null | undefined): string 
   if (!trimmed) return undefined;
   const withoutPrefix = trimmed.replace(/^\d{2,4}\s*-\s*/, '').trim();
   if (!withoutPrefix) return undefined;
+  // Centinelas de "vacío" que JDE escribe como texto. Medidos en la BD:
+  // `" "` (comillas literales, 643 pagos / $63.0M en 2026) y
+  // `-                              .` (3,023 pagos). Sin este corte pasaban
+  // como categoría REAL, no generalizaban a ningún bucket, y —peor— tapaban al
+  // otro campo que sí traía la clasificación buena.
+  if (!/[a-záéíóúñ0-9]/i.test(withoutPrefix)) return undefined;
   if (/^POR\s*CLASIFICAR$/i.test(withoutPrefix)) return undefined;
+  // Placeholder del capturista en el árbol de compras (`Desc_Familia`).
+  if (/^SELECCIONAR\s+(FAMILIA|CATEGOR[IÍ]A|SUBFAMILIA)$/i.test(withoutPrefix)) return undefined;
   if (/^SIN\s*(CLASIFICAR|CATEGOR[IÍ]A)$/i.test(withoutPrefix)) return undefined;
   if (/^N\/?A$/i.test(withoutPrefix)) return undefined;
   return withoutPrefix;

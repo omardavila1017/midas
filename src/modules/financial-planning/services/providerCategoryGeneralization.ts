@@ -98,28 +98,38 @@ export const PERSONAL_NOMINA_BUCKET = 'Personal y nómina';
  * que vienen de CXP / pagoProveedor ("Nóminas", "Reembolsos").
  */
 const MACRO_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
-  { pattern: /\bint\.?\s*cm\b|concurso\s*merc/i, label: 'Intereses Concurso Mercantil' },
+  // `\bconcurso\b` (no sólo "concurso mercantil"): la taxonomía financiera de
+  // JDE lo escribe "190 - Concurso" y ahí viven capital e intereses del
+  // convenio ("CM CAPITAL", "INTERESES ORD" a Banamex / Banco del Bienestar /
+  // Sabcapital / Export Development Canada / Afirme).
+  { pattern: /\bint\.?\s*cm\b|\bconcurso\b/i, label: 'Intereses Concurso Mercantil' },
   // Mantenimiento de CENTRALES (edificios/estaciones) antes que Flota: sin
   // esta entrada, `mantenim` (Flota) se comía "MANTENIMIENTO CENTRALES" y
   // "Mtto central" caía sin bucket.
   { pattern: /m(?:antenimiento|tto)\.?\s*(de\s*)?central/i, label: 'Inmuebles y rentas' },
+  // Recolección de RESIDUOS (basura) antes que Flota: el `recolecci` de Flota
+  // es de paquetería/entregas y se estaba comiendo "RECOLECCION RESIDUOS".
+  { pattern: /residuos?|desechos?|recolec\w*\s*(de\s*)?basura/i, label: 'Servicios' },
+  // Familias de compras que caen en Personal aunque empiecen con "SERVICIOS":
+  // "SERVICIOS AL PERSONAL", "DEPARTAMENTO MEDICO" — antes que Flota/Servicios.
+  { pattern: /\bpersonal\b|depto\.?\s*m[ée]dico|departamento\s*m[ée]dico|medicament|despensa/i, label: PERSONAL_NOMINA_BUCKET },
   {
     pattern:
-      /tecnolog|\bti\b|soporte|telecom|\bgps\b|sistema\s*de\s*archivo|licencias?\s*(bfiskur|bavel)|honorarios?\s*ti\b|celulares|accesorios?\s*eq|impresoras|inform[áa]tic|software|hardware|electr[óo]nica?|plataforma/i,
+      /tecnolog|\bti\b|soporte|telecom|\bgps\b|sistema\s*de\s*archivo|licencias?\s*(bfiskur|bavel)|honorarios?\s*ti\b|celulares|accesorios?\s*eq|impresoras|inform[áa]tic|software|hardware|electr[óo]nica?|plataforma|computaci[óo]n|rastreo\s*satelital|\btoner\b/i,
     label: 'Proveedor TI',
   },
   {
     pattern:
-      /refac|chasis|carrocer|hojalater|pintura|llanta|neumat|combust|diesel|gasolin|lubric|mantenim|lavado\s*unidad|verificac.*unidad|ferreter|ferrer|chatarra|amenidades?\s*bus|renta\s*(de\s*)?(unidad|traila)|casetas?|peaje|autoconsumo|corral[óo]n|taller\s*atenci[óo]n\s*accident|\bfletes?\b|entrega|recolecci|paqueter|automotriz|convenio\s*sendex|gr[uú]as?\b|sellador|traslado\s*de\s*unidades/i,
+      /refac|chasis|carrocer|hojalater|pintura|llanta|neumat|combust|diesel|gasolin|lubric|mantenim|lavado\s*unidad|verificac.*unidad|ferreter|ferrer|chatarra|amenidades?\s*bus|pel[íi]culas?\b|renta\s*(de\s*)?(unidad|traila)|casetas?|peaje|autopista|autoconsumo|corral[óo]n|\btaller\b|\bfletes?\b|entrega|recolecci|paqueter|automotriz|convenio\s*sendex|gr[uú]as?\b|sellador|traslado\s*de\s*unidades|\bvidrio\b|cristales?\b|\btransportes?\b|log[íi]stica|autobuse?s?\b|\bmotor(?:es)?\b|transmisi[óo]n|diferencial|\bclima\b|\bmtto\b|entretenimiento|a\s*bordo|abordo|\bgas\b/i,
     label: 'Flota',
   },
   {
-    pattern: /renta\s*(de\s*)?locales?|renta\s*sanitarios?|arrend|estacionamiento|centrales?|\brentas?\b|inmueble/i,
+    pattern: /renta\s*(de\s*)?locales?|renta\s*sanitarios?|arrend|estacionamiento|centrales?|\brentas?\b|inmueble|construcci[óo]n|remodelaci[óo]n/i,
     label: 'Inmuebles y rentas',
   },
   {
     pattern:
-      /n[óo]mina|sueldo|pensi[oó]n(?:es)?\b|sindicato|imss|infonavit|\bisn\b|embargo\s*salario|caja\s*y\s*fondo|reclut|practicant|uniformes?|colegiatura|investigaciones?\s*labor|enfermer[íi]a|atenci[óo]n\s*m[ée]dica|insumos?\s*m[ée]dic|servicios?\s*m[ée]dic|material\s*depto\s*medico|comedor|insumos?\s*aliment|licencias?\s*operadores|funerales|certificac|capacitac|cursos?\b|outsourc|lesiones?\s*por\s*accident|indemnizaci[óo]n|reembolso|honorarios?\s*rh\b/i,
+      /n[óo]mina|sueldo|pensi[oó]n(?:es)?\b|sindicato|imss|infonavit|infonacot|\bisn\b|embargo\s*salario|caja\s*y\s*fondo|reclut|practicant|uniformes?|colegiatura|investigaciones?\s*labor|enfermer[íi]a|atenci[óo]n\s*m[ée]dica|insumos?\s*m[ée]dic|servicios?\s*m[ée]dic|material\s*depto\s*medico|comedor|insumos?\s*aliment|aliment|licencias?\s*operadores|funerales|certificac|capacitac|cursos?\b|outsourc|lesiones?\s*por\s*accident|indemnizaci[óo]n|reembolso|honorarios?\s*rh\b|beneficios?\b|recursos\s*humanos|textil|vestido|calzado|farmac|hospitalario|escuelas?|universidad/i,
     label: PERSONAL_NOMINA_BUCKET,
   },
   // Pagos a gobiernos por la vía CXP (predial, tenencias, renovaciones de
@@ -127,7 +137,7 @@ const MACRO_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
   { pattern: /impuestos?\b|predial|tenencias?\b|renovaci[óo]n/i, label: 'Impuestos' },
   {
     pattern:
-      /servicios?\s*p[úu]blicos?|serv\.?\s*p[úu]blic|servicios?\s*generales?|consultor|recolec|residuos|pipas?\s*de\s*agua|suministro\s*(de\s*)?agua|vigilanc|traslado\s*de\s*valores|seguros?\s*y?\s*fianzas?|honorarios?|publicidad|mercadot|imprenta|papeler|membres|fumigac|aseo|limpie|agencia\s*de\s*viaje|hospedaje|entradas?\s*a\s*parques|\bbancos?\b|gubernament|atenci[óo]n\s*a\s*clientes|bolsas?\s*de\s*valores|mobiliar|boleto|donatar|donativ|donacion(?:es)?\b|membres[íi]a|\barchivo\b|insumos?\b|anuncios?\b|panor[aá]mic|peri[oó]dic|pago\s*da[ñn]os|administra|tr[aá]mite/i,
+      /servicios?\s*p[úu]blicos?|serv\.?\s*p[úu]blic|servicios?\s*generales?|consultor|recolec|residuos|pipas?\s*de\s*agua|suministro\s*(de\s*)?agua|vigilanc|\bseguridad\b|traslado\s*de\s*valores|seguros?\s*y?\s*fianzas?|\bseguros?\b|\bfianzas?\b|honorarios?|publicidad|mercadot|imprenta|papeler|membres|fumigac|aseo|limpie|agencia\s*de\s*viaje|hospedaje|hotel|entradas?\s*a\s*parques|\bbancos?\b|gubernament|atenci[óo]n\s*a\s*clientes|bolsas?\s*de\s*valores|mobiliar|muebles?\b|boleto|donatar|donativ|donacion(?:es)?\b|membres[íi]a|\barchivo\b|insumos?\b|anuncios?\b|panor[aá]mic|peri[oó]dic|pago\s*da[ñn]os|administra|tr[aá]mite|\bagua\b|formas?\s*impresas?|impres|^servicios$/i,
     label: 'Servicios',
   },
 ];

@@ -12,6 +12,7 @@ import { buildProviderIndex, lookupProvider, type ProviderIndex } from '../../do
 import { enrichFromCatalog, type Flexibility } from '../../domain/providerCatalog';
 import { isInternalCounterparty } from '../../domain/netCashFlowEngine';
 import { normalizeCia } from '../../domain/cia';
+import { usableJdeProviderCategory } from './calculation-engine/canonicalProjectionShared';
 
 const DAY_MS = 86_400_000;
 
@@ -243,7 +244,22 @@ export function purchaseReceiptToMovement(
     counterpartyId: record.noProveedor,
     counterpartyName: record.supplierName || 'Proveedor sin nombre',
     counterpartyType: 'SUPPLIER',
-    providerCategory: rules?.providerType || record.categoryName || record.familyName || record.subfamilyName,
+    // La OC clasifica en DOS niveles: `Desc_Categoria` es el PADRE ("Directos",
+    // "Indirectos", "Servicios", "Combustibles") y `Desc_Familia` el HIJO
+    // ("MOTOR", "CARROCERÍA", "LLANTAS", "ARRENDAMIENTO INMOBILIARIO"). Tomar
+    // el padre primero tapaba al hijo: medido en `jde.Compras` (OCs 2026),
+    // "Directos" —que no generaliza a ningún bucket— escondía ~$120M de pura
+    // Flota (MOTOR $22.6M, CARROCERÍA $20.4M, CHASIS $11.6M, LLANTAS $10.9M,
+    // REFACCIONES ELÉCTRICAS $10.3M, MTTO Y REPARACIÓN $10.8M, ACEITES $9.6M).
+    // `usableJdeProviderCategory` además descarta los centinelas del propio API
+    // (`.` como categoría, "Seleccionar Familia") y deja que el genérico ceda.
+    // `subcategory` (arriba) ya iba familia-primero: ese era el orden intencional.
+    providerCategory: usableJdeProviderCategory(
+      rules?.providerType,
+      record.familyName,
+      record.subfamilyName,
+      record.categoryName,
+    ),
     concept: `${isProjected ? 'OC' : 'Compra'} ${record.invoiceNo || record.purchaseOrderNo || 'sin folio'} · ${record.supplierName || 'Proveedor sin nombre'}`,
     currency: 'MXN',
     originalAmount: record.amountMxn,

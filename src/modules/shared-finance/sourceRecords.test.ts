@@ -9,6 +9,10 @@ import {
 import { comprasToPurchaseReceipts } from '../../domain/comprasToPurchaseReceipts';
 import type { ComprasRecord } from '../../services/jdeTypes';
 import type { Provider } from '../../domain/types';
+import {
+  generalizeCategoria,
+  UNCATEGORIZED_PROVIDER_BUCKET,
+} from '../financial-planning/services/providerCategoryGeneralization';
 
 function comprasRecord(overrides: Partial<ComprasRecord> = {}): ComprasRecord {
   return {
@@ -121,7 +125,11 @@ describe('buildPurchaseReceiptMovements — provider catalog rules', () => {
   it('falls back to confidence lock and family category without a catalog', () => {
     const [m] = buildMovements();
     expect(m.lockState).toBe('RESTRICTED');
-    expect(m.providerCategory).toBe('Indirectos');
+    // La FAMILIA ("PRODUCTOS DE LIMPIEZA"), no la categoría padre
+    // ("Indirectos"), que es el nivel de arriba del árbol de compras y no
+    // describe el gasto — tomarla tapaba ~$120M de Flota (ver CLAUDE.md,
+    // corrida 2026-08-05b). El nombre de este test siempre dijo "family".
+    expect(m.providerCategory).toBe('PRODUCTOS DE LIMPIEZA');
   });
 
   it('uses the provider type as providerCategory when resolved', () => {
@@ -153,5 +161,46 @@ describe('buildPurchaseReceiptMovements — provider catalog rules', () => {
       paidPurchaseOrderKeys: paid,
     });
     expect(movements).toHaveLength(1);
+  });
+});
+
+describe('buildPurchaseReceiptMovements — árbol de clasificación de compras (medido en BD)', () => {
+  /**
+   * `jde.Compras` clasifica en dos niveles: `Desc_Categoria` es el PADRE y
+   * `Desc_Familia` el HIJO. Cifras de las OCs 2026 medidas por MCP midas-db.
+   */
+  const pick = (descCategoria: string, descFamilia: string) => {
+    const receipts = comprasToPurchaseReceipts(
+      [{ ...comprasRecord(), descCategoria, descFamilia, descSubFamilia: '' }],
+      { asOfDate: '2026-04-15' },
+    );
+    return buildPurchaseReceiptMovements({
+      purchaseReceipts: receipts,
+      cxpRecords: [],
+      companyCode: 'all',
+      asOfDate: '2026-04-15',
+    })[0]?.providerCategory;
+  };
+
+  it('la familia le gana al padre genérico "Directos" (~$120M de Flota que se perdían)', () => {
+    expect(pick('Directos', 'MOTOR')).toBe('MOTOR');                       // $22.56M
+    expect(pick('Directos', 'CARROCERÍA')).toBe('CARROCERÍA');             // $20.36M
+    expect(pick('Directos', 'LLANTAS')).toBe('LLANTAS');                   // $10.94M
+    expect(pick('Indirectos', 'UNIFORMES')).toBe('UNIFORMES');             // $6.03M
+    // "Servicios" tapaba el arrendamiento inmobiliario ($59.22M) y TI ($22.56M)
+    expect(pick('Servicios', 'ARRENDAMIENTO INMOBILIARIO')).toBe('ARRENDAMIENTO INMOBILIARIO');
+    expect(pick('Servicios', 'TI PROYECTOS')).toBe('TI PROYECTOS');
+  });
+
+  it('descarta los centinelas del propio API y cae al padre', () => {
+    // "Seleccionar Familia" es el placeholder del capturista (1,050 líneas /
+    // $4.28M en 2026): no es clasificación usable, así que cede al padre — que
+    // como último recurso se conserva, pero no generaliza a ningún bucket.
+    // Queda en "Proveedores sin categoría" a propósito: la OC de verdad no
+    // está clasificada en JDE (defecto de captura, no de Midas).
+    expect(pick('Directos', 'Seleccionar Familia')).toBe('Directos');
+    expect(generalizeCategoria('Directos')).toBe(UNCATEGORIZED_PROVIDER_BUCKET);
+    // `.` como categoría (sentinel de JDE) no debe tapar a la familia.
+    expect(pick('.', 'CONSULTORÍA')).toBe('CONSULTORÍA');
   });
 });
