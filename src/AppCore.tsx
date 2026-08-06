@@ -5446,6 +5446,10 @@ export default function App() {
     providers,
     cxpRecords,
     cxpPaymentCoverage: paymentReconciliation.cxpCoverage,
+    // Clasificación JDE del proveedor para el egreso HISTÓRICO cruzado. El
+    // puente del libro mayor no la trae, así que sin esto el bucket lo decidía
+    // un lookup por nombre contra el catálogo (~23%) — ver `mergeCargoEnrichments`.
+    paymentCargoEnrichments: paymentReconciliation.cargoEnrichments,
     cobranzaRecords,
     cobranzaPayments,
     auxiliarReconciliation,
@@ -5465,6 +5469,7 @@ export default function App() {
     providers,
     cxpRecords,
     paymentReconciliation.cxpCoverage,
+    paymentReconciliation.cargoEnrichments,
     cobranzaRecords,
     cobranzaPayments,
     auxiliarReconciliation,
@@ -5484,6 +5489,10 @@ export default function App() {
     providers,
     cxpRecords,
     cxpPaymentCoverage: paymentReconciliation.cxpCoverage,
+    // Paridad OBLIGADA con `projectionProps`: ambos tableros comparten el memo de
+    // módulo y el cache persistente del source. Si sólo uno mandara el cruce, el
+    // otro le serviría (o le tomaría) una entrada con distinta clasificación.
+    paymentCargoEnrichments: paymentReconciliation.cargoEnrichments,
     cobranzaRecords,
     cobranzaPayments,
     auxiliarReconciliation,
@@ -5503,6 +5512,7 @@ export default function App() {
     providers,
     cxpRecords,
     paymentReconciliation.cxpCoverage,
+    paymentReconciliation.cargoEnrichments,
     cobranzaRecords,
     cobranzaPayments,
     auxiliarReconciliation,

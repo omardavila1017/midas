@@ -41,7 +41,55 @@ export interface BankInflowEnrichment {
 /** Enriquecimiento de un movimiento bancario CARGO con su pago a proveedor. */
 export interface BankOutflowEnrichment {
   status: 'MATCHED' | 'ORPHAN';
-  payments?: Array<{ claveProveedor?: string; nombreProveedor: string; importe: number }>;
+  payments?: Array<{
+    claveProveedor?: string;
+    nombreProveedor: string;
+    /** Clasificación operativa de JDE (`Clasificacion_Proveedor`). */
+    clasificacionProveedor?: string;
+    /** Clasificación financiera de JDE (`Clasificacion_Proveedor_Financiera`). */
+    clasificacionProveedorFinanciera?: string;
+    importe: number;
+  }>;
+}
+
+/**
+ * Une los DOS productores de enriquecimiento de CARGO histórico.
+ *
+ * El puente auxiliar (libro mayor × banco) sabe QUÉ movimientos son pago a
+ * proveedor, pero sólo puede nombrar la contraparte con el texto del GL
+ * (`line.source.contraparte`, a veces el nombre de la CUENTA): no trae la clave
+ * del proveedor ni la clasificación de JDE. `paymentReconciliationEngine` sí las
+ * trae —vienen directo de `PagoProveedor`— pero cruza por su cuenta y cubre otro
+ * subconjunto de CARGOs.
+ *
+ * Sin esta unión, `matchedPaymentProviderCategory` (historicalReconciledEngine)
+ * salía `undefined` para TODO CARGO histórico cruzado, así que el bucket del
+ * egreso lo acababa decidiendo un lookup por NOMBRE contra el catálogo de
+ * proveedores (cobertura ~23%, y con el nombre del mayor, no el de JDE): la
+ * clasificación real de JDE nunca llegaba a Planeación y el egreso se apilaba en
+ * "Proveedores sin categoría". El motor YA leía los campos; lo que faltaba era
+ * que alguien los pusiera.
+ *
+ * Precedencia: gana el pago (dato de JDE) sobre el texto del mayor. La unión
+ * NUNCA quita ni degrada un `MATCHED` —sólo enriquece— así que ningún movimiento
+ * pierde su condición de AP_PAYMENT. Es re-etiquetado de presentación: no toca
+ * monto ni fecha, así que el cuadre Planeación↔banco no se mueve.
+ */
+export function mergeCargoEnrichments(
+  fromLedger: Map<string, BankOutflowEnrichment>,
+  fromPayments?: Map<string, BankOutflowEnrichment>,
+): Map<string, BankOutflowEnrichment> {
+  if (!fromPayments || fromPayments.size === 0) return fromLedger;
+  const merged = new Map(fromLedger);
+  for (const [key, fromPayment] of fromPayments) {
+    // Un ORPHAN del motor de pagos NO degrada lo que el mayor ya probó (el
+    // CARGO está posteado contra un proveedor); y sin pago no hay nada que
+    // aportar, así que esas llaves se omiten — su ausencia se comporta igual
+    // que un ORPHAN en el motor (`status !== 'MATCHED'` → sin proveedor).
+    if (fromPayment.status !== 'MATCHED' || !fromPayment.payments?.length) continue;
+    merged.set(key, fromPayment);
+  }
+  return merged;
 }
 
 export interface AuxiliarProjectionBridge {

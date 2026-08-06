@@ -185,6 +185,14 @@ export function projectionSourcePersistentCacheKey(input: FinancialProjectionSou
     // a list length, or the sourceConfirmation size — same trade-off as the
     // cxp/cobranza/rol `len:` fingerprints above.
     `reconciliation=${reconciliationFingerprint(input.auxiliarReconciliation)}`,
+    // Cruce PagoProveedor ↔ CARGO bancario: aporta la clasificación JDE del
+    // proveedor al egreso histórico, así que MUEVE la salida (el bucket) y tiene
+    // que estar en la llave — si no, una entrada construida antes de que el cruce
+    // aterrizara (post-boot, asíncrono) se le sirve al tablero ya enriquecido y
+    // el egreso vuelve a verse sin clasificar. Sólo el tamaño, mismo trade-off
+    // estructural que `reconciliation`: el mapa se reconstruye completo desde
+    // pagos + estados de cuenta, así que cualquier cambio real mueve el conteo.
+    `paymentCargo=${input.paymentCargoEnrichments?.size ?? 0}`,
   ].join('|'))}`;
 }
 

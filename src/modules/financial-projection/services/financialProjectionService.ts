@@ -21,7 +21,11 @@ import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
 import type { AuxiliarReconResult } from '../../../domain/auxiliarReconciliationEngine';
-import { adaptAuxiliarForProjection } from '../../../domain/auxiliarProjectionAdapter';
+import {
+  adaptAuxiliarForProjection,
+  mergeCargoEnrichments,
+  type BankOutflowEnrichment,
+} from '../../../domain/auxiliarProjectionAdapter';
 import type { BankAccountStatement } from '../../../services/jde';
 import type { CobranzaRecord, RolRecord, ViajeEspecialRecord } from '../../../services/jdeTypes';
 import { todayISO } from '../../../formatters';
@@ -66,6 +70,19 @@ export interface FinancialProjectionSourceInput {
    * facturas cobradas, CXPs pagadas y enriquecimiento de movimientos.
    */
   auxiliarReconciliation?: AuxiliarReconResult;
+  /**
+   * `bankMovementKey` → pago a proveedor cruzado por `paymentReconciliationEngine`.
+   *
+   * Es la ÚNICA fuente que trae la **clasificación JDE** del proveedor
+   * (`Clasificacion_Proveedor` + `…_Financiera`) y su `claveProveedor` para un
+   * CARGO histórico. El puente auxiliar sólo puede nombrar la contraparte con el
+   * texto del libro mayor, así que sin esto el bucket del egreso histórico lo
+   * decidía un lookup por nombre contra el catálogo de proveedores (~23% de
+   * cobertura). Se une al puente en `mergeCargoEnrichments` — ver el porqué ahí.
+   *
+   * Forma parte del cache key (memo + persistente): cambia la salida.
+   */
+  paymentCargoEnrichments?: Map<string, BankOutflowEnrichment>;
   assumptions: CashFlowAssumptions;
   budget: Budget | null;
   /**
@@ -170,6 +187,7 @@ function sourceCacheKey(input: FinancialProjectionSourceInput, asOfDate: string)
     refId(input.purchaseReceipts),
     refId(input.payrollCosts),
     refId(input.auxiliarReconciliation),
+    refId(input.paymentCargoEnrichments),
     refId(input.assumptions),
     refId(input.budget),
   ];
@@ -242,7 +260,11 @@ export function buildFinancialProjectionSourceData(
     abonoEnrichments: bridge.abonoEnrichments,
     paidCxpKeys: bridge.paidCxpKeys,
     paidPurchaseOrderKeys: bridge.paidPurchaseOrderKeys,
-    cargoEnrichments: bridge.cargoEnrichments,
+    // El puente del mayor dice QUÉ CARGO es pago a proveedor; el motor de pagos
+    // dice QUIÉN es y cómo lo clasifica JDE. Sin la unión, lo segundo no llegaba.
+    // El puente del mayor dice QUÉ CARGO es pago a proveedor; el motor de pagos
+    // dice QUIÉN es y cómo lo clasifica JDE. Sin la unión, lo segundo no llegaba.
+    cargoEnrichments: mergeCargoEnrichments(bridge.cargoEnrichments, input.paymentCargoEnrichments),
     // Líneas GL completas — canonicalProjection las usa en step 1c para
     // emitir `auxiliar-historic:*` cuando un mes no tiene banco cargado
     // (cubre egresos pasados que cobranza-historic no rellena).

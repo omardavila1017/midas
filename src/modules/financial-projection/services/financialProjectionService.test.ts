@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { BankAccountStatement, BankStatementLine } from '../../../services/jde';
 import type { Budget } from '../../../domain/budget';
+import { bankMovementKey } from '../../../domain/bankMovementKey';
+import { bucketForMovement } from '../../financial-planning/services/planningRowTaxonomy';
 import {
   __clearProjectionSourceCache,
   buildFinancialProjectionSourceData,
@@ -89,6 +91,113 @@ describe('financialProjectionService cash helpers', () => {
     expect(withPredictive).not.toBe(withoutPredictive);
     expect(withoutPredictive.canonical.predictive).toBeFalsy();
     expect(withPredictive.canonical.predictive).toBeTruthy();
+  });
+});
+
+/**
+ * El egreso HISTÓRICO de Planeación se bucketiza con la clasificación JDE del
+ * pago cruzado. Esa clasificación sólo la produce `paymentReconciliationEngine`
+ * y hasta 2026-08-06 NO estaba cableada al motor: el puente del libro mayor
+ * (`adaptAuxiliarForProjection`) construía el enrichment con sólo
+ * {nombreProveedor, importe}, así que `matchedPaymentProviderCategory` salía
+ * `undefined` para TODO CARGO histórico y el bucket lo acababa decidiendo un
+ * lookup por NOMBRE contra el catálogo de proveedores (~23% de cobertura). En
+ * pantalla: 44.5% del egreso AP apilado en "Proveedores sin categoría" y
+ * buckets reales (Flota, Servicios) casi vacíos.
+ */
+describe('clasificación JDE del egreso histórico', () => {
+  it('emite el CARGO cruzado con la clasificación y la clave del proveedor de JDE', () => {
+    __clearProjectionSourceCache();
+    const cargo = line({
+      cia: '00011',
+      cuenta: 'CTA-AP',
+      fechaOperacion: '2026-03-10',
+      referencia: 'SPEI-8891',
+      concepto: 'PAGO 8891',
+      tipoMovimiento: 'CARGO',
+      importe: 250_000,
+    });
+
+    const result = buildFinancialProjectionSourceData({
+      companyCode: 'all',
+      bankStatements: [statement({
+        cia: '00011',
+        cuenta: 'CTA-AP',
+        fechaEstadoCuenta: '2026-03-31',
+        saldoInicial: 1_000_000,
+        saldoFinal: 750_000,
+        movimientos: [cargo],
+      })],
+      clients: [],
+      providers: [],
+      cxpRecords: [],
+      assumptions: { year: 2026, globalCompliance: 1, factorajeDays: 30 },
+      budget: null,
+      startingBalance: 1_000_000,
+      asOfDate: '2026-04-22',
+      paymentCargoEnrichments: new Map([[bankMovementKey(cargo), {
+        status: 'MATCHED' as const,
+        payments: [{
+          claveProveedor: '55501',
+          nombreProveedor: 'REFACCIONES DEL NORTE SA DE CV',
+          // Par REAL de la BD: la operativa es el genérico "Servicios" y la
+          // financiera es la que describe el gasto. `usableJdeProviderCategory`
+          // prefiere la específica (fix 2026-08-05b) — este test también pinea
+          // que ese criterio aplica al histórico, no sólo al futuro.
+          clasificacionProveedor: 'Servicios',
+          clasificacionProveedorFinanciera: '010 - Refacciones y Llantas',
+          importe: 250_000,
+        }],
+      }]]),
+    });
+
+    const apMovement = result.movements.find(
+      (movement) => movement.id.startsWith('bank:') && movement.category === 'AP_PAYMENT',
+    );
+
+    expect(apMovement).toBeDefined();
+    expect(apMovement!.providerCategory).toBe('Refacciones y Llantas');
+    expect(apMovement!.counterpartyId).toBe('55501');
+    expect(apMovement!.counterpartyName).toBe('REFACCIONES DEL NORTE SA DE CV');
+    // Lo que el usuario ve: la fila cae en Flota, no en "Proveedores sin categoría".
+    expect(bucketForMovement(apMovement!)).toBe('Flota');
+  });
+
+  it('un ORPHAN del motor de pagos no crea un AP_PAYMENT', () => {
+    __clearProjectionSourceCache();
+    const cargo = line({
+      cia: '00011',
+      cuenta: 'CTA-AP',
+      fechaOperacion: '2026-03-11',
+      referencia: 'SPEI-8892',
+      concepto: 'PAGO 8892',
+      tipoMovimiento: 'CARGO',
+      importe: 120_000,
+    });
+
+    const result = buildFinancialProjectionSourceData({
+      companyCode: 'all',
+      bankStatements: [statement({
+        cia: '00011',
+        cuenta: 'CTA-AP',
+        fechaEstadoCuenta: '2026-03-31',
+        saldoInicial: 1_000_000,
+        saldoFinal: 880_000,
+        movimientos: [cargo],
+      })],
+      clients: [],
+      providers: [],
+      cxpRecords: [],
+      assumptions: { year: 2026, globalCompliance: 1, factorajeDays: 30 },
+      budget: null,
+      startingBalance: 1_000_000,
+      asOfDate: '2026-04-22',
+      paymentCargoEnrichments: new Map([[bankMovementKey(cargo), { status: 'ORPHAN' as const }]]),
+    });
+
+    expect(result.movements.some(
+      (movement) => movement.id.startsWith('bank:') && movement.category === 'AP_PAYMENT',
+    )).toBe(false);
   });
 });
 

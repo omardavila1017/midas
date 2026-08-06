@@ -12,6 +12,7 @@ import type { CashFlowAssumptions, Client, Provider } from '../../../domain/type
 import type { BankAccountStatement } from '../../../services/jde';
 import type { CobranzaPayment, CobranzaRecord, RolRecord, ViajeEspecialRecord } from '../../../services/jdeTypes';
 import type { AuxiliarReconResult } from '../../../domain/auxiliarReconciliationEngine';
+import type { BankOutflowEnrichment } from '../../../domain/auxiliarProjectionAdapter';
 import type { CxpPaymentCoverage } from '../../../domain/paymentReconciliationEngine';
 import { fmtCompact, fmtCurrency, todayISO } from '../../../formatters';
 import {
@@ -142,6 +143,12 @@ interface Props {
   cobranzaPayments?: CobranzaPayment[];
   /** Cruce AuxiliarContable ↔ banco — alimenta facturas cobradas / CXPs pagadas. */
   auxiliarReconciliation?: AuxiliarReconResult;
+  /**
+   * Cruce PagoProveedor ↔ CARGO bancario. Aporta la clasificación JDE del
+   * proveedor al egreso HISTÓRICO — sin él, el bucket de Egresos se decide por
+   * nombre contra el catálogo de proveedores. Ver `mergeCargoEnrichments`.
+   */
+  paymentCargoEnrichments?: Map<string, BankOutflowEnrichment>;
   /** ROL CITI: viajes ejecutados → ingreso futuro proyectado (Aprobado). */
   rolRecords?: RolRecord[];
   /** Viajes Especiales: ingresos especiales con factura/UUID propios. */
@@ -206,6 +213,7 @@ export default function FinancialPlanningDashboard(props: Props) {
       props.cobranzaRecords,
       props.cobranzaPayments,
       props.auxiliarReconciliation,
+      props.paymentCargoEnrichments,
       props.rolRecords,
       props.viajesEspecialesRecords,
       props.purchaseReceipts,
