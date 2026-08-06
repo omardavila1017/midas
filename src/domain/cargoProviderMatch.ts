@@ -21,6 +21,7 @@
 
 import type { Provider } from './types';
 import type { PurchaseReceiptRecord } from '../modules/shared-finance/types';
+import { usableJdeProviderCategory } from '../modules/shared-finance/calculation-engine/canonicalProjectionShared';
 import { normalizeClientText } from './clientGrouping';
 
 /**
@@ -43,6 +44,12 @@ const GENERIC_TOKENS = new Set([
 export interface CargoProviderMatch {
   counterpartyId?: string;
   counterpartyName: string;
+  /**
+   * Clasificación con la que `historicalReconciledEngine` llena
+   * `providerCategory` (→ bucket de Planeación vía `macroBucketForSupplier`) y
+   * `subcategory` de la línea `bank:`. Pasa por `usableJdeProviderCategory`
+   * cuando sale del árbol de compras — ver el call site.
+   */
   providerType?: string;
   matchSource: 'concept-name' | 'compras-amount';
 }
@@ -159,7 +166,20 @@ export function matchCargoToProvider(args: {
         return {
           counterpartyId: receipt.noProveedor || undefined,
           counterpartyName: receipt.supplierName || 'Proveedor compras',
-          providerType: receipt.categoryName || receipt.familyName || receipt.subfamilyName,
+          // MISMO gate y MISMO orden que `purchaseReceiptToMovement`
+          // (sourceRecords.ts): familia (hijo) antes que categoría (padre), con
+          // los centinelas del API cortados. Tomar `categoryName` primero —como
+          // hacía esta línea— es el defecto que se cerró para las OCs el
+          // 2026-08-05b y que aquí seguía vivo: el padre del árbol de compras
+          // ("Directos"/"Indirectos"/"." /"Seleccionar Familia") NO generaliza a
+          // ningún bucket, así que tapaba a la familia (MOTOR/LLANTAS/…) y
+          // mandaba el CARGO a "Proveedores sin categoría" — además de filtrarse
+          // como sub-etiqueta visible vía `cargoSubcategory`.
+          providerType: usableJdeProviderCategory(
+            receipt.familyName,
+            receipt.subfamilyName,
+            receipt.categoryName,
+          ),
           matchSource: 'compras-amount',
         };
       }

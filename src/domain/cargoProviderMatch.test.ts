@@ -293,3 +293,47 @@ describe('matchCargoToProvider — compras-amount tier', () => {
     });
   });
 });
+
+/**
+ * El `providerType` del tier compras-amount alimenta `providerCategory` de la
+ * línea `bank:` (historicalReconciledEngine) → bucket de Planeación vía
+ * `macroBucketForSupplier`. El árbol de compras tiene DOS niveles y el PADRE
+ * (`Desc_Categoria`) no describe el gasto: medido en la BD, "Directos" /
+ * "Indirectos" / "." / "Seleccionar Familia" NO generalizan a ningún bucket, así
+ * que tomarlos antes que la familia manda el CARGO a "Proveedores sin
+ * categoría". Es el mismo gate que `purchaseReceiptToMovement` ya aplica.
+ */
+describe('matchCargoToProvider — árbol de clasificación de compras (mismo gate que las OCs)', () => {
+  const attribute = (overrides: Partial<PurchaseReceiptRecord>) => {
+    const r = receipt({ amountMxn: 7_500, receiptDate: '2026-03-10', ...overrides });
+    return matchCargoToProvider({
+      conceptHaystack: '',
+      amount: 7_500,
+      dateIso: '2026-03-10',
+      index: buildCargoProviderIndex([], [r]),
+    })?.providerType;
+  };
+
+  it.each([
+    ['Directos', 'MOTOR'],
+    ['Indirectos', 'LLANTAS'],
+    ['Servicios', 'ARRENDAMIENTO INMOBILIARIO'],
+  ])('la familia le gana al padre %s', (categoryName, familyName) => {
+    expect(attribute({ categoryName, familyName })).toBe(familyName);
+  });
+
+  it('descarta los centinelas que el propio API escribe como texto', () => {
+    // `.` como Desc_Categoria y el placeholder del capturista como Desc_Familia:
+    // ambos deben caer, y sin nada usable queda `undefined` (no una etiqueta
+    // basura que se filtre al sub-bucket de Planeación).
+    expect(attribute({ categoryName: '.', familyName: 'Seleccionar Familia' })).toBeUndefined();
+    expect(attribute({ categoryName: '.', familyName: 'CARROCERÍA' })).toBe('CARROCERÍA');
+    expect(attribute({ categoryName: 'Directos', familyName: 'Seleccionar Familia' }))
+      .toBe('Directos'); // genérico como ÚLTIMO recurso, mejor que sin categoría
+  });
+
+  it('la subfamilia entra antes que el padre cuando no hay familia', () => {
+    expect(attribute({ categoryName: 'Directos', familyName: undefined, subfamilyName: 'CHASIS' }))
+      .toBe('CHASIS');
+  });
+});
