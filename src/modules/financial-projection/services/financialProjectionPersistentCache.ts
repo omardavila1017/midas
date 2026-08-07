@@ -189,10 +189,8 @@ export function projectionSourcePersistentCacheKey(input: FinancialProjectionSou
     // proveedor al egreso histórico, así que MUEVE la salida (el bucket) y tiene
     // que estar en la llave — si no, una entrada construida antes de que el cruce
     // aterrizara (post-boot, asíncrono) se le sirve al tablero ya enriquecido y
-    // el egreso vuelve a verse sin clasificar. Sólo el tamaño, mismo trade-off
-    // estructural que `reconciliation`: el mapa se reconstruye completo desde
-    // pagos + estados de cuenta, así que cualquier cambio real mueve el conteo.
-    `paymentCargo=${input.paymentCargoEnrichments?.size ?? 0}`,
+    // el egreso vuelve a verse sin clasificar.
+    `paymentCargo=${cargoEnrichmentFingerprint(input.paymentCargoEnrichments)}`,
   ].join('|'))}`;
 }
 
@@ -511,6 +509,35 @@ function reconciliationFingerprint(value: unknown): string {
   const summaryKeys = Object.keys(summary).sort();
   const summaryParts = summaryKeys.map((k) => `${k}=${primitive(summary[k])}`).join(',');
   return `L${linesLen}|O${orphansLen}|S${scSize}|{${summaryParts}}`;
+}
+
+/**
+ * Huella del cruce PagoProveedor ↔ CARGO bancario.
+ *
+ * `size` SOLO no sirve como señal del cruce: el motor de pagos cierra marcando
+ * ORPHAN **todo** CARGO no asignado (`paymentReconciliationEngine`, pase final),
+ * así que `map.size` es exactamente el número de CARGOs no-internos de los
+ * estados de cuenta — una función de `bankStatements`, que esta misma llave ya
+ * huellea aparte. Con `size` solo, el único cambio que movía la llave era la
+ * transición 0 → N (el cruce aterrizando por primera vez): si después crecían
+ * los `pagoProveedor` SIN que cambiaran los estados de cuenta (revalidación de
+ * la ventana de pagos, delta de un día ya cacheado), subían los MATCHED, cambiaba
+ * la clasificación del egreso histórico y la llave se quedaba quieta → IDB servía
+ * la entrada vieja, menos clasificada. Es justo el modo de falla que el comentario
+ * del call site dice cerrar.
+ *
+ * Se cuentan los MATCHED en un pase (~2-6 ms warm con 200k entradas; el walk que
+ * este archivo evita costaba 100-300 ms porque construía string por item) y la
+ * llave se computa un puñado de veces por sesión. No distingue "mismos MATCHED,
+ * otro proveedor" — mismo trade-off estructural que `reconciliation` y los `len:`.
+ */
+function cargoEnrichmentFingerprint(
+  map: FinancialProjectionSourceInput['paymentCargoEnrichments'],
+): string {
+  if (!map || map.size === 0) return '0';
+  let matched = 0;
+  for (const entry of map.values()) if (entry.status === 'MATCHED') matched++;
+  return `${map.size}:${matched}`;
 }
 
 function unknownFingerprint(value: unknown): string {

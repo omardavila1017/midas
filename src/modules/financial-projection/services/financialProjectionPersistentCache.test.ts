@@ -61,6 +61,52 @@ describe('financialProjectionPersistentCache', () => {
     vi.resetModules();
   });
 
+  // El cruce PagoProveedor ↔ CARGO decide el bucket del egreso HISTÓRICO, así
+  // que tiene que mover la llave. `size` solo NO alcanza: el motor de pagos
+  // cierra marcando ORPHAN todo CARGO no asignado, de modo que el tamaño del
+  // mapa es el conteo de CARGOs del banco y no dice nada de los pagos — con más
+  // pagos cruzados sobre los MISMOS estados de cuenta la llave no se movía y
+  // IDB servía la entrada vieja, sin clasificar.
+  describe('cruce PagoProveedor ↔ CARGO en la llave', () => {
+    const cargoMap = (entries: Array<'MATCHED' | 'ORPHAN'>) =>
+      new Map(entries.map((status, i) => [
+        `k${i}`,
+        status === 'MATCHED'
+          ? { status, payments: [{ nombreProveedor: 'PROVEEDOR', importe: 1 }] }
+          : { status },
+      ]));
+
+    it('mismo tamaño con más CARGOs cruzados NO reusa la entrada anterior', async () => {
+      const antes = {
+        ...projectionInput({ startingBalance: 10_000 }),
+        paymentCargoEnrichments: cargoMap(['MATCHED', 'ORPHAN', 'ORPHAN']),
+      };
+      const despues = {
+        ...projectionInput({ startingBalance: 10_000 }),
+        paymentCargoEnrichments: cargoMap(['MATCHED', 'MATCHED', 'ORPHAN']),
+      };
+
+      saveProjectionSourceToPersistentCache(antes, projectionSource('sin-clasificar'));
+
+      // El caso positivo (misma huella → sí pega) lo fija el test de abajo, así
+      // que este null es "la llave se movió", no "el cache nunca sirve nada".
+      await expect(loadProjectionSourceFromPersistentCache(despues)).resolves.toBeNull();
+    });
+
+    it('el mismo cruce sigue pegando (la huella es estable)', async () => {
+      const input = () => ({
+        ...projectionInput({ startingBalance: 10_000 }),
+        paymentCargoEnrichments: cargoMap(['MATCHED', 'ORPHAN']),
+      });
+
+      saveProjectionSourceToPersistentCache(input(), projectionSource('clasificado'));
+
+      await expect(loadProjectionSourceFromPersistentCache(input())).resolves.toEqual(
+        projectionSource('clasificado'),
+      );
+    });
+  });
+
   // La llave ya impide servir una entrada de otro motor; esto fija que además
   // se DESECHE el índice, para que no se queden pegadas en disco para siempre.
   it('descarta el índice guardado por un motor anterior', async () => {

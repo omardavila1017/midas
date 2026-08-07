@@ -262,8 +262,6 @@ export function buildFinancialProjectionSourceData(
     paidPurchaseOrderKeys: bridge.paidPurchaseOrderKeys,
     // El puente del mayor dice QUÉ CARGO es pago a proveedor; el motor de pagos
     // dice QUIÉN es y cómo lo clasifica JDE. Sin la unión, lo segundo no llegaba.
-    // El puente del mayor dice QUÉ CARGO es pago a proveedor; el motor de pagos
-    // dice QUIÉN es y cómo lo clasifica JDE. Sin la unión, lo segundo no llegaba.
     cargoEnrichments: mergeCargoEnrichments(bridge.cargoEnrichments, input.paymentCargoEnrichments),
     // Líneas GL completas — canonicalProjection las usa en step 1c para
     // emitir `auxiliar-historic:*` cuando un mes no tiene banco cargado

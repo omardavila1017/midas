@@ -74,6 +74,14 @@ export interface BankOutflowEnrichment {
  * NUNCA quita ni degrada un `MATCHED` —sólo enriquece— así que ningún movimiento
  * pierde su condición de AP_PAYMENT. Es re-etiquetado de presentación: no toca
  * monto ni fecha, así que el cuadre Planeación↔banco no se mueve.
+ *
+ * Alcance real (más amplio que "el mayor dice QUÉ y el pago dice QUIÉN"): los dos
+ * conjuntos de llaves se solapan pero ninguno contiene al otro, así que un CARGO
+ * cruzado SÓLO por el motor de pagos entra como llave NUEVA y pasa a AP_PAYMENT
+ * aunque el mayor no lo hubiera cruzado. Es consistente con la precedencia
+ * documentada del motor (pagoProveedor > tipo_docto > cuenta contable > rol de
+ * cuenta > impuesto-por-concepto), no un efecto colateral: un pago de JDE cruzado
+ * al CARGO es señal más específica que el regex de concepto o el tipo de documento.
  */
 export function mergeCargoEnrichments(
   fromLedger: Map<string, BankOutflowEnrichment>,
