@@ -4,7 +4,7 @@ import type { CXPRecord } from '../../../domain/persistence';
 import type { CxpPaymentCoverage, PaymentMatch } from '../../../domain/paymentReconciliationEngine';
 import type { AuxiliarReconLine, AuxiliarReconResult } from '../../../domain/auxiliarReconciliationEngine';
 import type { CashFlowAssumptions, Client } from '../../../domain/types';
-import type { AuxiliarContableRecord, BankAccountStatement, BankStatementLine, CobranzaPayment, PagoProveedorRecord } from '../../../services/jdeTypes';
+import type { AuxiliarContableRecord, BankAccountStatement, BankStatementLine, CobranzaPayment, CobranzaRecord, PagoProveedorRecord } from '../../../services/jdeTypes';
 import { calculateBaseProjection } from '../../shared-finance/calculation-engine/financialProjectionEngine';
 import type { FinancialMovement, PurchaseReceiptRecord, TaxObligation } from '../../shared-finance/types';
 import {
@@ -1986,3 +1986,49 @@ function auxIvaRecord(patch: Partial<AuxiliarContableRecord>): AuxiliarContableR
     ...patch,
   };
 }
+
+// La cobertura del causado se mide contra las facturas de cobranza, que NO
+// alimentan ningún importe fiscal. Cifras reales de db_Artefactos (2026-08-10):
+// marzo 2026 tenía 139 aplicaciones capturadas contra 2 272 facturas pagadas.
+describe('cobertura del IVA causado (causedIvaGaps)', () => {
+  const invoice = (fechaCobro: string, importeIVA: number): CobranzaRecord =>
+    ({ cia: '00011', fechaCobro, importeIVA }) as unknown as CobranzaRecord;
+
+  const build = (cobranzaRecords: CobranzaRecord[], cobranzaPayments: CobranzaPayment[] = []) =>
+    buildTaxDashboardView({
+      cobranzaPayments,
+      cobranzaRecords,
+      companyCode: 'all',
+      startDate: '2026-01-01',
+      endDate: '2026-12-31',
+      store: defaultTaxStore(),
+      today: '2026-08-10',
+    });
+
+  it('confiesa el periodo cerrado cuya cobranza aplicada viene incompleta', () => {
+    const view = build([invoice('2026-03-12', 35_362_508)]);
+    expect(view.causedIvaGaps).toHaveLength(1);
+    expect(view.causedIvaGaps[0]).toMatchObject({
+      period: '2026-03',
+      expectedIva: 35_362_508,
+      reportedIva: 0,
+      implausible: true,
+    });
+  });
+
+  it('no confiesa el periodo en curso: sus dos lados están parciales', () => {
+    const view = build([invoice('2026-08-03', 8_116_019)]);
+    expect(view.causedIvaGaps).toHaveLength(0);
+  });
+
+  it('sin facturas de referencia no emite veredicto', () => {
+    expect(build([]).causedIvaGaps).toHaveLength(0);
+  });
+
+  it('la medición no altera el IVA causado publicado', () => {
+    const withReference = build([invoice('2026-03-12', 35_362_508)]);
+    const withoutReference = build([]);
+    expect(withReference.totals.ivaCaused).toBe(withoutReference.totals.ivaCaused);
+    expect(withReference.totals.ivaNet).toBe(withoutReference.totals.ivaNet);
+  });
+});

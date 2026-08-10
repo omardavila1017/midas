@@ -47,7 +47,6 @@ describe('classifyIvaAccount', () => {
   it('clasifica acreditable', () => {
     expect(classifyIvaAccount('IVA ACREDITABLE PAGADO')).toBe('creditable');
     expect(classifyIvaAccount('IVA por acreditar')).toBe('creditable');
-    expect(classifyIvaAccount('IVA Acreditable Pendiente de Pago')).toBe('creditable');
   });
   it('clasifica causado/trasladado', () => {
     expect(classifyIvaAccount('IVA TRASLADADO')).toBe('caused');
@@ -56,7 +55,6 @@ describe('classifyIvaAccount', () => {
     expect(classifyIvaAccount('IVA causado por pagar')).toBe('caused');
     expect(classifyIvaAccount('IVA cobrado')).toBe('caused');
     expect(classifyIvaAccount('IVA por enterar')).toBe('caused');
-    expect(classifyIvaAccount('IVA devengado')).toBe('caused');
     expect(classifyIvaAccount('Impuesto al Valor Agregado trasladado')).toBe('caused');
   });
   it('clasifica retenido aparte', () => {
@@ -66,6 +64,58 @@ describe('classifyIvaAccount', () => {
     expect(classifyIvaAccount('BANCOS MONEDA NACIONAL')).toBe('other');
     expect(classifyIvaAccount('CLIENTES NACIONALES')).toBe('other');
     expect(classifyIvaAccount(undefined)).toBe('other');
+  });
+
+  // El mayor separa devengado de consumado por nombre de cuenta; colapsarlos
+  // cuenta el mismo peso dos veces. Nombres tal cual los manda db_Artefactos
+  // (jde.Auxiliar_Contable, Ano 26 — medido 2026-08-10).
+  describe('vocabulario REAL del mayor: devengado vs consumado', () => {
+    it('el participio negado NO cuenta como consumado', () => {
+      // 'PAGADO' empata dentro de 'NO PAGADO': buscarlo por substring antes de
+      // la negación clasificaba como acreditable la cuenta que dice que aún no
+      // lo es (+$37.45M en el acreditable de 2026).
+      expect(classifyIvaAccount('IVA 16% ACREDIT NO PAGADO')).toBe('creditable-pending');
+      expect(classifyIvaAccount('IVA 8% ACREDIT NO PAGADO')).toBe('creditable-pending');
+      expect(classifyIvaAccount('IVA Acreditable Pendiente de Pago')).toBe('creditable-pending');
+      expect(classifyIvaAccount('IVA 16% TRASLADADO NO COBRADO')).toBe('caused-accrued');
+      expect(classifyIvaAccount('IVA 8% TRASLADADO NO COBRADO')).toBe('caused-accrued');
+      expect(classifyIvaAccount('IVA devengado')).toBe('caused-accrued');
+    });
+
+    it('el participio afirmado sí cuenta como consumado', () => {
+      expect(classifyIvaAccount('IVA 16% ACREDIT PAGADO')).toBe('creditable');
+      expect(classifyIvaAccount('IVA 8% ACREDIT PAGADO')).toBe('creditable');
+      expect(classifyIvaAccount('IVA 16% TRASLADADO COBRADO')).toBe('caused');
+      expect(classifyIvaAccount('IVA 8% TRASLADADO COBRADO')).toBe('caused');
+      expect(classifyIvaAccount('IVA POR PAGAR')).toBe('caused');
+    });
+
+    it('retenido gana sobre la negación (no es acreditable ni causado)', () => {
+      expect(classifyIvaAccount('RETENCION IVA 4% NO PAGADO')).toBe('withheld');
+      expect(classifyIvaAccount('RETENCION IVA 4% PAGADO')).toBe('withheld');
+      expect(classifyIvaAccount('RET IVA ARRENDAMIENTO PAGADO')).toBe('withheld');
+      expect(classifyIvaAccount('RET IVA HONORARIOS PAGADO')).toBe('withheld');
+    });
+
+    it('el acreditable del periodo excluye el IVA aún no pagado', () => {
+      // Cifras de abril 2026 (Periodo 4, objeto 1120), el mes con el sesgo más
+      // grande: $36.15M realmente pagado contra $18.32M todavía no pagado.
+      const byPeriod = buildIvaLedgerByPeriod([
+        rec({
+          cuentaObjeto: '1120',
+          nombreCuenta: 'IVA 16% ACREDIT PAGADO',
+          fechaContable: '2026-04-15',
+          importe: 36_152_938,
+        }),
+        rec({
+          cuentaObjeto: '1120',
+          nombreCuenta: 'IVA 16% ACREDIT NO PAGADO',
+          fechaContable: '2026-04-15',
+          importe: 18_319_445.22,
+        }),
+      ]);
+      expect(byPeriod.get('2026-04')?.creditable).toBeCloseTo(36_152_938, 2);
+    });
   });
 });
 

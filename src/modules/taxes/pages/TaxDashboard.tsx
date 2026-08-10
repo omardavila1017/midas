@@ -9,7 +9,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { Building2, CalendarDays, Check, ChevronDown, ChevronRight, Download, FileText, Pencil, Plus, RotateCcw, Trash2, Wallet, X } from 'lucide-react';
+import { AlertTriangle, Building2, CalendarDays, Check, ChevronDown, ChevronRight, Download, FileText, Pencil, Plus, RotateCcw, Trash2, Wallet, X } from 'lucide-react';
 import type { Budget } from '../../../domain/budget';
 import type { CXPRecord } from '../../../domain/persistence';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
@@ -19,6 +19,7 @@ import type { AuxiliarReconResult } from '../../../domain/auxiliarReconciliation
 import type { CxpPaymentCoverage, PaymentMatch } from '../../../domain/paymentReconciliationEngine';
 import { fmtCompact, fmtCurrency, fmtDate, fmtYearMonthLong, todayISO } from '../../../formatters';
 import { coordinadoLabelForCia } from '../../../config/coordinadoFiscalCatalog';
+import type { CausedIvaCoverage } from '../services/causedIvaCoverage';
 import KpiCard from '../../../components/ui/KpiCard';
 import PageHeader from '../../../components/ui/PageHeader';
 import CompanyMultiSelect from '../../../components/ui/CompanyMultiSelect';
@@ -161,6 +162,8 @@ export default function TaxDashboard(props: Props) {
       paidPurchaseOrderKeys: source?.paidPurchaseOrderKeys,
       payrollCosts: props.payrollCosts,
       cobranzaPayments: props.cobranzaPayments,
+      // Sólo referencia para medir la cobertura del causado; no suma importes.
+      cobranzaRecords: props.cobranzaRecords,
       bankStatements: props.bankStatements,
       budget: props.budget,
       companyCode: props.companyCode,
@@ -171,7 +174,7 @@ export default function TaxDashboard(props: Props) {
       today,
       ivaMode: 'REAL' as const,
     }),
-    [endDate, fiscalYearStart, props.assumptions, props.auxiliarReconciliation, props.auxiliarIvaRecords, props.bankStatements, props.budget, props.clients, props.companyCode, props.cobranzaPayments, props.cxpPaymentCoverage, props.cxpRecords, props.paymentMatches, props.payrollCosts, props.providers, props.purchaseReceipts, source, taxStore, today],
+    [endDate, fiscalYearStart, props.assumptions, props.auxiliarReconciliation, props.auxiliarIvaRecords, props.bankStatements, props.budget, props.clients, props.companyCode, props.cobranzaPayments, props.cobranzaRecords, props.cxpPaymentCoverage, props.cxpRecords, props.paymentMatches, props.payrollCosts, props.providers, props.purchaseReceipts, source, taxStore, today],
   );
 
   const view = useMemo(() => buildTaxDashboardView(taxParams), [taxParams]);
@@ -332,6 +335,8 @@ export default function TaxDashboard(props: Props) {
         </div>
       )}
 
+      <CausedIvaGapBanner gaps={view.causedIvaGaps} />
+
       <section className="rounded-[var(--radius-lg)] border border-[var(--gray-200)] bg-white px-4 py-3">
         <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
           <MonthSelector
@@ -440,6 +445,75 @@ function sumCompanyCols(rows: TaxCompanyBreakdown[]): CompanyDisplayTotals {
       total: sum.total + c.total,
     };
   }, { grossIncome: 0, ivaCaused: 0, ivaCreditable: 0, ivaNet: 0, isn: 0, imss: 0, total: 0 });
+}
+
+/**
+ * Confiesa los periodos cuyo IVA causado no es creíble porque la cobranza
+ * aplicada que lo alimenta viene incompleta (ver `causedIvaCoverage.ts`). El
+ * importe publicado NO cambia — sin este aviso, un causado cercano a cero se
+ * lee como un hecho y el neto del periodo parece a favor.
+ */
+export function CausedIvaGapBanner({ gaps }: { gaps: CausedIvaCoverage[] }) {
+  const [expanded, setExpanded] = useState(false);
+  if (gaps.length === 0) return null;
+  const worst = gaps.reduce((min, g) => ((g.coverageRatio ?? 1) < (min.coverageRatio ?? 1) ? g : min), gaps[0]);
+  return (
+    <section className="rounded-[var(--radius-lg)] border border-[var(--warning-200,#fde68a)] bg-[var(--warning-50,#fffbeb)] px-4 py-3">
+      <div className="flex items-start gap-3">
+        <AlertTriangle className="mt-0.5 h-4 w-4 flex-none text-[var(--warning-600,#b45309)]" strokeWidth={1.5} />
+        <div className="min-w-0 flex-1">
+          <p className="text-[13px] font-semibold text-[var(--gray-950)]">
+            {gaps.length === 1
+              ? `El IVA causado de ${fmtYearMonthLong(gaps[0].period)} está incompleto en el origen`
+              : `El IVA causado de ${gaps.length} periodos está incompleto en el origen`}
+          </p>
+          <p className="mt-1 text-[12px] leading-relaxed text-[var(--gray-600)]">
+            La cobranza aplicada que alimenta el causado viene parcial, así que el impuesto de estos
+            periodos sale más bajo de lo real y el neto puede parecer a favor. Lo más bajo es{' '}
+            {fmtYearMonthLong(worst.period)}, con {Math.round((worst.coverageRatio ?? 0) * 100)}% de
+            cobertura. Se corrige capturando las aplicaciones en JDE, no en Midas.
+          </p>
+          <button
+            onClick={() => setExpanded((v) => !v)}
+            className="mt-2 inline-flex items-center gap-1 text-[12px] font-medium text-[var(--gray-700)] hover:text-[var(--gray-950)]"
+          >
+            {expanded ? <ChevronDown className="h-3.5 w-3.5" strokeWidth={1.5} /> : <ChevronRight className="h-3.5 w-3.5" strokeWidth={1.5} />}
+            {expanded ? 'Ocultar detalle' : 'Ver detalle por periodo'}
+          </button>
+          {expanded && (
+            <div className="mt-2 overflow-x-auto">
+              <table className="w-full min-w-[30rem] text-[12px]">
+                <thead>
+                  <tr className="text-left text-[11px] uppercase tracking-wide text-[var(--gray-500)]">
+                    <th className="py-1 pr-3 font-medium">Periodo</th>
+                    <th className="py-1 pr-3 text-right font-medium">Causado reconocido</th>
+                    <th className="py-1 pr-3 text-right font-medium">IVA de lo cobrado</th>
+                    <th className="py-1 pr-3 text-right font-medium">Cobertura</th>
+                    <th className="py-1 text-right font-medium">Aplicaciones</th>
+                  </tr>
+                </thead>
+                <tbody className="tabular-nums">
+                  {gaps.map((gap) => (
+                    <tr key={gap.period} className="border-t border-[var(--gray-200)]">
+                      <td className="py-1 pr-3 text-[var(--gray-800)]">{fmtYearMonthLong(gap.period)}</td>
+                      <td className="py-1 pr-3 text-right text-[var(--gray-700)]">{fmtCurrency(gap.reportedIva)}</td>
+                      <td className="py-1 pr-3 text-right text-[var(--gray-700)]">{fmtCurrency(gap.expectedIva)}</td>
+                      <td className="py-1 pr-3 text-right font-semibold text-[var(--warning-700,#a16207)]">
+                        {Math.round((gap.coverageRatio ?? 0) * 100)}%
+                      </td>
+                      <td className="py-1 text-right text-[var(--gray-600)]">
+                        {gap.applicationCount} de {gap.paidInvoiceCount}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
+  );
 }
 
 function TaxByCompanyPanel({

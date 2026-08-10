@@ -5,8 +5,13 @@ import { projectClientMonth } from '../../../domain/collectionEngine';
 import type { Budget } from '../../../domain/budget';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
 import { classifyBankConcept } from '../../../domain/bankConceptClassifier';
-import type { AuxiliarContableRecord, BankAccountStatement, CobranzaPayment } from '../../../services/jdeTypes';
+import type { AuxiliarContableRecord, BankAccountStatement, CobranzaPayment, CobranzaRecord } from '../../../services/jdeTypes';
 import { buildIvaLedgerByPeriod, type IvaLedgerLine, type IvaLedgerPeriod } from '../../../domain/ivaLedger';
+import {
+  assessCausedIvaCoverage,
+  implausibleCausedIvaPeriods,
+  type CausedIvaCoverage,
+} from './causedIvaCoverage';
 import { isCreditableExcludedConcept } from '../../../config/ivaCreditableExclusions';
 import { resolveIncomeIvaRate } from '../../../config/ivaRegionRates';
 import { todayISO } from '../../../formatters';
@@ -185,6 +190,12 @@ export interface TaxPeriodSummary {
   payrollBase: number;
   payrollLines: TaxSourceLine[];
   imssLines: TaxSourceLine[];
+  /**
+   * Cobertura de la fuente del IVA causado en el periodo. Presente sólo cuando
+   * hay una referencia independiente con qué comparar (facturas de cobranza).
+   * Ver `causedIvaCoverage.ts`: mide, NO corrige.
+   */
+  causedCoverage?: CausedIvaCoverage;
 }
 
 export interface TaxDashboardView {
@@ -208,6 +219,12 @@ export interface TaxDashboardView {
     /** Ingresos gravables totales del periodo (Base 16% + Base 8%). */
     grossIncome: number;
   };
+  /**
+   * Periodos CERRADOS cuyo IVA causado no es creíble porque la cobranza
+   * aplicada que lo alimenta viene incompleta. Vacío = nada que confesar.
+   * El número publicado NO se altera; esto sólo lo hace visible.
+   */
+  causedIvaGaps: CausedIvaCoverage[];
 }
 
 export function defaultTaxStore(): TaxStore {
@@ -425,6 +442,12 @@ export function buildTaxDashboardView(params: {
   paidPurchaseOrderKeys?: Set<string>;
   payrollCosts?: PayrollCostRecord[];
   cobranzaPayments?: CobranzaPayment[];
+  /**
+   * Facturas de cobranza. NO alimentan ningún importe fiscal — se usan sólo
+   * como referencia independiente para medir si la cobranza aplicada que
+   * alimenta el IVA causado viene completa (`causedIvaCoverage.ts`).
+   */
+  cobranzaRecords?: CobranzaRecord[];
   bankStatements?: BankAccountStatement[];
   /**
    * Nueva conciliacion contable (AuxiliarContable ↔ bancos). No contiene IVA,
@@ -686,19 +709,33 @@ export function buildTaxDashboardView(params: {
   if (ivaMode !== 'REAL') collectKeys(forecastByPeriod);
   collectKeys(sharedByPeriod);
 
+  // Cobertura de la fuente del causado. Sólo mide: no altera ningún importe.
+  // Se evalúa aunque `ivaMode` sea FORECAST — el dato es del origen, no del modo.
+  const causedCoverageByPeriod = assessCausedIvaCoverage({
+    payments: params.cobranzaPayments ?? [],
+    invoices: params.cobranzaRecords ?? [],
+    companyCode: params.companyCode,
+    startDate,
+    endDate,
+    currentPeriod: params.today.slice(0, 7),
+  });
+
   const periods = Array.from(periodKeys)
     .sort((a, b) => a.localeCompare(b))
-    .map((period) => finalizeTaxPeriod({
-      period,
-      activeIva: ivaMode === 'FORECAST'
-        ? accumulatorFor(forecastByPeriod, period)
-        : accumulatorFor(realByPeriod, period),
-      realIva: accumulatorFor(realByPeriod, period),
-      forecastIva: accumulatorFor(forecastByPeriod, period),
-      shared: accumulatorFor(sharedByPeriod, period),
-      ivaMode,
-      store: params.store,
-      today: params.today,
+    .map((period) => ({
+      ...finalizeTaxPeriod({
+        period,
+        activeIva: ivaMode === 'FORECAST'
+          ? accumulatorFor(forecastByPeriod, period)
+          : accumulatorFor(realByPeriod, period),
+        realIva: accumulatorFor(realByPeriod, period),
+        forecastIva: accumulatorFor(forecastByPeriod, period),
+        shared: accumulatorFor(sharedByPeriod, period),
+        ivaMode,
+        store: params.store,
+        today: params.today,
+      }),
+      causedCoverage: causedCoverageByPeriod.get(period),
     }));
 
   const obligations = periods.flatMap((period) => period.obligations);
@@ -737,7 +774,13 @@ export function buildTaxDashboardView(params: {
     grossIncome: 0,
   });
 
-  return { periods, obligations, overdueBalance: totalOverdue, totals };
+  return {
+    periods,
+    obligations,
+    overdueBalance: totalOverdue,
+    totals,
+    causedIvaGaps: implausibleCausedIvaPeriods(causedCoverageByPeriod),
+  };
 }
 
 /** Parámetros de `buildTaxDashboardView`, reutilizados por el desglose por empresa. */

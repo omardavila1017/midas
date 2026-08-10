@@ -27,7 +27,27 @@ function creditableMatchText(rec: AuxiliarContableRecord): string {
   return `${rec.nombre ?? ''} ${rec.concepto ?? ''} ${rec.explicacion ?? ''}`;
 }
 
-export type IvaAccountKind = 'creditable' | 'caused' | 'withheld' | 'other';
+/**
+ * El mayor JDE modela CUATRO estados de IVA, no dos: el impuesto nace devengado
+ * (acreditable-no-pagado / trasladado-no-cobrado) y se mueve a su cuenta
+ * hermana cuando efectivamente se paga o se cobra. El IVA mexicano es
+ * base-flujo, así que sólo los estados consumados son fiscales:
+ *
+ *   creditable         IVA de compras EFECTIVAMENTE PAGADO → acreditable ya
+ *   creditable-pending IVA de compras aún no pagado        → NO acreditable
+ *   caused             IVA de ventas EFECTIVAMENTE COBRADO → causado ya
+ *   caused-accrued     IVA de ventas aún no cobrado        → NO causado
+ *
+ * Colapsar cada par suma el MISMO peso dos veces (una al devengarse y otra al
+ * consumarse) y adelanta impuesto que aún no es exigible.
+ */
+export type IvaAccountKind =
+  | 'creditable'
+  | 'creditable-pending'
+  | 'caused'
+  | 'caused-accrued'
+  | 'withheld'
+  | 'other';
 
 export interface IvaLedgerAccount {
   cia: string;
@@ -89,33 +109,32 @@ export function classifyIvaAccount(nombreCuenta: string | undefined): IvaAccount
     || name.includes('IMP AL VALOR AGREGADO');
   if (!mentionsIva) return 'other';
   // Retenido (IVA retenido a terceros) no es acreditable ni causado normal.
-  if (name.includes('RETEN')) return 'withheld';
-  // Acreditable: IVA sobre compras/gastos (a favor).
+  // La forma ABREVIADA cuenta: `RET IVA ARRENDAMIENTO PAGADO` no empata
+  // `RETEN`, así que caía a acreditable por su `PAGADO` final (medido en la BD:
+  // $1.03M de retenciones sumadas al acreditable de 2026).
+  if (name.includes('RETEN') || /\bRET IVA\b/.test(name)) return 'withheld';
+
+  // De qué lado del impuesto habla la cuenta, sin importar si ya se consumó.
+  const isCreditableSide = name.includes('ACREDIT');
+  const isCausedSide = hasAny(name, ['TRASLAD', 'CAUSAD']);
+
+  // La negación se evalúa ANTES del match por participio: `'PAGADO'` empata
+  // dentro de `'NO PAGADO'`, así que buscarlo primero clasificaba como
+  // acreditable justo la cuenta que dice que AÚN NO lo es (medido en la BD:
+  // `IVA 16% ACREDIT NO PAGADO` inflaba el acreditable de 2026 en $37.45M).
+  const notPaidYet = /\bNO PAGAD/.test(name) || name.includes('PENDIENTE DE PAGO');
+  const notCollectedYet = /\bNO COBRAD/.test(name)
+    || hasAny(name, ['POR COBRAR', 'PENDIENTE DE COBRO', 'DEVENGAD']);
+
+  if (notPaidYet && !isCausedSide) return 'creditable-pending';
+  if (notCollectedYet && !isCreditableSide) return 'caused-accrued';
+
+  // Acreditable consumado: IVA sobre compras/gastos efectivamente pagado.
+  if (isCreditableSide || name.includes('PAGADO')) return 'creditable';
+  // Causado consumado: IVA sobre ventas efectivamente cobrado (o ya exigible).
   if (
-    hasAny(name, [
-      'ACREDITABLE',
-      'POR ACREDITAR',
-      'ACREDITAR',
-      'PAGADO',
-      'PENDIENTE DE PAGO',
-    ])
-  ) {
-    return 'creditable';
-  }
-  // Causado/Trasladado: IVA sobre ventas (a cargo).
-  if (
-    hasAny(name, [
-      'TRASLAD',
-      'CAUSADO',
-      'POR PAGAR',
-      'POR ENTERAR',
-      'ENTERAR',
-      'COBRADO',
-      'COBRAR',
-      'POR COBRAR',
-      'PENDIENTE DE COBRO',
-      'DEVENGADO',
-    ])
+    isCausedSide
+    || hasAny(name, ['POR PAGAR', 'POR ENTERAR', 'ENTERAR', 'COBRADO'])
   ) {
     return 'caused';
   }
@@ -130,12 +149,19 @@ export function rateFromAccountName(nombreCuenta: string | undefined): 8 | 16 | 
   return undefined;
 }
 
-/** Objetos contables (Cuenta_Objeto) cuyo nombre clasifica como IVA. */
+/**
+ * Objetos contables (Cuenta_Objeto) cuyo nombre clasifica como IVA.
+ *
+ * Incluye los estados devengados a propósito: alimentan la fase B del fetch
+ * (qué objetos traer del rango completo) y las cuentas devengadas comparten
+ * objeto con sus hermanas consumadas. Omitirlas dejaría fuera el objeto entero
+ * si el mes de descubrimiento sólo tuvo movimiento devengado.
+ */
 export function discoverIvaObjetos(records: AuxiliarContableRecord[]): Set<string> {
   const objetos = new Set<string>();
   for (const rec of records) {
     const kind = classifyIvaAccount(rec.nombreCuenta);
-    if (kind === 'creditable' || kind === 'caused' || kind === 'withheld') {
+    if (kind !== 'other') {
       const obj = rec.cuentaObjeto?.trim();
       if (obj) objetos.add(obj);
     }
@@ -147,7 +173,9 @@ export function discoverIvaObjetos(records: AuxiliarContableRecord[]): Set<strin
 export function discoverIvaObjetosByKind(records: AuxiliarContableRecord[]): Record<IvaAccountKind, Set<string>> {
   const out: Record<IvaAccountKind, Set<string>> = {
     creditable: new Set<string>(),
+    'creditable-pending': new Set<string>(),
     caused: new Set<string>(),
+    'caused-accrued': new Set<string>(),
     withheld: new Set<string>(),
     other: new Set<string>(),
   };
@@ -192,7 +220,9 @@ export function summarizeIvaAccounts(records: AuxiliarContableRecord[]): IvaLedg
 export function groupIvaAccountsByKind(accounts: IvaLedgerAccount[]): Record<IvaAccountKind, IvaLedgerAccount[]> {
   return {
     creditable: accounts.filter((account) => account.kind === 'creditable'),
+    'creditable-pending': accounts.filter((account) => account.kind === 'creditable-pending'),
     caused: accounts.filter((account) => account.kind === 'caused'),
+    'caused-accrued': accounts.filter((account) => account.kind === 'caused-accrued'),
     withheld: accounts.filter((account) => account.kind === 'withheld'),
     other: accounts.filter((account) => account.kind === 'other'),
   };
