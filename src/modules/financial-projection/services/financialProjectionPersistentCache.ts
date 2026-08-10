@@ -176,6 +176,10 @@ export function projectionSourcePersistentCacheKey(input: FinancialProjectionSou
     // contenido. Si necesitamos sensibilidad a edición in-place de un viaje
     // (factura/efectuado), agregar un contador de "updates" en el upsert.
     `rol=len:${(input.rolRecords ?? []).length}`,
+    // Viajes Especiales: emite ingreso REAL (`cxc:especial:viaje:` fechado con
+    // Fecha_Factura + Dias_Credito del API) y re-etiqueta los `cxc:` cruzados,
+    // así que mueve el dinero de la proyección — no puede faltar en la llave.
+    `viajes=${viajesEspecialesFingerprint(input.viajesEspecialesRecords)}`,
     `purchase=${fingerprintArray(input.purchaseReceipts ?? [], (item) => fields(item, ['cia', 'noProveedor', 'invoiceNo', 'purchaseOrderNo', 'receiptNo', 'estimatedDueDate', 'totalAmount', 'status', 'confidence']))}`,
     `payroll=${fingerprintArray(input.payrollCosts ?? [], (item) => fields(item, ['cia', 'year', 'month', 'paymentDate', 'payrollPeriod', 'conceptId', 'amount']))}`,
     // Reconciliation fingerprint: structural counts only. Serializing the full
@@ -538,6 +542,32 @@ function cargoEnrichmentFingerprint(
   let matched = 0;
   for (const entry of map.values()) if (entry.status === 'MATCHED') matched++;
   return `${map.size}:${matched}`;
+}
+
+/**
+ * Huella de Viajes Especiales.
+ *
+ * Dos contadores en UN pase, sin construir string por item (el walk que este
+ * archivo evita a propósito): conteo total y cuántos traen factura.
+ *
+ * El conteo solo NO alcanza. La colección se upsertea por `kRenta`
+ * (`AppCore`), así que un viaje re-fetcheado que YA se facturó **reemplaza al
+ * anterior en sitio**: la longitud no se mueve pero `facturaJDE` pasa de vacío
+ * a folio, y con eso cambia su bucket en `buildViajesEspecialesCobranzaCross`
+ * (`withoutInvoice` → cruzado/unmatched) y la fecha con la que
+ * `projectViajeEspecialDate` lo proyecta. El conteo cubre la otra mitad: los
+ * viajes que entran o salen, incluido el backfill de años previos.
+ *
+ * Mismo trade-off estructural que `rol`/`cxp`/`cobranza` y que el cruce de
+ * pagos: no distingue "mismos facturados, otro importe/fecha".
+ */
+function viajesEspecialesFingerprint(
+  records: FinancialProjectionSourceInput['viajesEspecialesRecords'],
+): string {
+  if (!records || records.length === 0) return '0';
+  let invoiced = 0;
+  for (const r of records) if (r.facturaJDE) invoiced++;
+  return `${records.length}:${invoiced}`;
 }
 
 function unknownFingerprint(value: unknown): string {

@@ -58,7 +58,16 @@ export interface FinancialProjectionSourceInput {
   cobranzaRecords?: CobranzaRecord[];
   /** ROL CITI: viajes ejecutados. Forma parte del cache key. */
   rolRecords?: RolRecord[];
-  /** Viajes Especiales (API srv-desarrollo:95). Forma parte del cache key. */
+  /**
+   * Viajes Especiales (API srv-desarrollo:95).
+   *
+   * Forma parte del cache key (memo + persistente): emite ingreso REAL
+   * (`cxc:especial:viaje:` fechado con Fecha_Factura + Dias_Credito del API) y
+   * re-etiqueta los `cxc:` cruzados, así que mueve el dinero de la proyección.
+   * Hasta 2026-08-11 el comentario decía "forma parte del cache key" pero sólo
+   * estaba en el del memo: el persistente le servía al tablero una entrada
+   * construida antes de que los viajes aterrizaran.
+   */
   viajesEspecialesRecords?: ViajeEspecialRecord[];
   purchaseReceipts?: PurchaseReceiptRecord[];
   payrollCosts?: PayrollCostRecord[];
