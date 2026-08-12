@@ -39,6 +39,7 @@ import type {
 import {
   buildPayrollCostMovements,
   buildPurchaseReceiptMovements,
+  normalizeJde,
 } from '../sourceRecords';
 import {
   cleanDate,
@@ -52,6 +53,11 @@ import {
   type CanonicalMonthlyPoint,
   type CanonicalProjectionInputs,
 } from './canonicalProjectionShared';
+import {
+  buildProviderPayClassOverlay,
+  rawPayClass,
+  type PayClassPair,
+} from './providerPayClassOverlay';
 
 const DAY_MS = 86_400_000;
 
@@ -82,6 +88,15 @@ export function buildShortTermProjectionMovements({ monthly, inputs }: BuildArgs
   //    reserva de presupuesto, sin sintéticos de balance.
   const futureMonths = monthly.filter((m) => !m.isHistorical);
   const horizonYm = monthly[monthly.length - 1]?.yearMonth;
+  // Clasificación de pago CRUDA por proveedor, tomada de los pagos que ya
+  // cruzaron banco. Es la única fuente que trae el par completo; CXP y las OCs
+  // la heredan de aquí para que un proveedor no cambie de grupo al pasar del
+  // histórico al futuro. Se construye UNA vez (recorrerla por mes sería O(meses
+  // × cargos)).
+  // Se llavea con `normalizeJde` (no con el `providerJdeKey` local): es el
+  // MISMO normalizador que usa `buildPurchaseReceiptMovements` para las OCs, así
+  // que el overlay no puede quedar inerte por una divergencia de llave.
+  const payClassByProvider = buildProviderPayClassOverlay(inputs.cargoEnrichments, normalizeJde);
   const purchaseMovementsByYm = groupMovementsByYearMonth(buildPurchaseReceiptMovements({
     purchaseReceipts: inputs.purchaseReceipts ?? [],
     cxpRecords: inputs.cxpRecords,
@@ -90,12 +105,13 @@ export function buildShortTermProjectionMovements({ monthly, inputs }: BuildArgs
     excludeProviderIds: concursoProviderIds,
     paidPurchaseOrderKeys: inputs.paidPurchaseOrderKeys,
     providers: inputs.providers,
+    payClassByProvider,
   }));
   for (const month of futureMonths) {
     const inflowLines = collectInflowLines(month, inputs, todayYm, inflowContext);
     out.push(...emitRawLines(inflowLines, 'INFLOW', inputs.asOfDate));
 
-    const outflowLines = collectOutflowLines(month, inputs, todayYm, undefined, horizonYm, purchaseMovementsByYm.get(month.yearMonth) ?? [], concursoProviderIds);
+    const outflowLines = collectOutflowLines(month, inputs, todayYm, undefined, horizonYm, purchaseMovementsByYm.get(month.yearMonth) ?? [], concursoProviderIds, payClassByProvider);
     out.push(...emitRawLines(outflowLines, 'OUTFLOW', inputs.asOfDate));
   }
 
@@ -109,7 +125,7 @@ export function buildShortTermProjectionMovements({ monthly, inputs }: BuildArgs
       .filter((line) => line.date >= inputs.asOfDate);
     out.push(...emitRawLines(inflowLines, 'INFLOW', inputs.asOfDate));
 
-    const outflowLines = collectOutflowLines(currentHistorical, inputs, todayYm, undefined, horizonYm, purchaseMovementsByYm.get(currentYm) ?? [], concursoProviderIds)
+    const outflowLines = collectOutflowLines(currentHistorical, inputs, todayYm, undefined, horizonYm, purchaseMovementsByYm.get(currentYm) ?? [], concursoProviderIds, payClassByProvider)
       .filter((line) => line.date >= inputs.asOfDate);
     out.push(...emitRawLines(outflowLines, 'OUTFLOW', inputs.asOfDate));
   }
@@ -152,6 +168,8 @@ function emitRawLines(
     counterpartyName: line.counterpartyName,
     counterpartyType: line.counterpartyType,
     providerCategory: line.providerCategory,
+    payClass: line.payClass,
+    payClassFinanciera: line.payClassFinanciera,
     concept: line.concept,
     currency: 'MXN',
     originalAmount: line.amount,
@@ -183,6 +201,8 @@ interface RawLine {
   category: FinancialMovementCategory;
   subcategory?: string;
   providerCategory?: string;
+  payClass?: string;
+  payClassFinanciera?: string;
   counterpartyId?: string;
   counterpartyName?: string;
   counterpartyType?: FinancialMovement['counterpartyType'];
@@ -559,6 +579,14 @@ function collectOutflowLines(
    * Sus pagos viven en el módulo Concurso.
    */
   concursoProviderIds: Set<string> = new Set(),
+  /**
+   * Overlay `claveProveedor → par de clasificación de pago CRUDA`, derivado de
+   * los pagos ya ejecutados. `/antiguedadsaldos` no manda
+   * `Clasificacion_Proveedor_Financiera`, así que sin esto el mismo proveedor
+   * se agrupa distinto en el pasado que en el futuro (ver
+   * `providerPayClassOverlay.ts`).
+   */
+  payClassByProvider: Map<string, PayClassPair> = new Map(),
 ): RawLine[] {
   const lines: RawLine[] = [];
   const providerByName = new Map(inputs.providers.map((p) => [supplierLookupKey(p.name), p]));
@@ -619,6 +647,14 @@ function collectOutflowLines(
       record.clasificacionProveedor,
       record.clasifica,
     ) || 'Sin clasificar';
+    // Clasificación de pago CRUDA. `/antiguedadsaldos` sólo manda
+    // `Clasificacion_Proveedor`; la financiera se hereda del overlay de pagos
+    // ejecutados. Si el proveedor nunca se ha pagado, el par queda incompleto y
+    // se muestra como tal — nunca se inventa.
+    const overlayPayClass = payClassByProvider.get(normalizeJde(record.noProveedor));
+    const payClass = rawPayClass(record.clasificacionProveedor || record.clasifica)
+      ?? overlayPayClass?.payClass;
+    const payClassFinanciera = overlayPayClass?.payClassFinanciera;
     const score = provider?.score != null
       ? Math.max(0, Math.min(100, Math.round(provider.score)))
       : (record.edoPago ?? '').toUpperCase().includes('APROB')
@@ -633,6 +669,8 @@ function collectOutflowLines(
       category: 'AP_PAYMENT',
       subcategory: providerType,
       providerCategory: providerType,
+      payClass,
+      payClassFinanciera,
       counterpartyId: provider?.id ?? record.noProveedor,
       counterpartyName: record.nombre,
       counterpartyType: 'SUPPLIER',
@@ -671,6 +709,8 @@ function collectOutflowLines(
       category: movement.category,
       subcategory: movement.subcategory,
       providerCategory: movement.providerCategory,
+      payClass: movement.payClass,
+      payClassFinanciera: movement.payClassFinanciera,
       counterpartyId: movement.counterpartyId,
       counterpartyName: movement.counterpartyName,
       counterpartyType: movement.counterpartyType,

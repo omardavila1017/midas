@@ -9,11 +9,8 @@ import type {
   PlanningRow,
 } from '../../shared-finance/types';
 import { slug } from './customRowsStorage';
-import {
-  INTERNAL_GROUP_BUCKET,
-  macroBucketForSupplier,
-  UNCATEGORIZED_PROVIDER_BUCKET,
-} from './providerCategoryGeneralization';
+import { UNCATEGORIZED_PROVIDER_BUCKET } from './providerCategoryGeneralization';
+import { payClassBucketForMovement } from './paymentClassTaxonomy';
 
 function providerLookupKey(value: string | undefined | null): string {
   if (!value) return '';
@@ -54,25 +51,11 @@ export const INTERNAL_RECON_BUCKET = 'Traspasos internos (neto)';
  */
 export const INTERNAL_PAGADORA_BUCKET = 'Traspasos internos (cuentas pagadoras)';
 
-export const OUTFLOW_BUCKET_ORDER = [
-  'Flota',
-  'Proveedor TI',
-  'Inmuebles y rentas',
-  'Personal y nómina',
-  'Servicios',
-  'Intereses Concurso Mercantil',
-  INTERNAL_GROUP_BUCKET,
-  UNCATEGORIZED_PROVIDER_BUCKET,
-  'Impuestos',
-  'Nómina',
-  'Deuda',
-  'CAPEX',
-  'OPEX',
-  UNIDENTIFIED_BANK_OUTFLOW_BUCKET,
-  INTERNAL_PAGADORA_BUCKET,
-  INTERNAL_RECON_BUCKET,
-  'Manual',
-];
+// El orden fijo de buckets de egreso (`OUTFLOW_BUCKET_ORDER`) se retiró al
+// pasar el agrupamiento a la clasificación de pago cruda: los grupos ya no son
+// un catálogo cerrado de ~16 etiquetas, sino el vocabulario que mande JDE. El
+// orden vive ahora en `SpreadsheetGrid` (alfabético, con los grupos residuales
+// al final) — ver `OUTFLOW_TAIL_BUCKETS`.
 
 export const CATEGORY_LABELS: Record<FinancialMovementCategory, string> = {
   AR_COLLECTION: 'Cobranza',
@@ -225,20 +208,25 @@ const CATEGORY_BUCKET_LABEL: Record<FinancialMovementCategory, string> = {
   MANUAL: 'Manual',
 };
 
+/**
+ * Bucket de EGRESO. Los pagos a proveedor se agrupan por la CLASIFICACIÓN DE
+ * PAGO cruda de JDE (`paymentClassTaxonomy`) en vez del bucket generalizado
+ * (Flota / Servicios / "Proveedores sin categoría"): Finanzas necesita ver el
+ * egreso tal cual lo clasificó JDE, incluidos los centinelas, para poder
+ * mandarlos a corregir en el origen. Lo que no es pago a proveedor conserva su
+ * etiqueta de categoría en español.
+ */
 export function bucketForMovement(movement: FinancialMovement): string {
   if (movement.type === 'INFLOW') return inflowBucketFor(movement);
   if (movement.category === 'AP_PAYMENT') {
+    const payClassBucket = payClassBucketForMovement(movement);
+    if (payClassBucket) return payClassBucket;
     // CARGO de una cuenta pagadora propia promovido a AP por el rol de la cuenta
     // pero SIN proveedor cruzado: su única identidad es nuestra cuenta de banco
     // origen (counterpartyType BANK). No es una fila de proveedor — tesorería lo
     // trata como movimiento interno, así que sale de "Proveedores sin categoría".
     if (movement.counterpartyType === 'BANK') return INTERNAL_PAGADORA_BUCKET;
-    return macroBucketForSupplier({
-      counterpartyId: movement.counterpartyId,
-      counterpartyName: movement.counterpartyName,
-      providerCategory: movement.providerCategory,
-      subcategory: movement.subcategory,
-    });
+    return CATEGORY_BUCKET_LABEL[movement.category];
   }
   if (movement.category === 'TRANSFER') return UNIDENTIFIED_BANK_OUTFLOW_BUCKET;
   return CATEGORY_BUCKET_LABEL[movement.category];

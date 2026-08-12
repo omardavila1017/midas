@@ -13,6 +13,7 @@ import { enrichFromCatalog, type Flexibility } from '../../domain/providerCatalo
 import { isInternalCounterparty } from '../../domain/netCashFlowEngine';
 import { normalizeCia } from '../../domain/cia';
 import { usableJdeProviderCategory } from './calculation-engine/canonicalProjectionShared';
+import type { PayClassPair } from './calculation-engine/providerPayClassOverlay';
 
 const DAY_MS = 86_400_000;
 
@@ -116,6 +117,13 @@ export function buildPurchaseReceiptMovements(input: {
    * movimiento conserva el lockState basado sólo en confianza.
    */
   providers?: Provider[];
+  /**
+   * Overlay `claveProveedor → clasificación de pago CRUDA` derivado de los
+   * pagos ya ejecutados. `/compras` NO manda clasificación de proveedor (sólo
+   * el árbol de producto), así que sin esto una OC nunca podría agruparse por
+   * clasificación de pago. Ver `providerPayClassOverlay.ts`.
+   */
+  payClassByProvider?: Map<string, PayClassPair>;
 }): FinancialMovement[] {
   const scopedCxp = filterCxpByCompany(input.cxpRecords, input.companyCode);
   const cxpBySupplier = buildJdeSupplierIndex(scopedCxp);
@@ -139,7 +147,7 @@ export function buildPurchaseReceiptMovements(input: {
       const candidates = cxpBySupplier.get(normalizeJde(record.noProveedor));
       return !candidates || !candidates.some((cxp) => purchaseMatchesCxp(record, cxp));
     })
-    .map((record, index) => purchaseReceiptToMovement(record, input.asOfDate, index, providerIndex))
+    .map((record, index) => purchaseReceiptToMovement(record, input.asOfDate, index, providerIndex, input.payClassByProvider))
     .filter((movement) => !input.endDate || movement.projectedDate <= input.endDate);
 }
 
@@ -181,6 +189,7 @@ export function purchaseReceiptToMovement(
   asOfDate: string,
   index = 0,
   providerIndex?: ProviderIndex,
+  payClassByProvider?: Map<string, PayClassPair>,
 ): FinancialMovement {
   const originalDate = cleanIsoDate(record.estimatedDueDate)
     ?? cleanIsoDate(record.receiptDate)
@@ -260,6 +269,10 @@ export function purchaseReceiptToMovement(
       record.subfamilyName,
       record.categoryName,
     ),
+    // La OC no trae clasificación de PAGO (el API sólo manda el árbol de
+    // producto), así que se hereda del último pago cruzado de ese proveedor.
+    // Sin overlay queda sin par y el egreso se agrupa como "sin clasificación".
+    ...(payClassByProvider?.get(normalizeJde(record.noProveedor)) ?? {}),
     concept: `${isProjected ? 'OC' : 'Compra'} ${record.invoiceNo || record.purchaseOrderNo || 'sin folio'} · ${record.supplierName || 'Proveedor sin nombre'}`,
     currency: 'MXN',
     originalAmount: record.amountMxn,

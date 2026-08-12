@@ -7,24 +7,30 @@ import {
 } from './planningRowTaxonomy';
 
 describe('planning row taxonomy', () => {
-  it('keeps supplier rows and tags them with provider type for category grouping', () => {
+  it('keeps one row per supplier and buckets it by the raw JDE pay classification pair', () => {
     const movements: FinancialMovement[] = [
       movement({
         id: 'm1',
         subcategory: 'REFACCIONARIO',
         providerCategory: 'REFACCIONES',
+        payClass: 'Servicios',
+        payClassFinanciera: '010 - Refacciones y Llantas',
         counterpartyName: 'Proveedor A',
         projectedAmount: 100,
       }),
       movement({
         id: 'm2',
         subcategory: 'REFACCIONARIO',
+        payClass: 'Servicios',
+        payClassFinanciera: '010 - Refacciones y Llantas',
         counterpartyName: 'Proveedor B',
         projectedAmount: 250,
       }),
       movement({
         id: 'm3',
         subcategory: 'TECNOLOGIA Y SOPORTE',
+        payClass: 'Servicios',
+        payClassFinanciera: '180 - Proveedores TI',
         counterpartyName: 'Proveedor TI',
         projectedAmount: 75,
       }),
@@ -39,7 +45,15 @@ describe('planning row taxonomy', () => {
     ]);
     expect(rows.find((row) => row.label === 'Proveedor A')?.subgroupLabel).toBe('REFACCIONARIO');
     expect(rows.find((row) => row.label === 'Proveedor A')?.providerCategoryLabel).toBe('REFACCIONES');
-    expect(rows.find((row) => row.label === 'Proveedor A')?.bucketLabel).toBe('Flota');
+    // El bucket es el par CRUDO —con su prefijo numérico— no el generalizado
+    // ("Flota"), que es justo lo que este cambio reemplaza.
+    expect(rows.find((row) => row.label === 'Proveedor A')?.bucketLabel)
+      .toBe('Servicios · 010 - Refacciones y Llantas');
+    expect(rows.find((row) => row.label === 'Proveedor B')?.bucketLabel)
+      .toBe('Servicios · 010 - Refacciones y Llantas');
+    // Misma clasificación general, financiera distinta → grupo distinto.
+    expect(rows.find((row) => row.label === 'Proveedor TI')?.bucketLabel)
+      .toBe('Servicios · 180 - Proveedores TI');
     expect(aggregateRowValueForBucket({
       conceptKey: conceptKeyForMovement(movements[0]),
       movementsInBucket: movements,
@@ -70,6 +84,8 @@ describe('planning row taxonomy', () => {
       counterpartyName: 'Proveedor Diesel',
       providerCategory: 'COMBUSTIBLE',
       subcategory: 'COMBUSTIBLE',
+      payClass: 'Directos',
+      payClassFinanciera: '040 - Combustibles',
       concept: 'Pago recurrente Proveedor Diesel',
       projectedAmount: 50_000,
     });
@@ -79,7 +95,9 @@ describe('planning row taxonomy', () => {
 
     expect(row?.category).toBe('AP_PAYMENT');
     expect(row?.providerCategoryLabel).toBe('COMBUSTIBLE');
-    expect(row?.bucketLabel).toBe('Flota');
+    // Un genérico (`Directos`) ya NO pierde la carrera: el par se muestra
+    // completo, tal cual lo manda JDE.
+    expect(row?.bucketLabel).toBe('Directos · 040 - Combustibles');
     expect(aggregateRowValueForBucket({
       conceptKey: conceptKeyForMovement(recurring),
       movementsInBucket: [recurring],
@@ -108,51 +126,79 @@ describe('planning row taxonomy', () => {
     expect(conceptKeyForMovement(inflow)).toBe('INFLOW:AR_COLLECTION:cliente-multicarga');
   });
 
-  it('uses providerCategory as bucket source when the catalog lookup cannot resolve the supplier', () => {
+  it('muestra los centinelas de JDE como su propio grupo, no en un cajón de sastre', () => {
+    // Los tres valores medidos en `jde.Pago_Proveedor` 2026 que
+    // `usableJdeProviderCategory` descarta a propósito para poder bucketizar.
+    // Aquí tienen que sobrevivir TAL CUAL: son el punto del cambio — Finanzas
+    // necesita ver cuánto dinero cuelga de cada uno para mandarlo a corregir.
     const rows = buildPlanningRows({
       movements: [
         movement({
-          id: 'bank-unmatched-provider',
-          sourceSystem: 'BANK',
-          counterpartyId: undefined,
-          counterpartyName: 'AIRE HIDRAULICOS Y NEU',
-          providerCategory: 'MANTENIMIENTO INDUSTRIAL',
-          subcategory: 'MANTENIMIENTO INDUSTRIAL',
-          projectedAmount: 1200,
+          id: 'sentinel-quotes',
+          counterpartyName: 'Proveedor Comillas',
+          payClass: '" "',
+          projectedAmount: 62_960_000,
+        }),
+        movement({
+          id: 'sentinel-dash',
+          counterpartyName: 'Proveedor Guion',
+          payClassFinanciera: '-                              .',
+          projectedAmount: 900,
+        }),
+        movement({
+          id: 'sentinel-por-clasificar',
+          counterpartyName: 'Proveedor Por Clasificar',
+          payClass: 'Servicios',
+          payClassFinanciera: '220 - Por Clasificar',
+          projectedAmount: 431_440_000,
         }),
       ],
       customRows: [],
       overrides: [],
     });
 
-    expect(rows[0]?.providerCategoryLabel).toBe('MANTENIMIENTO INDUSTRIAL');
-    expect(rows[0]?.bucketLabel).toBe('Flota');
+    expect(rows.find((row) => row.label === 'Proveedor Comillas')?.bucketLabel).toBe('" "');
+    // El whitespace se colapsa (si no, `-   .` y `-      .` serían grupos
+    // distintos e idénticos a la vista), pero nada más se toca.
+    expect(rows.find((row) => row.label === 'Proveedor Guion')?.bucketLabel).toBe('- .');
+    expect(rows.find((row) => row.label === 'Proveedor Por Clasificar')?.bucketLabel)
+      .toBe('Servicios · 220 - Por Clasificar');
+    expect(rows.map((row) => row.bucketLabel)).not.toContain('Proveedores sin categoría');
   });
 
-  it('treats CHASIS as a classified fleet supplier category', () => {
+  it('usa un solo lado del par cuando el otro viene vacío, y no repite el valor', () => {
     const rows = buildPlanningRows({
       movements: [
+        // CXP abierto: `/antiguedadsaldos` no manda la financiera y el proveedor
+        // nunca se ha pagado, así que el overlay no la puede prestar.
         movement({
-          id: 'supplier-chasis',
-          counterpartyName: 'Proveedor Chasis',
-          providerCategory: 'CHASIS',
-          subcategory: 'CHASIS',
-          projectedAmount: 1800,
+          id: 'cxp:solo-general',
+          counterpartyName: 'Proveedor Solo General',
+          payClass: 'Servicios',
+          projectedAmount: 700,
+        }),
+        // Las dos fuentes coinciden → una sola etiqueta, no `Servicios · Servicios`.
+        movement({
+          id: 'cxp:duplicado',
+          counterpartyName: 'Proveedor Duplicado',
+          payClass: 'Bancario',
+          payClassFinanciera: 'Bancario',
+          projectedAmount: 500,
         }),
       ],
       customRows: [],
       overrides: [],
     });
 
-    expect(rows[0]?.providerCategoryLabel).toBe('CHASIS');
-    expect(rows[0]?.bucketLabel).toBe('Flota');
+    expect(rows.find((row) => row.label === 'Proveedor Solo General')?.bucketLabel).toBe('Servicios');
+    expect(rows.find((row) => row.label === 'Proveedor Duplicado')?.bucketLabel).toBe('Bancario');
   });
 
-  it('separates uncategorized suppliers from unidentified bank outflows', () => {
+  it('separates suppliers without any pay class from unidentified bank outflows', () => {
     const rows = buildPlanningRows({
       movements: [
-        // Razón social (marcador COMERCIALIZADORA) sin categoría mapeada: se
-        // queda en "Proveedores sin categoría", no se rescata como persona.
+        // Proveedor con categoría generalizable pero SIN clasificación de pago:
+        // ya no se rescata a un bucket deducido — se confiesa como sin clasificar.
         movement({
           id: 'supplier-unknown-category',
           counterpartyName: 'Comercializadora del Norte',
@@ -165,6 +211,15 @@ describe('planning row taxonomy', () => {
           counterpartyName: 'Distribuidora Sin Catalogo',
           subcategory: undefined,
           projectedAmount: 700,
+        }),
+        // Persona física pagada por cuentas por pagar (finiquito/honorario): la
+        // heurística de nombre que la rescataba a "Personal y nómina" era
+        // justamente deducción, no dato de JDE — ya no aplica al agrupar.
+        movement({
+          id: 'bank:person',
+          sourceSystem: 'BANK',
+          counterpartyName: 'Juan Pérez López',
+          projectedAmount: 1_000,
         }),
         movement({
           id: 'bank-unidentified',
@@ -180,45 +235,56 @@ describe('planning row taxonomy', () => {
       overrides: [],
     });
 
-    expect(rows.find((row) => row.label === 'Comercializadora del Norte')?.bucketLabel).toBe('Proveedores sin categoría');
-    expect(rows.find((row) => row.label === 'Distribuidora Sin Catalogo')?.bucketLabel).toBe('Proveedores sin categoría');
+    expect(rows.find((row) => row.label === 'Comercializadora del Norte')?.bucketLabel).toBe('Sin clasificación de pago');
+    expect(rows.find((row) => row.label === 'Distribuidora Sin Catalogo')?.bucketLabel).toBe('Sin clasificación de pago');
+    expect(rows.find((row) => row.label === 'Juan Pérez López')?.bucketLabel).toBe('Sin clasificación de pago');
     expect(rows.find((row) => row.label === 'Sin identificar · BANCO 123')?.bucketLabel).toBe('Egresos bancarios sin identificar');
     expect(rows.filter((row) => row.type === 'OUTFLOW').map((row) => row.bucketLabel)).not.toContain('Otros');
     expect(rows.filter((row) => row.type === 'OUTFLOW').map((row) => row.bucketLabel)).not.toContain('Otros egresos');
   });
 
-  it('rescues person-name and payroll-account AP payments into Personal y nómina', () => {
+  it('la identidad de fila NO depende del grupo — los CellOverride no se huerfanan', () => {
+    // `conceptKey` es lo que amarra un `CellOverride` / custom row del usuario a
+    // su fila. Si el bucket entrara en la llave, cambiar el agrupamiento habría
+    // desprendido TODO lo capturado a mano (la clase de defecto de 2026-08-10).
+    // Este pin hace que un cambio así truene aquí en vez de en producción.
+    const sinClase = movement({
+      id: 'm1',
+      counterpartyName: 'Proveedor A',
+      providerCategory: 'REFACCIONES',
+      projectedAmount: 100,
+    });
+    const conClase = movement({
+      ...sinClase,
+      payClass: 'Servicios',
+      payClassFinanciera: '010 - Refacciones y Llantas',
+    });
+
+    expect(conceptKeyForMovement(sinClase)).toBe('OUTFLOW:AP_PAYMENT:proveedor-a');
+    expect(conceptKeyForMovement(conClase)).toBe(conceptKeyForMovement(sinClase));
+    // …aunque el bucket sí cambie.
+    const [rowSin] = buildPlanningRows({ movements: [sinClase], customRows: [], overrides: [] });
+    const [rowCon] = buildPlanningRows({ movements: [conClase], customRows: [], overrides: [] });
+    expect(rowSin.bucketLabel).not.toBe(rowCon.bucketLabel);
+    expect(rowSin.conceptKey).toBe(rowCon.conceptKey);
+  });
+
+  it('agrupa los egresos que no son pago a proveedor por su categoría en español', () => {
     const rows = buildPlanningRows({
       movements: [
-        // Persona física pagada por cuentas por pagar (finiquito/honorario/
-        // reembolso) sin categoría de proveedor → rescatada por la heurística
-        // de nombre de persona, en vez de quedar como "sin categoría".
-        movement({
-          id: 'bank:person',
-          sourceSystem: 'BANK',
-          counterpartyName: 'Juan Pérez López',
-          providerCategory: undefined,
-          subcategory: undefined,
-          projectedAmount: 1_000,
-        }),
-        // Pago desde cuenta pagadora de nómina (subRole proveedores_nomina) sin
-        // categoría y SIN nombre de persona → rescatado por la señal exacta de
-        // la cuenta de banco, no por la heurística.
-        movement({
-          id: 'bank:nomina-account',
-          sourceSystem: 'BANK',
-          counterpartyName: 'Pago folio 8842',
-          providerCategory: undefined,
-          subcategory: 'proveedores_nomina',
-          projectedAmount: 2_000,
-        }),
+        movement({ id: 'payroll', category: 'PAYROLL', counterpartyName: 'Nómina semanal', projectedAmount: 10 }),
+        movement({ id: 'tax', category: 'TAX', counterpartyName: 'IVA', projectedAmount: 20 }),
+        movement({ id: 'debt', category: 'DEBT', counterpartyName: 'Convenio', projectedAmount: 30 }),
+        movement({ id: 'opex', category: 'OPEX', counterpartyName: 'Arrendamiento', projectedAmount: 40 }),
+        movement({ id: 'capex', category: 'CAPEX', counterpartyName: 'Equipo', projectedAmount: 50 }),
       ],
       customRows: [],
       overrides: [],
     });
 
-    expect(rows.find((row) => row.label === 'Juan Pérez López')?.bucketLabel).toBe('Personal y nómina');
-    expect(rows.find((row) => row.label === 'Pago folio 8842')?.bucketLabel).toBe('Personal y nómina');
+    expect(rows.map((row) => row.bucketLabel).sort()).toEqual([
+      'CAPEX', 'Deuda', 'Impuestos', 'Nómina', 'OPEX',
+    ]);
   });
 
   it('routes GL-derived categories/subcategories to the correct row buckets', () => {
@@ -309,6 +375,8 @@ function movement(patch: Partial<FinancialMovement>): FinancialMovement {
     subcategory: patch.subcategory,
     businessUnitId: patch.businessUnitId,
     providerCategory: patch.providerCategory,
+    payClass: patch.payClass,
+    payClassFinanciera: patch.payClassFinanciera,
     counterpartyName: patch.counterpartyName,
     counterpartyType: patch.counterpartyType ?? 'SUPPLIER',
     concept: patch.concept ?? 'Factura',

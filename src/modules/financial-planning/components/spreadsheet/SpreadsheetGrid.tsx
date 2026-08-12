@@ -20,9 +20,11 @@ import {
 import { bucketVisual } from './bucketVisuals';
 import {
   INTERNAL_PAGADORA_BUCKET,
-  OUTFLOW_BUCKET_ORDER,
+  INTERNAL_RECON_BUCKET,
   UNIDENTIFIED_BANK_OUTFLOW_BUCKET,
 } from '../../services/planningRowTaxonomy';
+import { INTERNAL_GROUP_BUCKET } from '../../services/providerCategoryGeneralization';
+import { SIN_PAY_CLASS_BUCKET } from '../../services/paymentClassTaxonomy';
 
 export interface SpreadsheetGridProps {
   rows: PlanningRow[];
@@ -893,86 +895,43 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
   );
 }
 
+/**
+ * Grupos de egreso que NO describen un gasto: son residuos o movimientos
+ * internos. Van al final para que la lista arranque con la clasificación de
+ * pago real; el resto ordena alfabético (es-MX), así que todos los
+ * `Servicios · …` quedan juntos y los numerados (`010 - …`, `220 - …`) salen en
+ * orden de código dentro de su clasificación general.
+ */
+const OUTFLOW_TAIL_BUCKETS = [
+  SIN_PAY_CLASS_BUCKET,
+  INTERNAL_PAGADORA_BUCKET,
+  INTERNAL_GROUP_BUCKET,
+  UNIDENTIFIED_BANK_OUTFLOW_BUCKET,
+  INTERNAL_RECON_BUCKET,
+  'Manual',
+];
+
 function compareBucketLabels(a: string, b: string, type: FinancialMovementType): number {
   if (type === 'INFLOW') return a.localeCompare(b, 'es-MX');
-  const aBase = baseOutflowBucketLabel(a);
-  const bBase = baseOutflowBucketLabel(b);
-  const ai = OUTFLOW_BUCKET_ORDER.indexOf(aBase);
-  const bi = OUTFLOW_BUCKET_ORDER.indexOf(bBase);
+  const ai = OUTFLOW_TAIL_BUCKETS.indexOf(a);
+  const bi = OUTFLOW_TAIL_BUCKETS.indexOf(b);
   if (ai !== -1 || bi !== -1) {
-    if (ai === -1) return 1;
-    if (bi === -1) return -1;
+    if (ai === -1) return -1;
+    if (bi === -1) return 1;
     if (ai !== bi) return ai - bi;
   }
-  const subOrder = compareSupplierSubcategoryLabels(a, b);
-  if (subOrder !== 0) return subOrder;
   return a.localeCompare(b, 'es-MX');
 }
 
+/**
+ * Etiqueta del grupo. Para egresos, `bucketLabel` YA es la clasificación de pago
+ * cruda de JDE (`paymentClassTaxonomy`), así que no se le cuelga el sufijo
+ * `· categoría` que usaba el bucketing generalizado — sería duplicar la misma
+ * información y fragmentaría el grupo.
+ */
 function displayBucketLabelForRow(row: PlanningRow, type: FinancialMovementType): string {
   const fallback = type === 'INFLOW' ? 'Otros ingresos' : UNIDENTIFIED_BANK_OUTFLOW_BUCKET;
-  const bucketLabel = row.bucketLabel || fallback;
-  if (type !== 'OUTFLOW' || row.category !== 'AP_PAYMENT') return bucketLabel;
-  // Los CARGOs de cuentas pagadoras propias sin proveedor cruzado caen en este
-  // bucket interno; su `subcategory` es el subRole de la cuenta ("proveedores"),
-  // no una categoría de proveedor — no le cuelga sufijo para que agrupen juntos.
-  if (bucketLabel === INTERNAL_PAGADORA_BUCKET) return bucketLabel;
-  const category = supplierCategoryGroupLabel(row.providerCategoryLabel ?? row.subgroupLabel);
-  return category ? `${bucketLabel} · ${category}` : bucketLabel;
-}
-
-function baseOutflowBucketLabel(label: string): string {
-  return label.split(' · ')[0]?.trim() || label;
-}
-
-const SUPPLIER_CATEGORY_ORDER = [
-  'Taller',
-  'Chasis',
-  'Refacciones',
-  'Combustible',
-  'Llantas',
-  'Mantenimiento',
-];
-
-function compareSupplierSubcategoryLabels(a: string, b: string): number {
-  const aSub = supplierSubcategoryPart(a);
-  const bSub = supplierSubcategoryPart(b);
-  const ai = SUPPLIER_CATEGORY_ORDER.indexOf(aSub);
-  const bi = SUPPLIER_CATEGORY_ORDER.indexOf(bSub);
-  if (ai !== -1 || bi !== -1) {
-    if (ai === -1) return 1;
-    if (bi === -1) return -1;
-    if (ai !== bi) return ai - bi;
-  }
-  return 0;
-}
-
-function supplierSubcategoryPart(label: string): string {
-  return label.split(' · ')[1]?.trim() ?? '';
-}
-
-function supplierCategoryGroupLabel(raw: string | undefined): string | null {
-  const value = raw?.trim().replace(/\s+/g, ' ');
-  if (!value || value === 'Sin clasificar') return null;
-  // Roles de cuenta de banco (`proveedores_nomina`, `nomina_operadores`, …) NO
-  // son categorías de proveedor: llegan como subcategory de pagos rescatados a
-  // "Personal y nómina" y no deben crear sub-buckets "· proveedores_nomina".
-  if (value.includes('_')) return null;
-  if (/taller/i.test(value)) return 'Taller';
-  if (/chasis/i.test(value)) return 'Chasis';
-  if (/refacc/i.test(value)) return 'Refacciones';
-  if (/combust|diesel|gasolin/i.test(value)) return 'Combustible';
-  if (/llanta|neumat/i.test(value)) return 'Llantas';
-  if (/mantenim/i.test(value)) return 'Mantenimiento';
-  return toReadableSupplierCategory(value);
-}
-
-function toReadableSupplierCategory(value: string): string {
-  if (/[a-záéíóúñ]/.test(value)) return value;
-  return value
-    .toLocaleLowerCase('es-MX')
-    .replace(/\b\p{L}/gu, (char) => char.toLocaleUpperCase('es-MX'))
-    .replace(/\b(De|Del|La|Las|Los|Y|En|A)\b/g, (word) => word.toLocaleLowerCase('es-MX'));
+  return row.bucketLabel || fallback;
 }
 
 // Renders only the rows intersecting the scroll viewport. Row height is

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { BankAccountStatement, BankStatementLine } from '../../../services/jde';
 import type { Budget } from '../../../domain/budget';
+import type { CXPRecord } from '../../../domain/persistence';
 import { bankMovementKey } from '../../../domain/bankMovementKey';
 import { bucketForMovement } from '../../financial-planning/services/planningRowTaxonomy';
 import {
@@ -159,8 +160,14 @@ describe('clasificación JDE del egreso histórico', () => {
     expect(apMovement!.providerCategory).toBe('Refacciones y Llantas');
     expect(apMovement!.counterpartyId).toBe('55501');
     expect(apMovement!.counterpartyName).toBe('REFACCIONES DEL NORTE SA DE CV');
-    // Lo que el usuario ve: la fila cae en Flota, no en "Proveedores sin categoría".
-    expect(bucketForMovement(apMovement!)).toBe('Flota');
+    // El par CRUDO sobrevive el motor sin normalizar: la operativa conserva el
+    // genérico que `usableJdeProviderCategory` descarta, y la financiera su
+    // prefijo numérico. Es lo que agrupa la fila en Planeación.
+    expect(apMovement!.payClass).toBe('Servicios');
+    expect(apMovement!.payClassFinanciera).toBe('010 - Refacciones y Llantas');
+    // Lo que el usuario ve: la fila cae bajo la clasificación de pago tal cual
+    // la manda JDE, no bajo el bucket deducido ("Flota").
+    expect(bucketForMovement(apMovement!)).toBe('Servicios · 010 - Refacciones y Llantas');
   });
 
   it('un ORPHAN del motor de pagos no crea un AP_PAYMENT', () => {
@@ -200,6 +207,114 @@ describe('clasificación JDE del egreso histórico', () => {
     )).toBe(false);
   });
 });
+
+/**
+ * `/antiguedadsaldos` (CXP abierto) NO manda `Clasificacion_Proveedor_Financiera`
+ * y `/compras` no manda ninguna de las dos. Sin el overlay, el MISMO proveedor
+ * se agrupa por un par completo en el pasado y por medio par en el futuro —
+ * dos filas distintas para el mismo gasto, que es exactamente el síntoma que el
+ * agrupamiento por clasificación de pago viene a eliminar.
+ */
+describe('overlay de clasificación de pago (pasado → futuro)', () => {
+  it('la CXP abierta hereda la financiera del pago cruzado del mismo proveedor', () => {
+    __clearProjectionSourceCache();
+    const cargo = line({
+      cia: '00011',
+      cuenta: 'CTA-AP',
+      fechaOperacion: '2026-03-10',
+      referencia: 'SPEI-7001',
+      concepto: 'PAGO 7001',
+      tipoMovimiento: 'CARGO',
+      importe: 250_000,
+    });
+
+    const result = buildFinancialProjectionSourceData({
+      companyCode: 'all',
+      bankStatements: [statement({
+        cia: '00011',
+        cuenta: 'CTA-AP',
+        fechaEstadoCuenta: '2026-03-31',
+        saldoInicial: 1_000_000,
+        saldoFinal: 750_000,
+        movimientos: [cargo],
+      })],
+      clients: [],
+      providers: [],
+      // Factura abierta del MISMO proveedor, con vencimiento futuro.
+      cxpRecords: [cxp({
+        cia: '00011',
+        noProveedor: '0055501',
+        nombre: 'REFACCIONES DEL NORTE SA DE CV',
+        noFactura: 'F-900',
+        fechaVence: '2026-05-20',
+        fechaProgramacionPago: '2026-05-20',
+        importePendientePesos: 80_000,
+        clasificacionProveedor: 'Servicios',
+      })],
+      assumptions: { year: 2026, globalCompliance: 1, factorajeDays: 30 },
+      budget: null,
+      startingBalance: 1_000_000,
+      asOfDate: '2026-04-22',
+      paymentCargoEnrichments: new Map([[bankMovementKey(cargo), {
+        status: 'MATCHED' as const,
+        payments: [{
+          claveProveedor: '55501',
+          nombreProveedor: 'REFACCIONES DEL NORTE SA DE CV',
+          clasificacionProveedor: 'Servicios',
+          clasificacionProveedorFinanciera: '010 - Refacciones y Llantas',
+          importe: 250_000,
+        }],
+      }]]),
+    });
+
+    const cxpMovement = result.movements.find((movement) => movement.id.startsWith('cxp:'));
+    const bankMovement = result.movements.find(
+      (movement) => movement.id.startsWith('bank:') && movement.category === 'AP_PAYMENT',
+    );
+
+    expect(cxpMovement).toBeDefined();
+    expect(cxpMovement!.payClass).toBe('Servicios');
+    // La financiera NO viene en el registro de CXP: la presta el overlay.
+    expect(cxpMovement!.payClassFinanciera).toBe('010 - Refacciones y Llantas');
+    // Pasado y futuro del mismo proveedor caen en el MISMO grupo.
+    expect(bucketForMovement(cxpMovement!)).toBe(bucketForMovement(bankMovement!));
+    expect(bucketForMovement(cxpMovement!)).toBe('Servicios · 010 - Refacciones y Llantas');
+  });
+});
+
+function cxp(patch: Partial<CXPRecord> = {}): CXPRecord {
+  return {
+    cia: '00001',
+    noProveedor: '1',
+    nombre: 'Proveedor',
+    noFactura: 'F-1',
+    fechaFactura: '2026-03-01',
+    fechaVence: '2026-05-20',
+    fechaProgramacionPago: '2026-05-20',
+    diasVencida: 0,
+    importeBrutoPesos: 0,
+    importePendientePesos: 0,
+    importeSubtotalPesos: 0,
+    importeImpuestosPesos: 0,
+    importeBrutoDolares: 0,
+    importePendienteDolares: 0,
+    moneda: 'MXP',
+    condPago: '30',
+    clasifica: '',
+    clasificacionProveedor: '',
+    edoPago: '',
+    tipoCambio: 1,
+    porVencer: 0,
+    v1_30: 0,
+    v31_60: 0,
+    v61_90: 0,
+    v91_120: 0,
+    v121_150: 0,
+    v151_180: 0,
+    mas180: 0,
+    ...patch,
+  };
+}
 
 function line(patch: Partial<BankStatementLine> = {}): BankStatementLine {
   return {

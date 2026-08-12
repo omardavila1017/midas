@@ -68,6 +68,19 @@ export interface FinancialMovement {
   counterpartyName?: string;
   counterpartyType?: FinancialCounterpartyType;
   providerCategory?: string;
+  /**
+   * Clasificación de pago CRUDA de JDE, tal cual la manda el API — con prefijo
+   * numérico y con los centinelas (`" "`, `-  .`, `220 - Por Clasificar`)
+   * intactos. Es lo que agrupa los egresos en Planeación.
+   *
+   * NO es lo mismo que `providerCategory`: ese pasa por
+   * `usableJdeProviderCategory`, que recorta el prefijo y descarta los
+   * centinelas para poder bucketizar. Ambos conviven a propósito — el
+   * normalizado clasifica, el crudo confiesa. Ver `providerPayClassOverlay.ts`.
+   */
+  payClass?: string;
+  /** `Clasificacion_Proveedor_Financiera` cruda (la taxonomía numerada). */
+  payClassFinanciera?: string;
   concept: string;
   currency: string;
   originalAmount: number;

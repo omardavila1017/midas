@@ -74,6 +74,53 @@ function buildMovements(providers?: Provider[]) {
   });
 }
 
+describe('buildPurchaseReceiptMovements — clasificación de pago heredada', () => {
+  /**
+   * `/compras` NO manda clasificación de proveedor (sólo el árbol de producto),
+   * así que una OC nunca podría agruparse por clasificación de pago con lo que
+   * trae su propio API. El overlay le presta el par del último pago cruzado de
+   * ese proveedor; sin overlay se queda sin par y se confiesa como tal.
+   */
+  const receipts = () => comprasToPurchaseReceipts([comprasRecord()], { asOfDate: '2026-04-15' });
+
+  it('hereda el par del proveedor cuando el overlay lo tiene', () => {
+    const [movement] = buildPurchaseReceiptMovements({
+      purchaseReceipts: receipts(),
+      cxpRecords: [],
+      companyCode: 'all',
+      asOfDate: '2026-04-15',
+      // `normalizeJde('71601541')` = '71601541' (ya sin ceros a la izquierda).
+      payClassByProvider: new Map([['71601541', {
+        payClass: 'Servicios',
+        payClassFinanciera: '010 - Refacciones y Llantas',
+      }]]),
+    });
+
+    expect(movement.payClass).toBe('Servicios');
+    expect(movement.payClassFinanciera).toBe('010 - Refacciones y Llantas');
+  });
+
+  it('se queda sin par cuando el proveedor nunca se ha pagado — no inventa', () => {
+    const [sinOverlay] = buildPurchaseReceiptMovements({
+      purchaseReceipts: receipts(),
+      cxpRecords: [],
+      companyCode: 'all',
+      asOfDate: '2026-04-15',
+    });
+    const [otroProveedor] = buildPurchaseReceiptMovements({
+      purchaseReceipts: receipts(),
+      cxpRecords: [],
+      companyCode: 'all',
+      asOfDate: '2026-04-15',
+      payClassByProvider: new Map([['99999', { payClass: 'Servicios' }]]),
+    });
+
+    expect(sinOverlay.payClass).toBeUndefined();
+    expect(sinOverlay.payClassFinanciera).toBeUndefined();
+    expect(otroProveedor.payClass).toBeUndefined();
+  });
+});
+
 describe('sourceRecords', () => {
   it('treats blank, zero and time-only cancellation values as active', () => {
     expect(normalizeCancelledAt('')).toBeUndefined();

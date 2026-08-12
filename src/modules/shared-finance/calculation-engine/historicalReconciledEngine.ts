@@ -47,6 +47,7 @@ import {
   usableJdeProviderCategory,
   type BuildArgs,
 } from './canonicalProjectionShared';
+import { payClassPairFrom } from './providerPayClassOverlay';
 
 /**
  * MOTOR 1 — Histórico reconciliado (≤ hoy). Emite la verdad histórica del
@@ -229,6 +230,15 @@ export function buildHistoricalReconciledMovements({ monthly, inputs }: BuildArg
             matchedPayment.clasificacionProveedorFinanciera,
           )
         : undefined;
+      // Par CRUDO para el agrupamiento de Planeación: conserva prefijo numérico
+      // y centinelas, que `usableJdeProviderCategory` (arriba) descarta a
+      // propósito para poder bucketizar. Ver `providerPayClassOverlay.ts`.
+      const matchedPaymentPayClass = matchedPayment
+        ? payClassPairFrom(
+            matchedPayment.clasificacionProveedor,
+            matchedPayment.clasificacionProveedorFinanciera,
+          )
+        : undefined;
       // ABONOs sin match a factura → agrupar por banco origen para que la
       // tabla de Planeación no muestre cientos de filas únicas por concepto
       // bancario. Sin cruce de cobranza, Federal/Citi se decide por la cuenta
@@ -401,6 +411,8 @@ export function buildHistoricalReconciledMovements({ monthly, inputs }: BuildArg
         category: resolvedCategory,
         subcategory: resolvedSubcategory,
         providerCategory: !isInflow ? (matchedPaymentProviderCategory ?? cargoProviderHit?.providerType ?? undefined) : undefined,
+        payClass: !isInflow ? matchedPaymentPayClass?.payClass : undefined,
+        payClassFinanciera: !isInflow ? matchedPaymentPayClass?.payClassFinanciera : undefined,
         companyId: statement.cia,
         businessUnitId: catalogEnrich?.entry.unidadNegocio,
         bankAccountId: statement.cuenta,

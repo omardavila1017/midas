@@ -53,46 +53,49 @@ describe('<SpreadsheetGrid />', () => {
     expect(onInspectCell).toHaveBeenCalledWith(row.conceptKey, '2026-05-01');
   });
 
-  it('orders outflow buckets explicitly and uses the unidentified bank fallback label', () => {
+  it('orders outflow buckets alphabetically and pushes the residual ones to the end', () => {
     renderGrid(vi.fn(), [
       outflowRow('OUTFLOW:TRANSFER:sin-identificar', 'Sin identificar', 'Egresos bancarios sin identificar', 'TRANSFER'),
-      outflowRow('OUTFLOW:AP_PAYMENT:proveedor-sin-categoria', 'Proveedor sin categoría', 'Proveedores sin categoría', 'AP_PAYMENT'),
+      outflowRow('OUTFLOW:AP_PAYMENT:sin-clase', 'Proveedor sin clase', 'Sin clasificación de pago', 'AP_PAYMENT'),
       outflowRow('OUTFLOW:TAX:iva', 'SAT — IVA', 'Impuestos', 'TAX'),
-      outflowRow('OUTFLOW:AP_PAYMENT:flota', 'Proveedor Flota', 'Flota', 'AP_PAYMENT'),
+      outflowRow('OUTFLOW:AP_PAYMENT:autopistas', 'PASE', 'Servicios · 160 - Autopistas', 'AP_PAYMENT'),
     ]);
 
     expect(screen.queryByText('Otros')).toBeNull();
     expect(screen.queryByText('Otros egresos')).toBeNull();
     expect(screen.getByText('Egresos bancarios sin identificar')).toBeTruthy();
 
-    expect(appearsBefore('Flota', 'Proveedores sin categoría')).toBe(true);
-    expect(appearsBefore('Proveedores sin categoría', 'Impuestos')).toBe(true);
-    expect(appearsBefore('Impuestos', 'Egresos bancarios sin identificar')).toBe(true);
+    // Clasificación real primero (alfabético), residuos al final.
+    expect(appearsBefore('Impuestos', 'Servicios · 160 - Autopistas')).toBe(true);
+    expect(appearsBefore('Servicios · 160 - Autopistas', 'Sin clasificación de pago')).toBe(true);
+    expect(appearsBefore('Sin clasificación de pago', 'Egresos bancarios sin identificar')).toBe(true);
   });
 
-  it('separates supplier outflows into category sections and keeps providers hidden until click', () => {
+  it('agrupa por la clasificación de pago cruda, sin colgar el sufijo de categoría', () => {
     renderGrid(vi.fn(), [
-      outflowRow('OUTFLOW:AP_PAYMENT:taller-a', 'Taller A', 'Flota', 'AP_PAYMENT', 'TALLER ATENCION ACCIDENTES'),
-      outflowRow('OUTFLOW:AP_PAYMENT:taller-b', 'Taller B', 'Flota', 'AP_PAYMENT', 'TALLER ATENCION ACCIDENTES'),
-      outflowRow('OUTFLOW:AP_PAYMENT:chasis', 'Chasis Norte', 'Flota', 'AP_PAYMENT', 'CHASIS'),
-      outflowRow('OUTFLOW:AP_PAYMENT:refacciones', 'Refacciones Norte', 'Flota', 'AP_PAYMENT', 'REFACCIONARIO'),
-      outflowRow('OUTFLOW:AP_PAYMENT:ti', 'Soporte TI', 'Proveedor TI', 'AP_PAYMENT', 'TECNOLOGIA Y SOPORTE'),
+      outflowRow('OUTFLOW:AP_PAYMENT:taller-a', 'Taller A', 'Servicios · 010 - Refacciones y Llantas', 'AP_PAYMENT', 'TALLER ATENCION ACCIDENTES'),
+      outflowRow('OUTFLOW:AP_PAYMENT:taller-b', 'Taller B', 'Servicios · 010 - Refacciones y Llantas', 'AP_PAYMENT', 'TALLER ATENCION ACCIDENTES'),
+      outflowRow('OUTFLOW:AP_PAYMENT:chasis', 'Chasis Norte', 'Directos · 020 - Chasis', 'AP_PAYMENT', 'CHASIS'),
+      outflowRow('OUTFLOW:AP_PAYMENT:ti', 'Soporte TI', 'Servicios · 180 - Proveedores TI', 'AP_PAYMENT', 'TECNOLOGIA Y SOPORTE'),
     ]);
 
-    expect(screen.getByText('Flota · Taller')).toBeTruthy();
-    expect(screen.getByText('Flota · Chasis')).toBeTruthy();
-    expect(screen.getByText('Flota · Refacciones')).toBeTruthy();
-    expect(screen.getByText('Proveedor TI · Tecnologia y Soporte')).toBeTruthy();
+    // El grupo es EXACTAMENTE el par crudo. Antes se le colgaba
+    // `· <categoría generalizada>` (`Flota · Taller`), lo que partía el mismo
+    // valor de JDE en varios grupos y duplicaba la información.
+    expect(screen.getByText('Servicios · 010 - Refacciones y Llantas')).toBeTruthy();
+    expect(screen.getByText('Directos · 020 - Chasis')).toBeTruthy();
+    expect(screen.getByText('Servicios · 180 - Proveedores TI')).toBeTruthy();
+    expect(screen.queryByText('Flota · Taller')).toBeNull();
     expect(screen.queryByText('Taller A')).toBeNull();
-    expect(screen.queryByText('Taller B')).toBeNull();
     expect(screen.queryByText('Chasis Norte')).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: /Flota · Taller/ }));
+    // Los dos talleres comparten clasificación → viven en el MISMO grupo.
+    fireEvent.click(screen.getByRole('button', { name: /Servicios · 010 - Refacciones y Llantas/ }));
 
     expect(screen.getByText('Taller A')).toBeTruthy();
     expect(screen.getByText('Taller B')).toBeTruthy();
     expect(screen.queryByText('Chasis Norte')).toBeNull();
-    expect(appearsBefore('Flota · Taller', 'Flota · Refacciones')).toBe(true);
+    expect(appearsBefore('Directos · 020 - Chasis', 'Servicios · 010 - Refacciones y Llantas')).toBe(true);
   });
 
   // Los footers sticky (Neto/Caja) deben tapar TODO lo que scrollea por
