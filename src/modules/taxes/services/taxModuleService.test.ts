@@ -4,7 +4,7 @@ import type { CXPRecord } from '../../../domain/persistence';
 import type { CxpPaymentCoverage, PaymentMatch } from '../../../domain/paymentReconciliationEngine';
 import type { AuxiliarReconLine, AuxiliarReconResult } from '../../../domain/auxiliarReconciliationEngine';
 import type { CashFlowAssumptions, Client } from '../../../domain/types';
-import type { AuxiliarContableRecord, BankAccountStatement, BankStatementLine, CobranzaPayment, CobranzaRecord, PagoProveedorRecord } from '../../../services/jdeTypes';
+import type { AuxiliarContableRecord, BankAccountStatement, BankStatementLine, CobranzaPayment, CobranzaPaymentApplication, CobranzaRecord, PagoProveedorRecord } from '../../../services/jdeTypes';
 import { calculateBaseProjection } from '../../shared-finance/calculation-engine/financialProjectionEngine';
 import type { FinancialMovement, PurchaseReceiptRecord, TaxObligation } from '../../shared-finance/types';
 import {
@@ -2030,5 +2030,83 @@ describe('cobertura del IVA causado (causedIvaGaps)', () => {
     const withoutReference = build([]);
     expect(withReference.totals.ivaCaused).toBe(withoutReference.totals.ivaCaused);
     expect(withReference.totals.ivaNet).toBe(withoutReference.totals.ivaNet);
+  });
+
+  // El lado "reportado" de la confesión debe ser lo que el motor REALMENTE suma.
+  // Si mide otra cosa, acusa a JDE de venir vacío cuando no lo está (o calla un
+  // hueco real) — y ese es justo el modo de falla que esta capa existe para
+  // cerrar. El motor reconoce por DOS caminos; ambos quedan pineados aquí.
+  describe('la cobertura mide lo mismo que el motor suma', () => {
+    const application = (partial: Partial<CobranzaPaymentApplication>): CobranzaPaymentApplication =>
+      ({
+        noFactura: 'F-1',
+        noFacturaNormalizada: 'F1',
+        fechaAplicacion: '2026-03-10',
+        importeCobrado: 0,
+        importeOriginalFactura: 0,
+        importeIvaFacturaOriginal: 0,
+        tasaIva: '',
+        ...partial,
+      }) as CobranzaPaymentApplication;
+
+    const paymentWith = (app: CobranzaPaymentApplication): CobranzaPayment =>
+      ({
+        cia: '00011',
+        idPago: '1',
+        fechaCobro: '2026-03-10',
+        importeRecibo: app.importeCobrado,
+        applications: [app],
+      }) as unknown as CobranzaPayment;
+
+    const reportedFor = (app: CobranzaPaymentApplication): { engine: number; coverage: number } => {
+      const view = build([invoice('2026-03-12', 35_362_508)], [paymentWith(app)]);
+      const march = view.periods.find((period) => period.period === '2026-03');
+      return {
+        engine: view.totals.ivaCaused,
+        coverage: march?.causedCoverage?.reportedIva ?? 0,
+      };
+    };
+
+    it('camino 1 — la factura trae su IVA: prorrateo por la porción cobrada', () => {
+      const { engine, coverage } = reportedFor(application({
+        importeCobrado: 250_000,
+        importeOriginalFactura: 1_000_000,
+        importeIvaFacturaOriginal: 160_000,
+        tasaIva: '16',
+      }));
+      expect(engine).toBeCloseTo(40_000, 6);
+      expect(coverage).toBeCloseTo(engine, 6);
+    });
+
+    it('camino 2 — cobro gravable SIN IVA de factura: método por depósito', () => {
+      // Sin esto la cobertura reportaba 0 contra $1.6M reconocidos por el motor
+      // y marcaba implausible un periodo capturado al 100%.
+      const { engine, coverage } = reportedFor(application({
+        importeCobrado: 11_600_000,
+        tasaIva: '16',
+      }));
+      expect(engine).toBeCloseTo(1_600_000, 4);
+      expect(coverage).toBeCloseTo(engine, 4);
+    });
+
+    it('cobro exento: ninguno de los dos lo reconoce', () => {
+      const { engine, coverage } = reportedFor(application({
+        importeCobrado: 5_000_000,
+        tasaIva: 'EXENTO',
+      }));
+      expect(engine).toBe(0);
+      expect(coverage).toBe(0);
+    });
+
+    it('IVA de factura con tasa no resoluble: el motor lo manda a no clasificado, la cobertura tampoco lo cuenta', () => {
+      const { engine, coverage } = reportedFor(application({
+        importeCobrado: 1_000_000,
+        importeOriginalFactura: 1_000_000,
+        importeIvaFacturaOriginal: 333_333,
+        tasaIva: '',
+      }));
+      expect(engine).toBe(0);
+      expect(coverage).toBe(0);
+    });
   });
 });

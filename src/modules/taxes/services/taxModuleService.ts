@@ -5,7 +5,7 @@ import { projectClientMonth } from '../../../domain/collectionEngine';
 import type { Budget } from '../../../domain/budget';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
 import { classifyBankConcept } from '../../../domain/bankConceptClassifier';
-import type { AuxiliarContableRecord, BankAccountStatement, CobranzaPayment, CobranzaRecord } from '../../../services/jdeTypes';
+import type { AuxiliarContableRecord, BankAccountStatement, CobranzaPayment, CobranzaPaymentApplication, CobranzaRecord } from '../../../services/jdeTypes';
 import { buildIvaLedgerByPeriod, type IvaLedgerLine, type IvaLedgerPeriod } from '../../../domain/ivaLedger';
 import {
   assessCausedIvaCoverage,
@@ -714,6 +714,14 @@ export function buildTaxDashboardView(params: {
   const causedCoverageByPeriod = assessCausedIvaCoverage({
     payments: params.cobranzaPayments ?? [],
     invoices: params.cobranzaRecords ?? [],
+    // La regla de reconocimiento la manda el motor, con el MISMO resolvedor de
+    // tasa que usa `accumulateCobranzaPaymentIva`; si no, un periodo bien
+    // capturado saldría acusado de venir vacío.
+    recognizeIva: (app, payment) => recognizedCausedIvaAmount(
+      app,
+      payment.cia,
+      params.incomeIvaRateResolver ?? ((cia, nombre) => resolveIncomeIvaRate(cia, nombre)),
+    ),
     companyCode: params.companyCode,
     startDate,
     endDate,
@@ -1508,6 +1516,44 @@ function accumulateCobranzaPaymentIva({
     }
   }
   return periods;
+}
+
+/**
+ * Cuánto IVA causado reconoce `accumulateCobranzaPaymentIva` (arriba) de UNA
+ * aplicación de cobro. Espejo deliberado de sus ramas, para que la confesión de
+ * cobertura (`causedIvaCoverage`) mida contra lo que el motor realmente suma:
+ *
+ *   1. La factura trae su IVA → prorrateo por la porción cobrada. Pero si la
+ *      tasa no se puede resolver el motor lo manda a NO CLASIFICADO, no al
+ *      causado — contarlo aquí escondería un hueco real.
+ *   2. Cobro gravable SIN IVA de factura → método por depósito con la tasa de
+ *      la región. Omitirlo acusaba de "subreportado" a un periodo que el motor
+ *      había reconocido completo (medido: $1.6M reconocidos, 0 reportados).
+ *
+ * Vive pegado al acumulador a propósito. La equivalencia entre ambos está
+ * pineada por test (`taxModuleService.test.ts` → "la cobertura mide lo mismo
+ * que el motor suma"); si alguien cambia una rama y no la otra, truena.
+ */
+function recognizedCausedIvaAmount(
+  app: CobranzaPaymentApplication,
+  cia: string | undefined,
+  resolveIncomeRate: (cia?: string, nombre?: string) => 8 | 16,
+): number {
+  const amount = positiveNumber(app.importeCobrado);
+  if (amount <= 0) return 0;
+  const original = positiveNumber(app.importeOriginalFactura);
+  const originalIva = positiveNumber(app.importeIvaFacturaOriginal);
+  const taxAmount = original > 0 && originalIva > 0
+    ? originalIva * Math.min(1, amount / original)
+    : 0;
+  const taxRate = taxRateFromIndicator(app.tasaIva, amount, taxAmount);
+  const resolved = taxRate === 16 || taxRate === 8 ? taxRate : undefined;
+
+  if (taxAmount > 0) return resolved ? taxAmount : 0;
+  if (isTaxableIncomeIndicator(app.tasaIva)) {
+    return grossToIvaBreakdown(amount, resolved ?? resolveIncomeRate(cia) ?? 16).taxAmount;
+  }
+  return 0;
 }
 
 function accumulateHistoricIvaPaidFromBankStatements({

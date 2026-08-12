@@ -22,6 +22,20 @@
  */
 import type { CobranzaPayment, CobranzaRecord } from '../../../services/jdeTypes';
 
+/**
+ * Cuánto IVA causado reconoce el MOTOR de una aplicación de cobro.
+ *
+ * Se inyecta a propósito y NO tiene default: este módulo mide cobertura, no
+ * decide qué se reconoce. Si tuviera su propia regla, un periodo perfectamente
+ * capturado podría salir marcado (o uno vacío pasar) por diferir del motor —
+ * que es exactamente el modo de falla que esta capa existe para impedir.
+ * `taxModuleService` es el dueño de la regla y la pasa desde ahí.
+ */
+export type CausedIvaRecognizer = (
+  app: CobranzaPayment['applications'][number],
+  payment: CobranzaPayment,
+) => number;
+
 /** Umbral por debajo del cual la cobertura de un periodo CERRADO es implausible. */
 export const DEFAULT_MIN_COVERAGE_RATIO = 0.6;
 
@@ -76,13 +90,17 @@ function inRange(date: string, startDate?: string, endDate?: string): boolean {
  * Compara, por periodo, el IVA causado que se puede reconocer desde las
  * aplicaciones contra el IVA de las facturas efectivamente cobradas.
  *
- * El lado REPORTADO replica el prorrateo de `accumulateCobranzaPaymentIva`
- * (IVA de la factura × la porción cobrada) para que la comparación sea contra
- * lo que el motor realmente suma, no contra una aproximación.
+ * El lado REPORTADO lo decide el motor vía `recognizeIva`, para que la
+ * comparación sea contra lo que realmente se suma y no contra una
+ * aproximación. Ojo: el motor reconoce por DOS caminos (IVA de la factura
+ * prorrateado por la porción cobrada, y el método por depósito cuando el cobro
+ * es gravable pero no trae desglose), y descarta el primero cuando no puede
+ * resolver la tasa. Replicar sólo uno sesga el veredicto en ambas direcciones.
  */
 export function assessCausedIvaCoverage({
   payments,
   invoices,
+  recognizeIva,
   companyCode,
   startDate,
   endDate,
@@ -92,6 +110,8 @@ export function assessCausedIvaCoverage({
 }: {
   payments: readonly CobranzaPayment[];
   invoices: readonly CobranzaRecord[];
+  /** Regla del motor. Sin default a propósito — ver `CausedIvaRecognizer`. */
+  recognizeIva: CausedIvaRecognizer;
   companyCode?: string;
   startDate?: string;
   endDate?: string;
@@ -112,14 +132,8 @@ export function assessCausedIvaCoverage({
       if (!date || !inRange(date, startDate, endDate)) continue;
       const period = isoPeriod(date);
       if (!period) continue;
-      const amount = positive(app.importeCobrado);
-      if (amount <= 0) continue;
-      const original = positive(app.importeOriginalFactura);
-      const originalIva = positive(app.importeIvaFacturaOriginal);
-      const taxAmount = original > 0 && originalIva > 0
-        ? originalIva * Math.min(1, amount / original)
-        : 0;
-      reported.set(period, (reported.get(period) ?? 0) + taxAmount);
+      if (positive(app.importeCobrado) <= 0) continue;
+      reported.set(period, (reported.get(period) ?? 0) + positive(recognizeIva(app, payment)));
       applications.set(period, (applications.get(period) ?? 0) + 1);
     }
   }

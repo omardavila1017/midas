@@ -36,11 +36,26 @@ function invoice(partial: { cia?: string; fechaCobro: string; iva: number }): Co
 
 const CURRENT = '2026-08';
 
+/**
+ * Regla de reconocimiento para estas pruebas: sólo el prorrateo por la porción
+ * cobrada. Se inyecta explícita porque el módulo NO tiene default — la regla
+ * real vive en `taxModuleService` y su equivalencia con el motor se prueba allá
+ * ("la cobertura mide lo mismo que el motor suma"). Aquí lo que se prueba es la
+ * comparación (umbrales, periodo en curso, filtros), no el reconocimiento.
+ */
+const prorate = (app: CobranzaPayment['applications'][number]): number => {
+  const cobrado = app.importeCobrado;
+  const original = app.importeOriginalFactura;
+  const iva = app.importeIvaFacturaOriginal;
+  return original > 0 && iva > 0 ? iva * Math.min(1, cobrado / original) : 0;
+};
+
 describe('assessCausedIvaCoverage', () => {
   it('marca implausible el periodo cerrado cuya tabla de aplicaciones viene vacía', () => {
     // Marzo 2026 medido en la BD: la tabla de aplicaciones trae una fracción
     // mínima del cobro real, así que el causado sale ~98% bajo.
     const coverage = assessCausedIvaCoverage({
+      recognizeIva: prorate,
       payments: [payment({ fechaCobro: '2026-03-10', apps: [{ cobrado: 1_000_000, original: 1_000_000, iva: 616_766 }] })],
       invoices: [invoice({ fechaCobro: '2026-03-12', iva: 35_362_508 })],
       currentPeriod: CURRENT,
@@ -53,6 +68,7 @@ describe('assessCausedIvaCoverage', () => {
 
   it('no marca un periodo con cobertura completa', () => {
     const coverage = assessCausedIvaCoverage({
+      recognizeIva: prorate,
       payments: [payment({ fechaCobro: '2026-07-10', apps: [{ cobrado: 1_000_000, original: 1_000_000, iva: 25_000_000 }] })],
       invoices: [invoice({ fechaCobro: '2026-07-12', iva: 25_894_778 })],
       currentPeriod: CURRENT,
@@ -62,6 +78,7 @@ describe('assessCausedIvaCoverage', () => {
 
   it('nunca marca el periodo en curso: sus dos lados están parciales a propósito', () => {
     const coverage = assessCausedIvaCoverage({
+      recognizeIva: prorate,
       payments: [],
       invoices: [invoice({ fechaCobro: '2026-08-03', iva: 8_116_019 })],
       currentPeriod: CURRENT,
@@ -73,6 +90,7 @@ describe('assessCausedIvaCoverage', () => {
 
   it('no marca periodos por debajo del piso de materialidad', () => {
     const coverage = assessCausedIvaCoverage({
+      recognizeIva: prorate,
       payments: [],
       invoices: [invoice({ fechaCobro: '2026-02-05', iva: DEFAULT_MIN_EXPECTED_IVA - 1 })],
       currentPeriod: CURRENT,
@@ -82,6 +100,7 @@ describe('assessCausedIvaCoverage', () => {
 
   it('replica el prorrateo del motor: IVA de la factura por la porción cobrada', () => {
     const coverage = assessCausedIvaCoverage({
+      recognizeIva: prorate,
       payments: [payment({ fechaCobro: '2026-04-10', apps: [{ cobrado: 250, original: 1_000, iva: 160 }] })],
       invoices: [],
       currentPeriod: CURRENT,
@@ -92,6 +111,7 @@ describe('assessCausedIvaCoverage', () => {
 
   it('respeta el filtro por compañía y el rango de fechas', () => {
     const coverage = assessCausedIvaCoverage({
+      recognizeIva: prorate,
       payments: [
         payment({ cia: '00011', fechaCobro: '2026-03-10', apps: [{ cobrado: 100, original: 100, iva: 16 }] }),
         payment({ cia: '00038', fechaCobro: '2026-03-10', apps: [{ cobrado: 900, original: 900, iva: 144 }] }),
@@ -113,6 +133,7 @@ describe('assessCausedIvaCoverage', () => {
 
   it('sin referencia independiente no inventa un veredicto', () => {
     const coverage = assessCausedIvaCoverage({
+      recognizeIva: prorate,
       payments: [payment({ fechaCobro: '2026-03-10', apps: [{ cobrado: 100, original: 100, iva: 16 }] })],
       invoices: [],
       currentPeriod: CURRENT,
@@ -126,6 +147,7 @@ describe('assessCausedIvaCoverage', () => {
 describe('implausibleCausedIvaPeriods', () => {
   it('lista sólo los marcados, en orden cronológico', () => {
     const coverage = assessCausedIvaCoverage({
+      recognizeIva: prorate,
       payments: [payment({ fechaCobro: '2026-07-10', apps: [{ cobrado: 1_000, original: 1_000, iva: 25_000_000 }] })],
       invoices: [
         invoice({ fechaCobro: '2026-05-12', iva: 39_568_602 }),
