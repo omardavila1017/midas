@@ -2264,8 +2264,12 @@ function CobranzaRealView({
       cobranzaRecords: records,
       reconciliation,
       rolProjection,
+      // Corrige a la baja el saldo por cobrar de las facturas que /cobranza
+      // aún no marca como pagadas pero cuyo recibo ya está aplicado. Nunca
+      // suma ingreso — ese dinero ya se pinta del lado banco.
+      cobranzaPayments: payments,
     }),
-    [clients, assumptions, records, reconciliation, rolProjection],
+    [clients, assumptions, records, reconciliation, rolProjection, payments],
   );
   const calendarEventByFactura = useMemo(() => {
     const priority: Record<CollectionCalendarEventSource, number> = {

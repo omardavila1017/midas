@@ -332,6 +332,28 @@ Junta 9-jul (Blanca/Vero): clientes con **esquema de compensación** cuyo pago N
 - **Panel** (`CobranzaBankCuadrePanel`, `CollectionProjection.tsx`): tarjeta "Compensación (esperado)" + segmento en la barra apilada + columna por cliente + nota explicativa con esquema y cuenta asociada — todo **sólo aparece** cuando hay recibos en el bucket — + columnas `EsquemaCompensacion`/`CuentaCompensacion` en el CSV. El "descuadre" del header ya la excluye (suma sin-banco + descuadre-importe).
 - Doc de negocio + cómo agregar un cliente: `docs/COMPENSACIONES-COBRANZA.md`. Tests: `compensationClientsCatalog.test.ts`, `cobranzaBankCuadre.test.ts` (TLJ, APTIV/CMI, cliente normal que NO entra).
 
+## Calendario de Cobranza: parciales, fechas imposibles y el saldo que ya se cobró (2026-08-17)
+
+Auditoría del módulo de Cobranza contra la BD real (carga 17-ago 02:00, fresca). Todo vive en `collectionCalendarEngine.ts`, que tiene **un solo consumidor** (`CollectionProjection.tsx`) — por eso ningún cambio de aquí toca Planeación/Proyección/Venta/Impuestos. Tres correcciones, cada una con test **verificado en rojo al revertir sólo la fuente**:
+
+- **A — La factura PARCIALMENTE cobrada perdía el dinero ya cobrado.** La rama de `pendiente > 0` emitía SÓLO la proyección del saldo; el importe abonado no salía como ingreso en ningún día. Medido: **69 facturas, $40.36M** (la mayor, `ZS-74684` cía 00038 dic-2025: $46.1M de factura con $29.0M ya cobrados). Ahora emite los dos hechos y suman exacto el bruto. **El cruce bancario NO es este caso:** `reconcileRealCollections` hace subset-sum contra `importeBrutoPesos` y no modela pagos parciales, así que un `cobrada-banco` significa factura completa — emitir además el saldo la duplicaría. Ese `continue` es correcto y está pineado con test.
+- **B — `Fecha_Pago` imposible colocaba ingreso REAL a siglos de distancia.** JDE deja pasar `1958-03-05`, `2125-12-02`, `2508-08-27` (3 facturas, $27k); no son el centinela 1899/0001 que el mapper corta. `isPlausibleCalendarDate` (ventana 2000-2100) re-fecha al vencimiento y **confiesa el motivo** en `dateReason`; el `paymentLagDays` se omite (un lag contra una fecha imposible no significa nada). **NO se tocó `mapCobranza`** a propósito — ahí `fechaCobro` tiene consumidores en otros módulos.
+- **C — `Importe_Pendiente` de `jde.Cobranza_Citi` está inflado: JDE no aplica los recibos.** `input.cobranzaPayments` (recibos de `/cobranzaindicadores`, ya disponibles en la vista) corrige el saldo **SÓLO a la baja, nunca sumando ingreso**. Ver la sección de abajo para el porqué.
+
+### El overlay de recibos: sólo a la baja (regla dura)
+
+Medido 2026-08-17, jul–ago 2026: de **2,811 facturas con cobro aplicado** en `jde.Cobranza_Indicadores`, **1,151 (41%) no traen `Fecha_Pago` en `jde.Cobranza_Citi`** — $221.46M de cobro que `/cobranza` no reconoce — y **1,111 de ellas siguen con `Importe_Pendiente > 0`: $227.41M** que el calendario proyectaba como cobrable estando ya cobrado. **Es defecto del ORIGEN**, no del motor; Midas reportaba fielmente una fuente desincronizada consigo misma.
+
+**Por qué el overlay NO suma ingreso:** el **90% del hueco es cía 00011 (grupo Citi): $199.2M**, cuyos depósitos entran a la concentradora y no cruzan a factura individual (mismo motivo por el que existe el prorrateo). Ese dinero **ya está pintado en el día como `BANK_UNMATCHED` ("S/F")**. Emitir además un ingreso desde el recibo lo duplicaría. **No conviertas este overlay en fuente de ingreso** sin resolver antes la atribución del depósito de la concentradora.
+
+**Por qué se compara contra el BRUTO y no se resta del pendiente:** `pendienteEfectivo = bruto − max(cobradoSegúnCobranza, cobradoSegúnRecibos)`. Restar el recibo del pendiente lo descontaría DOS veces cuando `/cobranza` ya aplicó ese mismo recibo. La forma con `max` es idempotente y **degrada solo**: sin recibos el resultado es byte-idéntico, así que ene–jun 2026 (cobertura de Indicadores 0.2%–12%) no se mueve.
+
+El folio se cruza con `normFactura` **canónico** (`rolCobranzaMatch`, módulo hoja — sin ciclo): Indicadores manda `"RI - 310198"` y `/cobranza` manda `"RI-310198"`. **No dupliques un normalizador local aquí.** El ajuste se confiesa en `statusLabel` + `dateReason` del evento.
+
+**Pendiente (no es de Midas):** que la carga de `jde.Cobranza_Citi` aplique los recibos. Mientras no lo haga, esto parcha el síntoma. Sigue vivo también el hueco de `Cobranza_Indicadores` casi vacía ene–jun, y `jde.Cobranza_Citi` **no tiene columna `Tipo_Servicio`** (sí la tiene `Cobranza_Indicadores`), así que el filtro "Segmento" del módulo nunca aparece — es petición de API, no código.
+
+Tests: `collectionCalendarEngine.test.ts` (26). Baseline tras la corrida: **2910 passed / 12 skipped / 222 files** · typecheck limpio · build OK.
+
 ## Stack
 
 - React 18 + Vite 5 + TypeScript 5.5 + Tailwind 3.4 (with `darkMode: 'class'`)

@@ -5,7 +5,12 @@ import { parseCc13PaymentDay } from './parsePaymentDay';
 import { isNonOperatingDay } from './bankHolidays';
 import { isInternalCounterparty } from './netCashFlowEngine';
 import { normalizeClientText } from './clientGrouping';
-import type { CobranzaRecord } from '../services/jdeTypes';
+import type { CobranzaPayment, CobranzaRecord } from '../services/jdeTypes';
+// Normalizador canónico de folio — `No_Factura` de /cobranzaindicadores llega
+// como "RI - 310198" y `Factura` de /cobranza como "RI-310198". NO dupliques
+// un normalizador local aquí (ver rolCobranzaMatch); `rolCobranzaMatch` es
+// módulo hoja (solo import de tipos), así que no hay ciclo.
+import { normFactura } from './rolCobranzaMatch';
 import { todayISO } from '../formatters';
 import type {
   AbonoEnrichment,
@@ -110,6 +115,26 @@ export interface BuildCollectionCalendarInput {
    * eliminó 2026-06-10: estimaba montos sin viaje ejecutado detrás).
    */
   rolProjection?: RolProjectionResult;
+  /**
+   * Recibos aplicados de `/cobranzaindicadores`. Se usan SOLO para corregir a
+   * la baja el saldo por cobrar, NUNCA para sumar ingreso.
+   *
+   * Por qué: `jde.Cobranza_Citi` no está aplicando los recibos que
+   * `jde.Cobranza_Indicadores` sí registra — medido 2026-08-17, jul–ago 2026:
+   * 1,151 de 2,811 facturas cobradas (41%) no traen `Fecha_Pago`, y 1,111 de
+   * ellas siguen con `Importe_Pendiente > 0` por **$227.41M** que el
+   * calendario proyectaba como cobrable cuando ya se había cobrado.
+   *
+   * Y por qué SOLO a la baja: el 90% de ese hueco es cía 00011 (grupo Citi),
+   * cuyos depósitos entran a la concentradora y no cruzan a factura, así que
+   * ese dinero YA está pintado en el día como `BANK_UNMATCHED` ("S/F").
+   * Emitir además un ingreso desde el recibo lo duplicaría.
+   *
+   * Degrada solo: donde no hay recibos el resultado es byte-idéntico (la
+   * cobertura de Indicadores es de 0.2%–12% ene–jun 2026, así que esos meses
+   * no se mueven).
+   */
+  cobranzaPayments?: CobranzaPayment[];
 }
 
 export interface BuildCollectionCalendarResult {
@@ -200,6 +225,8 @@ export function buildCollectionCalendar(input: BuildCollectionCalendarInput): Bu
     clientMatchByFactura.set(facturaKey(record.cia, record.noFactura), findClientForCobranza(record, clientLookup));
   }
 
+  const appliedByFactura = buildAppliedAmountByFactura(input.cobranzaPayments);
+
   const consumedByBank = new Set<string>();
   for (const abono of reconciliation.abonoEnrichments) {
     events.push(eventFromAbono(abono, cobranzaByFactura, clientMatchByFactura, assumptions));
@@ -216,23 +243,55 @@ export function buildCollectionCalendar(input: BuildCollectionCalendarInput): Bu
     const key = facturaKey(record.cia, record.noFactura);
     const clientMatch = clientMatchByFactura.get(key) ?? null;
 
+    // El ABONO cruzado cubre el BRUTO de la factura (`reconcileRealCollections`
+    // hace subset-sum contra `importeBrutoPesos` y NO modela pagos parciales:
+    // lo que no cuadra queda sin cruzar). Así que un cruce = factura completa
+    // y su evento vive del lado banco — emitir además el saldo la duplicaría.
     if (consumedByBank.has(key)) continue;
-
     const match = matchByFactura.get(key);
     if (match?.status === 'cobrada-banco') continue;
 
-    if (record.importePendientePesos <= 0 && record.fechaCobro) {
-      events.push(eventFromJdePaid(record, clientMatch, assumptions));
+    const pendiente = record.importePendientePesos;
+
+    if (pendiente <= 0) {
+      // Liquidada. Sin `fechaCobro` JDE no dice CUÁNDO entró, así que no hay
+      // día donde colocarla; no se inventa una fecha (dato incompleto del
+      // origen — medido: 267 facturas por $1,493.52 en la ventana cargada).
+      if (record.fechaCobro) {
+        events.push(eventFromJdePaid(record, clientMatch, assumptions, record.importeBrutoPesos));
+      }
       continue;
     }
 
-    if (record.importePendientePesos > 0 && clientMatch) {
-      events.push(eventFromJdeOpenProjected(record, clientMatch, assumptions));
-      continue;
+    // Factura PARCIALMENTE cobrada (saldo vivo pero con abonos ya aplicados,
+    // que el cruce bancario no modela): son DOS hechos y el calendario debe
+    // mostrar los dos. Antes esta rama emitía SÓLO la proyección del saldo y
+    // el importe ya cobrado desaparecía del ingreso real del día.
+    //
+    // El ingreso se emite con lo que reconoce /cobranza (NO con el recibo):
+    // el cobro que sólo conoce Indicadores ya está pintado del lado banco.
+    const cobradoParcial = record.importeBrutoPesos - pendiente;
+    if (cobradoParcial > 0 && record.fechaCobro) {
+      events.push(eventFromJdePaid(record, clientMatch, assumptions, cobradoParcial));
     }
 
-    if (record.importePendientePesos > 0) {
-      events.push(eventFromJdeOpenProjected(record, null, assumptions));
+    // Saldo por cobrar: se toma la vista MÁS AVANZADA de las dos fuentes.
+    // Restar el recibo del pendiente sería incorrecto cuando /cobranza YA
+    // aplicó ese mismo recibo (lo descontaría dos veces); comparar contra el
+    // bruto es idempotente y hace que la fuente sin datos nunca degrade.
+    const cobradoIndicadores = appliedByFactura.get(normalizedFacturaKey(record.cia, record.noFactura)) ?? 0;
+    const pendienteEfectivo = Math.max(
+      0,
+      record.importeBrutoPesos - Math.max(cobradoParcial, cobradoIndicadores),
+    );
+    if (pendienteEfectivo > 0) {
+      events.push(eventFromJdeOpenProjected(
+        record,
+        clientMatch,
+        assumptions,
+        pendienteEfectivo,
+        cobradoIndicadores > cobradoParcial,
+      ));
     }
   }
 
@@ -274,6 +333,32 @@ export function buildCollectionCalendar(input: BuildCollectionCalendarInput): Bu
 
 function facturaKey(cia: string, noFactura: string): string {
   return `${cia}::${noFactura}`;
+}
+
+/** Llave cia::folio con el folio normalizado — los dos endpoints difieren de formato. */
+function normalizedFacturaKey(cia: string, noFactura: string): string {
+  return `${cia}::${normFactura(noFactura)}`;
+}
+
+/**
+ * Importe aplicado por factura según los recibos de /cobranzaindicadores.
+ * Un mismo folio puede recibir N aplicaciones (de recibos distintos), así que
+ * se ACUMULA. Las aplicaciones sin folio reconocible se descartan: sin folio
+ * no hay factura a la cual descontarle saldo.
+ */
+function buildAppliedAmountByFactura(payments: CobranzaPayment[] | undefined): Map<string, number> {
+  const applied = new Map<string, number>();
+  for (const payment of payments ?? []) {
+    for (const application of payment.applications ?? []) {
+      const folio = normFactura(application.noFactura);
+      if (!folio) continue;
+      const amount = application.importeCobrado;
+      if (!Number.isFinite(amount) || amount <= 0) continue;
+      const key = `${application.cia || payment.cia}::${folio}`;
+      applied.set(key, (applied.get(key) ?? 0) + amount);
+    }
+  }
+  return applied;
 }
 
 function eventFromAbono(
@@ -353,30 +438,65 @@ function eventFromAbono(
   };
 }
 
+/**
+ * JDE deja pasar fechas de pago imposibles — medidas en la BD real:
+ * `1958-03-05`, `2125-12-02`, `2508-08-27`. No son el centinela 1899/0001
+ * que el mapper ya corta, así que llegan intactas y colocarían un ingreso
+ * REAL a siglos de distancia (un mes del calendario en el año 2508).
+ * Se acota la ventana SOLO para colocar el evento y se confiesa el fallback
+ * en `dateReason`, en vez de re-fechar en silencio.
+ */
+const CALENDAR_MIN_YEAR = 2000;
+const CALENDAR_MAX_YEAR = 2100;
+
+/** Importe corto para las notas de `dateReason` (no es UI: no usa el formatter es-MX). */
+function fmtAmount(value: number): string {
+  return `$${value.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function isPlausibleCalendarDate(iso: string): boolean {
+  const year = Number(iso.slice(0, 4));
+  return Number.isFinite(year) && year >= CALENDAR_MIN_YEAR && year <= CALENDAR_MAX_YEAR;
+}
+
 function eventFromJdePaid(
   record: CobranzaRecord,
   clientMatch: CollectionCalendarClientMatch | null,
   assumptions: CashFlowAssumptions,
+  /** Importe realmente cobrado: el bruto si liquidó, el abonado si es parcial. */
+  amount: number,
 ): CollectionCalendarEvent {
+  const cobroPlausible = isPlausibleCalendarDate(record.fechaCobro);
+  const date = cobroPlausible
+    ? record.fechaCobro
+    : (record.fechaVence || record.fechaFactura || todayISO());
+
   let expectedPayDate: string | undefined;
   let paymentLagDays: number | undefined;
   if (clientMatch) {
     expectedPayDate = resolveCobranzaRuleDate(record, clientMatch.client, assumptions).calendarDate;
-    paymentLagDays = isoDaysBetween(expectedPayDate, record.fechaCobro);
+    // Un lag contra una fecha imposible no significa nada; se omite.
+    if (cobroPlausible) paymentLagDays = isoDaysBetween(expectedPayDate, record.fechaCobro);
   }
+
+  const parcial = record.importePendientePesos > 0;
   return {
     id: `jde:${record.cia}:${record.noFactura}`,
     source: 'JDE_PAID_UNMATCHED',
-    date: record.fechaCobro,
-    amount: record.importeBrutoPesos,
+    date,
+    amount,
     cia: record.cia,
     clientId: clientMatch?.client.id,
     clientName: record.nombreCliente || 'Cliente sin nombre',
     noCliente: record.noCliente,
     noFactura: record.noFactura,
-    statusLabel: 'Cobrado en JDE sin banco cruzado',
-    dateReason: 'Fecha_Pago del API de cobranza.',
-    ruleApplied: 'Fecha confirmada por JDE',
+    statusLabel: parcial
+      ? 'Cobro parcial en JDE sin banco cruzado'
+      : 'Cobrado en JDE sin banco cruzado',
+    dateReason: cobroPlausible
+      ? 'Fecha_Pago del API de cobranza.'
+      : `Fecha_Pago de JDE fuera de rango (${record.fechaCobro}); se usa ${record.fechaVence ? 'el vencimiento' : 'la fecha de factura'}.`,
+    ruleApplied: cobroPlausible ? 'Fecha confirmada por JDE' : 'Fecha_Pago de JDE no confiable',
     facturas: [facturaFromRecord(record)],
     expectedPayDate,
     paymentLagDays,
@@ -387,27 +507,36 @@ function eventFromJdeOpenProjected(
   record: CobranzaRecord,
   clientMatch: CollectionCalendarClientMatch | null,
   assumptions: CashFlowAssumptions,
+  /** Saldo REALMENTE por cobrar tras aplicar los recibos de Indicadores. */
+  amount: number,
+  /** El recibo reconoce más cobro que /cobranza: el saldo se ajustó a la baja. */
+  ajustadoPorRecibo: boolean,
 ): CollectionCalendarEvent {
   const resolved = clientMatch
     ? resolveCobranzaRuleDate(record, clientMatch.client, assumptions)
     : resolveCobranzaApiPaymentDate(record);
   const fallbackDate = record.fechaVence || record.fechaFactura || todayISO();
+  const ajusteNota = ajustadoPorRecibo
+    ? ` Saldo ajustado: /cobranzaindicadores reporta cobro que /cobranza aún no aplica (${fmtAmount(record.importePendientePesos)} → ${fmtAmount(amount)}).`
+    : '';
   return {
     id: `jde-open:${record.cia}:${record.noFactura}`,
     source: 'JDE_OPEN_PROJECTED',
     date: resolved?.calendarDate ?? fallbackDate,
-    amount: record.importePendientePesos,
+    amount,
     cia: record.cia,
     clientId: clientMatch?.client.id,
     clientName: record.nombreCliente || clientMatch?.client.name || 'Cliente sin regla',
     noCliente: record.noCliente,
     noFactura: record.noFactura,
-    statusLabel: 'Factura JDE emitida por cobrar',
-    dateReason: resolved?.reason ?? (
+    statusLabel: ajustadoPorRecibo
+      ? 'Factura JDE por cobrar (saldo ajustado por recibo)'
+      : 'Factura JDE emitida por cobrar',
+    dateReason: (resolved?.reason ?? (
       record.fechaVence
         ? 'Sin cliente/regla confiable; se usa fecha de vencimiento JDE.'
         : 'Sin cliente/regla confiable ni vencimiento; se usa fecha de factura JDE.'
-    ),
+    )) + ajusteNota,
     ruleApplied: clientMatch ? clientRuleLabel(clientMatch.client) : 'Sin regla confiable',
     confidence: clientMatch?.confidence,
     facturas: [facturaFromRecord(record)],

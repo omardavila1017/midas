@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { BankAccountStatement, BankStatementLine, CobranzaRecord, RolRecord } from '../services/jdeTypes';
+import type { BankAccountStatement, BankStatementLine, CobranzaPayment, CobranzaRecord, RolRecord } from '../services/jdeTypes';
 import type { CashFlowAssumptions, Client } from './types';
 import { reconcileRealCollections } from './realReconciliationEngine';
 import { buildRolProjectedInflows } from './rolProjectionEngine';
@@ -163,6 +163,238 @@ describe('buildCollectionCalendar', () => {
     expect(event?.date).toBe('2026-02-03');
     expect(event?.amount).toBe(2500);
     expect(event?.statusLabel).toContain('JDE');
+  });
+
+  // Cifras del caso REAL medido en `jde.Cobranza_Citi`: la factura ZS-74684
+  // (cía 00038, dic-2025) trae Importe_Factura 46,136,786.43 con
+  // Importe_Pendiente 17,122,092.43 — o sea 29,014,694.00 YA cobrados. Antes
+  // el calendario emitía SÓLO la proyección del saldo y esos $29M no
+  // aparecían como ingreso en ningún día.
+  describe('factura parcialmente cobrada', () => {
+    const PARCIAL = {
+      cia: '00038',
+      noFactura: 'ZS-74684',
+      noCliente: '9001',
+      nombreCliente: 'CLIENTE ALFA',
+      importeBrutoPesos: 46136786.43,
+      importePendientePesos: 17122092.43,
+      fechaCobro: '2025-12-30',
+      fechaFactura: '2025-12-29',
+    } as const;
+
+    it('emite el cobro parcial como ingreso Y el saldo como proyección', () => {
+      const factura = makeFactura({ ...PARCIAL });
+      const calendar = buildCollectionCalendar({
+        clients: [makeClient()],
+        assumptions: ASSUMPTIONS,
+        cobranzaRecords: [factura],
+        reconciliation: reconcileRealCollections([factura], []),
+      });
+
+      const cobrado = calendar.events.find(e => e.source === 'JDE_PAID_UNMATCHED');
+      expect(cobrado?.date).toBe('2025-12-30');
+      expect(cobrado?.amount).toBeCloseTo(29014694, 2);
+      expect(cobrado?.statusLabel).toContain('parcial');
+
+      const saldo = calendar.events.find(e => e.source === 'JDE_OPEN_PROJECTED');
+      expect(saldo?.amount).toBeCloseTo(17122092.43, 2);
+
+      // Ni un peso de más: los dos eventos suman exactamente el bruto.
+      const total = calendar.events.reduce((s, e) => s + e.amount, 0);
+      expect(total).toBeCloseTo(46136786.43, 2);
+    });
+
+    // El cruce bancario es contra el BRUTO (`reconcileRealCollections` no
+    // modela pagos parciales), así que un ABONO cruzado significa factura
+    // completa: el calendario NO debe emitir además el saldo, o duplicaría.
+    it('con la factura cruzada en banco no emite ningún evento JDE encima', () => {
+      const factura = makeFactura({
+        cia: '00038',
+        noFactura: 'ZS-CRUZADA',
+        noCliente: '9001',
+        nombreCliente: 'CLIENTE ALFA',
+        importeBrutoPesos: 46136786.43,
+      });
+      const abono = makeAbono({
+        cia: '00038',
+        cuenta: '123',
+        fechaOperacion: '2025-12-30',
+        importe: 46136786.43,
+        referencia: 'DEP-TOTAL',
+      });
+      const calendar = buildCollectionCalendar({
+        clients: [makeClient()],
+        assumptions: ASSUMPTIONS,
+        cobranzaRecords: [factura],
+        reconciliation: reconcileRealCollections(
+          [factura],
+          [makeAccount({ cia: '00038', cuenta: '123', movimientos: [abono] })],
+        ),
+      });
+
+      expect(calendar.events.some(e => e.source === 'BANK_MATCHED')).toBe(true);
+      expect(calendar.events.some(e => e.source === 'JDE_PAID_UNMATCHED')).toBe(false);
+      expect(calendar.events.some(e => e.source === 'JDE_OPEN_PROJECTED')).toBe(false);
+      const total = calendar.events.reduce((s, e) => s + e.amount, 0);
+      expect(total).toBeCloseTo(46136786.43, 2);
+    });
+  });
+
+  // `jde.Cobranza_Citi` no aplica los recibos que `jde.Cobranza_Indicadores`
+  // sí registra. Medido 2026-08-17 (jul–ago 2026): 1,151 de 2,811 facturas
+  // cobradas no traen `Fecha_Pago`, y 1,111 siguen con `Importe_Pendiente > 0`
+  // por $227.41M que el calendario proyectaba como cobrable ya estando cobrado.
+  describe('saldo por cobrar corregido con los recibos de Indicadores', () => {
+    function makePayment(
+      noFactura: string,
+      importeCobrado: number,
+      overrides: Partial<CobranzaPayment> = {},
+    ): CobranzaPayment {
+      return {
+        idPago: '1',
+        cia: '00011',
+        fechaCobro: '2026-07-15',
+        fechaContable: '2026-07-15',
+        cuentaBancaria: '123',
+        banco: 'BANAMEX',
+        noRecibo: '681244',
+        importeRecibo: importeCobrado,
+        pendienteAplicar: 0,
+        noCliente: '9001',
+        cliente: 'CLIENTE ALFA',
+        noBatch: '1',
+        tipoCambio: 1,
+        applications: [{
+          idPago: '1',
+          cia: '00011',
+          fechaAplicacion: '2026-07-15',
+          noCliente: '9001',
+          cliente: 'CLIENTE ALFA',
+          tipoDocto: 'RI',
+          noFactura,
+          noFacturaNormalizada: noFactura,
+          fechaFactura: '2026-06-01',
+          fechaVencimiento: '2026-07-01',
+          diasAntiguedadFafv: 30,
+          importeCobrado,
+          importeOriginalFactura: importeCobrado,
+          tasaIva: '16',
+          importeIvaFacturaOriginal: 0,
+        }],
+        ...overrides,
+      };
+    }
+
+    const ABIERTA = {
+      cia: '00011',
+      noFactura: 'RI-310198',
+      noCliente: '9001',
+      nombreCliente: 'CLIENTE ALFA',
+      importeBrutoPesos: 100000,
+      fechaFactura: '2026-06-01',
+      fechaVence: '2026-07-01',
+    } as const;
+
+    function build(payments?: CobranzaPayment[]) {
+      const factura = makeFactura({ ...ABIERTA });
+      return buildCollectionCalendar({
+        clients: [makeClient()],
+        assumptions: ASSUMPTIONS,
+        cobranzaRecords: [factura],
+        reconciliation: reconcileRealCollections([factura], []),
+        cobranzaPayments: payments,
+      });
+    }
+
+    it('quita de la proyección la factura que el recibo ya liquidó', () => {
+      const calendar = build([makePayment('RI - 310198', 100000)]);
+      expect(calendar.events.some(e => e.source === 'JDE_OPEN_PROJECTED')).toBe(false);
+      // …y NO la convierte en ingreso: ese dinero ya está del lado banco.
+      expect(calendar.events.some(e => e.source === 'JDE_PAID_UNMATCHED')).toBe(false);
+    });
+
+    it('cruza el folio pese al drift de formato entre los dos endpoints', () => {
+      // Indicadores manda "RI - 310198"; /cobranza manda "RI-310198".
+      expect(build([makePayment('RI - 310198', 40000)]).events
+        .find(e => e.source === 'JDE_OPEN_PROJECTED')?.amount).toBe(60000);
+    });
+
+    it('acumula varias aplicaciones sobre el mismo folio', () => {
+      const calendar = build([
+        makePayment('RI - 310198', 30000),
+        makePayment('RI - 310198', 25000, { idPago: '2', noRecibo: '681245' }),
+      ]);
+      expect(calendar.events.find(e => e.source === 'JDE_OPEN_PROJECTED')?.amount).toBe(45000);
+    });
+
+    it('confiesa el ajuste en el detalle del día', () => {
+      const event = build([makePayment('RI - 310198', 40000)]).events
+        .find(e => e.source === 'JDE_OPEN_PROJECTED');
+      expect(event?.statusLabel).toContain('ajustado');
+      expect(event?.dateReason).toContain('/cobranzaindicadores');
+    });
+
+    it('sin recibos deja el saldo intacto', () => {
+      expect(build().events.find(e => e.source === 'JDE_OPEN_PROJECTED')?.amount).toBe(100000);
+      expect(build([]).events.find(e => e.source === 'JDE_OPEN_PROJECTED')?.amount).toBe(100000);
+    });
+
+    it('no descuenta dos veces el recibo que /cobranza YA aplicó', () => {
+      // /cobranza ya reconoce el cobro parcial (pendiente 30k de 100k) y el
+      // recibo reporta ESE MISMO cobro de 70k. Restar sobre el pendiente
+      // daría 0; comparar contra el bruto conserva los 30k reales.
+      const factura = makeFactura({ ...ABIERTA, importePendientePesos: 30000, fechaCobro: '2026-07-15' });
+      const calendar = buildCollectionCalendar({
+        clients: [makeClient()],
+        assumptions: ASSUMPTIONS,
+        cobranzaRecords: [factura],
+        reconciliation: reconcileRealCollections([factura], []),
+        cobranzaPayments: [makePayment('RI - 310198', 70000)],
+      });
+      expect(calendar.events.find(e => e.source === 'JDE_OPEN_PROJECTED')?.amount).toBe(30000);
+      // El ingreso sigue saliendo de /cobranza, no del recibo.
+      expect(calendar.events.find(e => e.source === 'JDE_PAID_UNMATCHED')?.amount).toBe(70000);
+      const total = calendar.events.reduce((s, e) => s + e.amount, 0);
+      expect(total).toBe(100000);
+    });
+
+    it('ignora aplicaciones sin folio o de importe no positivo', () => {
+      const calendar = build([
+        makePayment('', 50000),
+        makePayment('RI - 310198', 0),
+        makePayment('RI - 310198', -5000, { idPago: '3' }),
+      ]);
+      expect(calendar.events.find(e => e.source === 'JDE_OPEN_PROJECTED')?.amount).toBe(100000);
+    });
+  });
+
+  // Medido en la BD: RI-296064 trae Fecha_Pago '2508-08-27' y RI-43996
+  // '2125-12-02'. No son el centinela 1899 que el mapper corta.
+  it('re-fecha un cobro con Fecha_Pago imposible y lo confiesa', () => {
+    const factura = makeFactura({
+      cia: '00011',
+      noFactura: 'RI-296064',
+      noCliente: '9001',
+      nombreCliente: 'CLIENTE ALFA',
+      importeBrutoPesos: 10672,
+      importePendientePesos: 0,
+      fechaFactura: '2025-08-11',
+      fechaVence: '2025-08-09',
+      fechaCobro: '2508-08-27',
+    });
+    const calendar = buildCollectionCalendar({
+      clients: [makeClient()],
+      assumptions: ASSUMPTIONS,
+      cobranzaRecords: [factura],
+      reconciliation: reconcileRealCollections([factura], []),
+    });
+
+    const event = calendar.events.find(e => e.source === 'JDE_PAID_UNMATCHED');
+    expect(event?.date).toBe('2025-08-09');
+    expect(event?.amount).toBe(10672);
+    expect(event?.dateReason).toContain('2508-08-27');
+    // Un lag contra una fecha imposible no significa nada.
+    expect(event?.paymentLagDays).toBeUndefined();
   });
 
   it('calendariza una factura JDE pendiente con regla de cliente', () => {
