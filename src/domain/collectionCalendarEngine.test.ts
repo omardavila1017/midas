@@ -358,6 +358,51 @@ describe('buildCollectionCalendar', () => {
       expect(total).toBe(100000);
     });
 
+    it('reparte el recibo entre las líneas de una factura multi-línea', () => {
+      // `/cobranza` devuelve una factura en VARIAS líneas y el merge del repo
+      // NO las colapsa por folio a propósito (colapsarlas sub-cuenta Venta/CXC
+      // — ver `mergeCobranzaBackfillRange`). El recibo de Indicadores es del
+      // FOLIO COMPLETO, así que aplicarlo entero a cada línea borra saldo real.
+      const lineas = [
+        makeFactura({ ...ABIERTA, importeBrutoPesos: 100000 }),
+        makeFactura({ ...ABIERTA, importeBrutoPesos: 100000 }),
+      ];
+      const calendar = buildCollectionCalendar({
+        clients: [makeClient()],
+        assumptions: ASSUMPTIONS,
+        cobranzaRecords: lineas,
+        reconciliation: reconcileRealCollections(lineas, []),
+        cobranzaPayments: [makePayment('RI - 310198', 150000)],
+      });
+      const proyectado = calendar.events
+        .filter(e => e.source === 'JDE_OPEN_PROJECTED')
+        .reduce((s, e) => s + e.amount, 0);
+      // 200k facturados − 150k cobrados = 50k que siguen por cobrar.
+      expect(proyectado).toBe(50000);
+      expect(calendar.events.some(e => e.source === 'JDE_PAID_UNMATCHED')).toBe(false);
+    });
+
+    it('no descuenta de una línea más de lo que el recibo alcanza a cubrir', () => {
+      // El excedente del recibo se consume línea por línea: la primera absorbe
+      // lo que puede y la segunda conserva su saldo íntegro.
+      const lineas = [
+        makeFactura({ ...ABIERTA, importeBrutoPesos: 40000 }),
+        makeFactura({ ...ABIERTA, importeBrutoPesos: 100000 }),
+      ];
+      const calendar = buildCollectionCalendar({
+        clients: [makeClient()],
+        assumptions: ASSUMPTIONS,
+        cobranzaRecords: lineas,
+        reconciliation: reconcileRealCollections(lineas, []),
+        cobranzaPayments: [makePayment('RI - 310198', 40000)],
+      });
+      const montos = calendar.events
+        .filter(e => e.source === 'JDE_OPEN_PROJECTED')
+        .map(e => e.amount)
+        .sort((a, b) => a - b);
+      expect(montos).toEqual([100000]);
+    });
+
     it('ignora aplicaciones sin folio o de importe no positivo', () => {
       const calendar = build([
         makePayment('', 50000),

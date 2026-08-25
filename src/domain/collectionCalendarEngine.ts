@@ -226,6 +226,33 @@ export function buildCollectionCalendar(input: BuildCollectionCalendarInput): Bu
   }
 
   const appliedByFactura = buildAppliedAmountByFactura(input.cobranzaPayments);
+  // Excedente del recibo POR FOLIO, pendiente de repartir entre sus líneas.
+  //
+  // Una factura puede venir en VARIAS líneas de `/cobranza` y el merge del repo
+  // NO las colapsa por folio a propósito (colapsarlas sub-cuenta Venta/CXC —
+  // ver `mergeCobranzaBackfillRange`), mientras que el recibo de
+  // `/cobranzaindicadores` es del folio COMPLETO. Aplicarlo entero a cada línea
+  // borra saldo real: con dos líneas de $100k y un recibo de $150k, cada línea
+  // se iría a cero y los $50k que siguen por cobrar desaparecerían.
+  //
+  // Se descuenta primero lo que `/cobranza` YA reconoce en el folio (Σ de
+  // bruto−pendiente de todas sus líneas); el resto es lo que sólo conoce
+  // Indicadores y se consume línea por línea, sin exceder el saldo de cada una.
+  // Con una sola línea el resultado es idéntico a comparar contra el bruto.
+  const receiptSurplusByFolio = new Map<string, number>();
+  if (appliedByFactura.size > 0) {
+    const cobradoByFolio = new Map<string, number>();
+    for (const record of cobranzaRecords) {
+      const folioKey = normalizedFacturaKey(record.cia, record.noFactura);
+      if (!folioKey) continue;
+      const cobrado = Math.max(0, record.importeBrutoPesos - record.importePendientePesos);
+      cobradoByFolio.set(folioKey, (cobradoByFolio.get(folioKey) ?? 0) + cobrado);
+    }
+    for (const [folioKey, applied] of appliedByFactura) {
+      const surplus = applied - (cobradoByFolio.get(folioKey) ?? 0);
+      if (surplus > 0) receiptSurplusByFolio.set(folioKey, surplus);
+    }
+  }
 
   const consumedByBank = new Set<string>();
   for (const abono of reconciliation.abonoEnrichments) {
@@ -276,21 +303,22 @@ export function buildCollectionCalendar(input: BuildCollectionCalendarInput): Bu
     }
 
     // Saldo por cobrar: se toma la vista MÁS AVANZADA de las dos fuentes.
-    // Restar el recibo del pendiente sería incorrecto cuando /cobranza YA
-    // aplicó ese mismo recibo (lo descontaría dos veces); comparar contra el
-    // bruto es idempotente y hace que la fuente sin datos nunca degrade.
-    const cobradoIndicadores = appliedByFactura.get(normalizedFacturaKey(record.cia, record.noFactura)) ?? 0;
-    const pendienteEfectivo = Math.max(
-      0,
-      record.importeBrutoPesos - Math.max(cobradoParcial, cobradoIndicadores),
-    );
+    // El excedente del recibo (lo que /cobranza aún NO aplica) se consume del
+    // pozo del folio, así que nunca se descuenta dos veces lo que /cobranza ya
+    // reconoció ni se resta a una línea más de lo que le queda vivo.
+    const folioKey = normalizedFacturaKey(record.cia, record.noFactura);
+    const surplus = folioKey ? (receiptSurplusByFolio.get(folioKey) ?? 0) : 0;
+    const ajustePorRecibo = Math.min(surplus, pendiente);
+    if (ajustePorRecibo > 0) receiptSurplusByFolio.set(folioKey, surplus - ajustePorRecibo);
+
+    const pendienteEfectivo = pendiente - ajustePorRecibo;
     if (pendienteEfectivo > 0) {
       events.push(eventFromJdeOpenProjected(
         record,
         clientMatch,
         assumptions,
         pendienteEfectivo,
-        cobradoIndicadores > cobradoParcial,
+        ajustePorRecibo > 0,
       ));
     }
   }
@@ -335,9 +363,15 @@ function facturaKey(cia: string, noFactura: string): string {
   return `${cia}::${noFactura}`;
 }
 
-/** Llave cia::folio con el folio normalizado — los dos endpoints difieren de formato. */
+/**
+ * Llave cia::folio con el folio normalizado — los dos endpoints difieren de
+ * formato. Devuelve `''` cuando no hay folio reconocible: sin folio no hay
+ * factura a la cual descontarle saldo, y todas las líneas sin folio de una
+ * misma cía compartirían llave.
+ */
 function normalizedFacturaKey(cia: string, noFactura: string): string {
-  return `${cia}::${normFactura(noFactura)}`;
+  const folio = normFactura(noFactura);
+  return folio ? `${cia}::${folio}` : '';
 }
 
 /**
