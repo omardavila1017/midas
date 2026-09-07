@@ -60,6 +60,27 @@ export interface CanonicalProjectionInputs {
    */
   cobradaBancoKeys?: Set<string>;
   /**
+   * `${cia}::${normFactura(noFactura)}` → importe ya aplicado según los
+   * recibos de `/cobranzaindicadores` (`buildAppliedAmountByFactura`).
+   *
+   * POR QUÉ: `jde.Cobranza_Citi` (la fuente de `/cobranza`) NO aplica los
+   * recibos — una factura ya cobrada se queda sin `Fecha_Pago` y con su
+   * `Importe_Pendiente` completo. Medido contra la BD el 2026-09-07: **1,694
+   * facturas por $345.3M**, de las cuales **$310.5M son de la cía 00011**
+   * (grupo Citi), justo donde `cobradaBancoKeys` no puede ayudar porque el
+   * cruce bancario factura-por-factura no funciona (los depósitos entran a la
+   * concentradora — por eso existe el prorrateo). Sin este overlay, MOTOR 2
+   * proyectaba esos $310.5M como entrada de caja FUTURA mientras el mismo
+   * dinero ya estaba pintado del lado banco: doble conteo.
+   *
+   * SÓLO A LA BAJA: reduce el saldo por cobrar, nunca emite ingreso — el
+   * recibo no es una pierna bancaria nueva. Idempotente y degrada-solo (sin
+   * recibos el resultado es byte-idéntico). La fórmula vive en
+   * `domain/cobranzaReceiptsOverlay.ts`, compartida con el calendario de
+   * Cobranza; NO la reimplementes aquí.
+   */
+  cobranzaAppliedByFactura?: Map<string, number>;
+  /**
    * Enriquecimiento de movimientos bancarios ABONO con su factura/cliente
    * (derivado de AuxiliarContable). Reclasifica ingresos históricos por
    * cliente en vez de dejarlos bajo "Transferencias".

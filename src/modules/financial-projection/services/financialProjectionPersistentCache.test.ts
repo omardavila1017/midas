@@ -241,6 +241,7 @@ const FULL_INPUT: FullProjectionInput = {
   providers: [],
   cxpRecords: [],
   cobranzaRecords: [],
+  cobranzaPayments: [],
   rolRecords: [],
   viajesEspecialesRecords: [],
   purchaseReceipts: [],
@@ -274,6 +275,22 @@ const MUTATIONS: { [K in keyof FullProjectionInput]: (input: FullProjectionInput
   cobranzaRecords: (i) => ({
     ...i,
     cobranzaRecords: [rec<FullProjectionInput['cobranzaRecords'][number]>({ cia: '00011', noFactura: 'RI-1' })],
+  }),
+  // El fingerprint suma `importeCobrado`: la mutación agrega una aplicación con
+  // importe, que es lo que realmente descuenta saldo por cobrar.
+  cobranzaPayments: (i) => ({
+    ...i,
+    cobranzaPayments: [rec<FullProjectionInput['cobranzaPayments'][number]>({
+      idPago: 'P-1',
+      cia: '00011',
+      applications: [
+        rec<FullProjectionInput['cobranzaPayments'][number]['applications'][number]>({
+          cia: '00011',
+          noFactura: 'RI-1',
+          importeCobrado: 1000,
+        }),
+      ],
+    })],
   }),
   rolRecords: (i) => ({ ...i, rolRecords: [rec<FullProjectionInput['rolRecords'][number]>({ cia: '00011' })] }),
   viajesEspecialesRecords: (i) => ({

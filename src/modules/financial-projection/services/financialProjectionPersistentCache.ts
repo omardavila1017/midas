@@ -195,6 +195,13 @@ export function projectionSourcePersistentCacheKey(input: FinancialProjectionSou
     // aterrizara (post-boot, asíncrono) se le sirve al tablero ya enriquecido y
     // el egreso vuelve a verse sin clasificar.
     `paymentCargo=${cargoEnrichmentFingerprint(input.paymentCargoEnrichments)}`,
+    // Recibos de cobranza: descuentan el saldo por cobrar que `/cobranza`
+    // reporta inflado, así que MUEVEN EL DINERO de la proyección. La longitud
+    // NO alcanza como señal: el merge llavea por `cia::idPago`, de modo que un
+    // recibo re-fetcheado puede ganar aplicaciones (o importe) sin cambiar el
+    // conteo de pagos — y es justo el importe aplicado lo que decide cuánto se
+    // descuenta. Por eso el fingerprint suma el `importeCobrado`.
+    `cobranzaPagos=${cobranzaPaymentsFingerprint(input.cobranzaPayments)}`,
   ].join('|'))}`;
 }
 
@@ -568,6 +575,30 @@ function viajesEspecialesFingerprint(
   let invoiced = 0;
   for (const r of records) if (r.facturaJDE) invoiced++;
   return `${records.length}:${invoiced}`;
+}
+
+/**
+ * Recibos aplicados: pagos, aplicaciones y Σ importe cobrado, en UN pase y sin
+ * construir un string por item (el walk que este archivo evita a propósito).
+ *
+ * La Σ es la parte load-bearing — es el numerador del descuento de
+ * `effectivePendingAmount`. Mismo trade-off estructural que `reconciliation` y
+ * los `len:`: no distingue "misma Σ, otro reparto entre folios".
+ */
+function cobranzaPaymentsFingerprint(
+  payments: FinancialProjectionSourceInput['cobranzaPayments'],
+): string {
+  if (!payments || payments.length === 0) return '0';
+  let applications = 0;
+  let cobrado = 0;
+  for (const payment of payments) {
+    for (const application of payment.applications ?? []) {
+      applications++;
+      const amount = application.importeCobrado;
+      if (Number.isFinite(amount)) cobrado += amount;
+    }
+  }
+  return `${payments.length}:${applications}:${cobrado.toFixed(2)}`;
 }
 
 function unknownFingerprint(value: unknown): string {

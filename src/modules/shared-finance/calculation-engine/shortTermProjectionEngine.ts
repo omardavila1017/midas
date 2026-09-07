@@ -27,6 +27,15 @@ import type { CobranzaRecord, ViajeEspecialRecord } from '../../../services/jdeT
 import type { CXPRecord } from '../../../domain/persistence';
 import { buildViajesEspecialesCobranzaCross, buildViajesEspecialesFacturaKeys } from '../../../domain/viajesEspecialesCobranzaMatch';
 import { normFactura } from '../../../domain/rolCobranzaMatch';
+// Overlay de recibos — MISMA aritmética que el calendario de Cobranza,
+// incluido el pozo por folio. No la reimplementes: `/cobranza` reporta un
+// `Importe_Pendiente` inflado porque no aplica los cobros que
+// `/cobranzaindicadores` sí registra.
+import {
+  buildReceiptSurplusByFolio,
+  consumeReceiptSurplus,
+  receiptOverlayKey,
+} from '../../../domain/cobranzaReceiptsOverlay';
 import { buildRolProjectedInflows, type RolProjectedInflow } from '../../../domain/rolProjectionEngine';
 import { todayISO } from '../../../formatters';
 import { enrichFromCatalog } from '../../../domain/providerCatalog';
@@ -475,6 +484,20 @@ function collectCxcInflowLines(
   // cuando el cruce fue automático (status='cobrada-banco'); facturas en
   // revisión manual o sin cruce siguen como pendiente proyectada.
   const cobradaBancoKeys = inputs.cobradaBancoKeys ?? new Set<string>();
+  // Overlay de recibos: `/cobranza` no aplica los cobros que
+  // `/cobranzaindicadores` sí registra, así que su `Importe_Pendiente` viene
+  // inflado ($345.3M medidos el 2026-09-07; $310.5M de la cía 00011, donde el
+  // cruce bancario por factura no funciona y `cobradaBancoKeys` no alcanza).
+  // Sólo corrige a la BAJA — ver `cobranzaReceiptsOverlay`.
+  //
+  // El pozo se construye sobre `context.cxcRecords` COMPLETO (antes del dedup
+  // por folio de abajo): la Σ de `bruto − pendiente` tiene que abarcar TODAS
+  // las líneas del folio, porque el recibo es del folio entero. Calcularla
+  // sobre el set dedupeado subestimaría lo que `/cobranza` ya aplicó y el
+  // excedente saldría inflado → descontaría de más.
+  const receiptSurplusByFolio = inputs.cobranzaAppliedByFactura
+    ? buildReceiptSurplusByFolio(context.cxcRecords, inputs.cobranzaAppliedByFactura)
+    : new Map<string, number>();
 
   for (const record of context.cxcRecords) {
     if (record.importePendientePesos <= 0) continue;
@@ -485,6 +508,18 @@ function collectCxcInflowLines(
     if (seen.has(key)) continue;
     seen.add(key);
     if (cobradaBancoKeys.has(key)) continue;
+
+    // Saldo EFECTIVO: se consume del pozo del folio lo que `/cobranza` aún no
+    // reconoce, acotado al saldo vivo de esta línea. Una factura que Indicadores
+    // reporta cobrada por completo sale de la proyección; una parcialmente
+    // cobrada proyecta sólo su residuo.
+    const ajustePorRecibo = consumeReceiptSurplus(
+      receiptSurplusByFolio,
+      receiptOverlayKey(record.cia, record.noFactura),
+      record.importePendientePesos,
+    );
+    const pendienteEfectivo = record.importePendientePesos - ajustePorRecibo;
+    if (pendienteEfectivo <= 0) continue;
 
     const clientMatch = context.clientMatchByFactura.get(key) ?? null;
     const resolved = clientMatch
@@ -497,7 +532,7 @@ function collectCxcInflowLines(
     const dateInfo = moveOpenReceivableIntoProjection(rawDate, inputs.asOfDate);
     if (dateInfo.date.slice(0, 7) !== month.yearMonth) continue;
 
-    const taxMeta = cxcTaxMeta(record, clientMatch?.client);
+    const taxMeta = cxcTaxMeta(record, clientMatch?.client, pendienteEfectivo);
     const confidenceScore = clientMatch
       ? Math.round(Math.min(92, 72 + clientMatch.confidence * 18))
       : 62;
@@ -520,7 +555,7 @@ function collectCxcInflowLines(
     const cxcIdPrefix = isViajeEspecialCxc ? 'cxc:especial' : 'cxc';
     lines.push({
       id: `${cxcIdPrefix}:${record.cia}:${record.noCliente}:${record.noFactura}`,
-      amount: record.importePendientePesos,
+      amount: pendienteEfectivo,
       date: dateInfo.date,
       concept: `Factura CXC ${record.noFactura || 'sin folio'} · ${record.nombreCliente || 'Cliente sin nombre'}`,
       category: 'AR_COLLECTION',
@@ -869,9 +904,14 @@ function providerJdeKey(value: string | undefined): string {
 function cxcTaxMeta(
   record: CobranzaRecord,
   client?: Client,
+  // Saldo efectivo tras el overlay de recibos. El IVA debe desglosarse sobre
+  // el importe que REALMENTE se proyecta; si no, una factura ya cobrada
+  // según Indicadores seguiría aportando su IVA completo al causado FORECAST.
+  amountOverride?: number,
 ): { taxRate: FinancialTaxRate; taxBaseAmount: number; taxAmount: number } {
   const rate = client?.ivaRate === 8 ? 8 : 16;
-  return grossToIvaTaxMeta(record.importePendientePesos, rate);
+  const amount = amountOverride ?? record.importePendientePesos;
+  return grossToIvaTaxMeta(amount, rate);
 }
 
 /**

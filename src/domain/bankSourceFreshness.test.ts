@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   countBusinessDaysBetween,
   freshnessStatusFor,
+  summarizeBankFreshnessByCompany,
   summarizeManualBankFreshness,
   MANUAL_BANK_FRESHNESS_THRESHOLDS,
 } from './bankSourceFreshness';
@@ -145,5 +146,86 @@ describe('summarizeManualBankFreshness', () => {
 
   it('los umbrales default son los documentados (3/10)', () => {
     expect(MANUAL_BANK_FRESHNESS_THRESHOLDS).toEqual({ freshMaxBusinessDays: 3, agingMaxBusinessDays: 10 });
+  });
+});
+
+describe('summarizeBankFreshnessByCompany', () => {
+  // ANCLAS REALES de la BD (medidas el 2026-09-07, carga fresca del día): el
+  // grupo reportaba banco al 04-sep mientras cuatro empresas llevaban semanas
+  // calladas — cía 29 y 46 desde el 13-ago, cía 30 desde el 17-ago y cía 41
+  // desde el 12-mar. `manualBankHealthRows` no las veía (sólo mira
+  // Bajío/Santander), así que el rezago no aparecía en ninguna parte de la UI.
+  const TODAY = '2026-09-07';
+
+  const statements: BankAccountStatement[] = [
+    // Al día: cía 00001, dos cuentas, última al 04-sep (jueves→lunes = 1 hábil).
+    stmt({ cia: '00001', banco: 'BANAMEX', cuenta: '70138237069', movimientos: [mov('2026-09-04')] }),
+    stmt({ cia: '00001', banco: 'BANORTE', cuenta: '12002708-5', movimientos: [mov('2026-08-31')] }),
+    // Rezagada: cía 00029, sus DOS cuentas calladas (13-ago y 30-jul).
+    stmt({ cia: '00029', banco: 'BANAMEX', cuenta: '70138805180', movimientos: [mov('2026-08-13')] }),
+    stmt({ cia: '00029', banco: 'BANAMEX', cuenta: '70138805172', movimientos: [mov('2026-07-30')] }),
+    // Muerta: cía 00041, única cuenta desde el 12-mar.
+    stmt({ cia: '00041', banco: 'BANAMEX', cuenta: '70138934045', movimientos: [mov('2026-03-12')] }),
+  ];
+
+  it('marca la empresa por su cuenta MÁS RECIENTE — una cuenta viva basta', () => {
+    const rows = summarizeBankFreshnessByCompany(statements, TODAY);
+    const cia1 = rows.find((r) => r.cia === '00001')!;
+
+    // 31-ago está rezagada pero 04-sep está al día: la cía sigue reportando.
+    expect(cia1.lastMovementDate).toBe('2026-09-04');
+    expect(cia1.status).toBe('fresh');
+    expect(cia1.accountCount).toBe(2);
+  });
+
+  it('detecta la empresa con TODAS sus cuentas calladas (cía 29, 13-ago)', () => {
+    const rows = summarizeBankFreshnessByCompany(statements, TODAY);
+    const cia29 = rows.find((r) => r.cia === '00029')!;
+
+    expect(cia29.lastMovementDate).toBe('2026-08-13');
+    expect(cia29.status).toBe('stale');
+    // 13-ago → 07-sep: bastante arriba del umbral rojo de 10 días hábiles.
+    expect(cia29.businessDaysElapsed).toBeGreaterThan(MANUAL_BANK_FRESHNESS_THRESHOLDS.agingMaxBusinessDays);
+  });
+
+  it('ordena peor primero y lista la cuenta más rezagada al frente', () => {
+    const rows = summarizeBankFreshnessByCompany(statements, TODAY);
+
+    // cía 41 (12-mar) es la peor; 00001 (al día) la última.
+    expect(rows[0].cia).toBe('00041');
+    expect(rows[rows.length - 1].cia).toBe('00001');
+    // Dentro de la cía 29, la cuenta del 30-jul va antes que la del 13-ago.
+    const cia29 = rows.find((r) => r.cia === '00029')!;
+    expect(cia29.accounts.map((a) => a.lastMovementDate)).toEqual(['2026-07-30', '2026-08-13']);
+  });
+
+  it('ignora statements sin cía (no puede atribuirse a ninguna empresa)', () => {
+    const rows = summarizeBankFreshnessByCompany(
+      [stmt({ cia: '', banco: 'BANAMEX', cuenta: '999', movimientos: [mov('2026-09-04')] })],
+      TODAY,
+    );
+
+    expect(rows).toEqual([]);
+  });
+
+  // Medido en la BD: `54.1020.0011` tiene 21 movimientos y `Fecha_Estado_Cuenta`
+  // NULL. Una cuenta sin NINGUNA fecha usable es `no-data`, nunca verde.
+  it('cuenta sin fecha usable sale no-data, no verde', () => {
+    const rows = summarizeBankFreshnessByCompany(
+      [stmt({ cia: '00054', banco: 'BANAMEX', cuenta: '70143508590', fechaEstadoCuenta: '', movimientos: [] })],
+      TODAY,
+    );
+
+    expect(rows[0].status).toBe('no-data');
+    expect(rows[0].lastMovementDate).toBeNull();
+  });
+
+  it('fecha futura nunca sale verde (error de captura, no "al día")', () => {
+    const rows = summarizeBankFreshnessByCompany(
+      [stmt({ cia: '00001', banco: 'BANAMEX', cuenta: '1', movimientos: [mov('2026-12-31')] })],
+      TODAY,
+    );
+
+    expect(rows[0].status).toBe('stale');
   });
 });

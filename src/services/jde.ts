@@ -2151,10 +2151,19 @@ function selectIvaFullObjetoRanges(
   discoveryObjetos: readonly AuxObjetoRange[] = AUX_IVA_PARAMS.discoveryObjetos,
 ): AuxObjetoRange[] {
   const discovered = discoverIvaObjetosByKind(discoverySample);
+  // TODO kind menos `'other'`: las cuentas devengadas (`*-pending`,
+  // `caused-accrued`) COMPARTEN objeto con su hermana consumada (1120, 2050),
+  // así que si el mes de descubrimiento sólo tuvo movimiento devengado y las
+  // filtráramos, la fase B se quedaría sin ese objeto ENTERO — se perdería
+  // también el consumado, que sí es fiscal. Enumerado explícitamente (no
+  // `Object.entries`) para que un kind nuevo no entre por accidente.
   const exact: AuxObjetoRange[] = [
     ...Array.from(discovered.creditable).map((obj) => ({ ini: obj, fin: obj })),
+    ...Array.from(discovered['creditable-pending']).map((obj) => ({ ini: obj, fin: obj })),
     ...Array.from(discovered.caused).map((obj) => ({ ini: obj, fin: obj })),
+    ...Array.from(discovered['caused-accrued']).map((obj) => ({ ini: obj, fin: obj })),
     ...Array.from(discovered.withheld).map((obj) => ({ ini: obj, fin: obj })),
+    ...Array.from(discovered['withheld-pending']).map((obj) => ({ ini: obj, fin: obj })),
   ];
   const hasCreditable = discovered.creditable.size > 0;
   const hasCaused = discovered.caused.size > 0;

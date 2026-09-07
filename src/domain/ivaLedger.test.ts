@@ -54,7 +54,9 @@ describe('classifyIvaAccount', () => {
     expect(classifyIvaAccount('IVA TRASLADADO COBRADO')).toBe('caused');
     expect(classifyIvaAccount('IVA causado por pagar')).toBe('caused');
     expect(classifyIvaAccount('IVA cobrado')).toBe('caused');
-    expect(classifyIvaAccount('IVA por enterar')).toBe('caused');
+    // `IVA causado por pagar` SÍ es causado: lo dice `CAUSAD`. La guarda de
+    // liquidación sólo aplica cuando la cuenta no declara lado.
+    expect(classifyIvaAccount('IVA causado a enterar')).toBe('caused');
     expect(classifyIvaAccount('Impuesto al Valor Agregado trasladado')).toBe('caused');
   });
   it('clasifica retenido aparte', () => {
@@ -87,11 +89,28 @@ describe('classifyIvaAccount', () => {
       expect(classifyIvaAccount('IVA 8% ACREDIT PAGADO')).toBe('creditable');
       expect(classifyIvaAccount('IVA 16% TRASLADADO COBRADO')).toBe('caused');
       expect(classifyIvaAccount('IVA 8% TRASLADADO COBRADO')).toBe('caused');
-      expect(classifyIvaAccount('IVA POR PAGAR')).toBe('caused');
     });
 
-    it('retenido gana sobre la negación (no es acreditable ni causado)', () => {
-      expect(classifyIvaAccount('RETENCION IVA 4% NO PAGADO')).toBe('withheld');
+    // `IVA POR PAGAR` (objeto 2050, **$50.78M en 33 asientos**, medido
+    // 2026-09-07) es la cuenta de LIQUIDACIÓN: el neto mensual que se traspasa
+    // para pagarle al SAT, o sea el mismo dinero que ya pasó por TRASLADADO
+    // COBRADO. Contarla como causado lo suma dos veces. La delata su signo:
+    // POSITIVO, cuando todo el causado real del mayor viene en negativo.
+    it('la cuenta de liquidación NO es causado', () => {
+      expect(classifyIvaAccount('IVA POR PAGAR')).toBe('other');
+      expect(classifyIvaAccount('IVA por enterar')).toBe('other');
+      expect(classifyIvaAccount('IVA a cargo')).toBe('other');
+      expect(classifyIvaAccount('IVA a favor')).toBe('other');
+      // Pero si declara lado, gana el lado.
+      expect(classifyIvaAccount('IVA causado por pagar')).toBe('caused');
+      expect(classifyIvaAccount('IVA acreditable por pagar')).toBe('creditable');
+    });
+
+    // La retención tiene el MISMO par devengado/consumado que los otros dos
+    // lados; colapsarlo mezclaba `RETENCION IVA 4% NO PAGADO` (+$228k, aún no
+    // enterada) con la ya pagada, distorsionando el diagnóstico de retenciones.
+    it('retenido gana sobre la negación, y distingue devengado de consumado', () => {
+      expect(classifyIvaAccount('RETENCION IVA 4% NO PAGADO')).toBe('withheld-pending');
       expect(classifyIvaAccount('RETENCION IVA 4% PAGADO')).toBe('withheld');
       expect(classifyIvaAccount('RET IVA ARRENDAMIENTO PAGADO')).toBe('withheld');
       expect(classifyIvaAccount('RET IVA HONORARIOS PAGADO')).toBe('withheld');

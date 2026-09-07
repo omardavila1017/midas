@@ -39,7 +39,16 @@ function creditableMatchText(rec: AuxiliarContableRecord): string {
  *   caused-accrued     IVA de ventas aún no cobrado        → NO causado
  *
  * Colapsar cada par suma el MISMO peso dos veces (una al devengarse y otra al
- * consumarse) y adelanta impuesto que aún no es exigible.
+ * consumarse) y adelanta impuesto que aún no es exigible. Las retenciones
+ * tienen el MISMO par (`withheld` / `withheld-pending`).
+ *
+ * Aparte de los cuatro estados vive la cuenta de LIQUIDACIÓN (`IVA POR PAGAR`):
+ * no es un lado del impuesto, es el neto mensual que se traspasa para pagarle
+ * al SAT — el mismo dinero que ya pasó por TRASLADADO COBRADO. Es `'other'`:
+ * contarla como causado la sumaría dos veces (medido en la BD el 2026-09-07:
+ * **$50.78M en 33 asientos**, con signo POSITIVO cuando todo el causado real
+ * viene en negativo — la señal de que es otra clase de cuenta). El IVA
+ * efectivamente pagado al SAT se lee de los estados de cuenta, no de aquí.
  */
 export type IvaAccountKind =
   | 'creditable'
@@ -47,6 +56,7 @@ export type IvaAccountKind =
   | 'caused'
   | 'caused-accrued'
   | 'withheld'
+  | 'withheld-pending'
   | 'other';
 
 export interface IvaLedgerAccount {
@@ -108,21 +118,45 @@ export function classifyIvaAccount(nombreCuenta: string | undefined): IvaAccount
     || name.includes('IMPUESTO AL VALOR AGREGADO')
     || name.includes('IMP AL VALOR AGREGADO');
   if (!mentionsIva) return 'other';
+
+  // La negación se evalúa ANTES del match por participio: `'PAGADO'` empata
+  // dentro de `'NO PAGADO'` (ver el bloque de abajo). Se declara aquí porque
+  // las retenciones tienen el mismo par devengado/consumado.
+  const notPaidYet = /\bNO PAGAD/.test(name) || name.includes('PENDIENTE DE PAGO');
+
   // Retenido (IVA retenido a terceros) no es acreditable ni causado normal.
   // La forma ABREVIADA cuenta: `RET IVA ARRENDAMIENTO PAGADO` no empata
   // `RETEN`, así que caía a acreditable por su `PAGADO` final (medido en la BD:
   // $1.03M de retenciones sumadas al acreditable de 2026).
-  if (name.includes('RETEN') || /\bRET IVA\b/.test(name)) return 'withheld';
+  if (name.includes('RETEN') || /\bRET IVA\b/.test(name)) {
+    return notPaidYet ? 'withheld-pending' : 'withheld';
+  }
 
   // De qué lado del impuesto habla la cuenta, sin importar si ya se consumó.
   const isCreditableSide = name.includes('ACREDIT');
   const isCausedSide = hasAny(name, ['TRASLAD', 'CAUSAD']);
 
-  // La negación se evalúa ANTES del match por participio: `'PAGADO'` empata
-  // dentro de `'NO PAGADO'`, así que buscarlo primero clasificaba como
-  // acreditable justo la cuenta que dice que AÚN NO lo es (medido en la BD:
-  // `IVA 16% ACREDIT NO PAGADO` inflaba el acreditable de 2026 en $37.45M).
-  const notPaidYet = /\bNO PAGAD/.test(name) || name.includes('PENDIENTE DE PAGO');
+  // Cuenta de LIQUIDACIÓN, no un lado del impuesto: `IVA POR PAGAR` es el neto
+  // mensual que se traspasa para pagarle al SAT, o sea el MISMO dinero que ya
+  // pasó por TRASLADADO COBRADO. `'POR PAGAR'` vivía entre los patrones de
+  // causado y la clasificaba como tal ($50.78M en `Ano 26`, con signo positivo
+  // cuando todo el causado real viene en negativo). Hoy no mueve ningún número
+  // publicado (`accumulateIvaFromLedger` corre con `includeCaused:false`), pero
+  // el pendiente documentado es cambiar el origen del causado al mayor — y ahí
+  // habría entrado inflándolo. El IVA pagado al SAT sale de bancos.
+  //
+  // Se exige que la cuenta NO declare lado: `IVA causado por pagar` sí es
+  // causado (lo dice `CAUSAD`) y no debe caer aquí. Sin lado declarado, el
+  // destino conservador es `'other'` — el causado tiene una fuente buena
+  // conocida (base-cobro desde cobranza), así que no contar es más seguro que
+  // contar de más.
+  if (!isCreditableSide && !isCausedSide
+    && hasAny(name, ['POR PAGAR', 'POR ENTERAR', 'ENTERAR', 'A CARGO', 'A FAVOR'])) {
+    return 'other';
+  }
+
+  // `IVA 16% ACREDIT NO PAGADO` inflaba el acreditable de 2026 en $37.45M
+  // cuando `'PAGADO'` se buscaba antes que la negación (ver `notPaidYet`).
   const notCollectedYet = /\bNO COBRAD/.test(name)
     || hasAny(name, ['POR COBRAR', 'PENDIENTE DE COBRO', 'DEVENGAD']);
 
@@ -132,12 +166,7 @@ export function classifyIvaAccount(nombreCuenta: string | undefined): IvaAccount
   // Acreditable consumado: IVA sobre compras/gastos efectivamente pagado.
   if (isCreditableSide || name.includes('PAGADO')) return 'creditable';
   // Causado consumado: IVA sobre ventas efectivamente cobrado (o ya exigible).
-  if (
-    isCausedSide
-    || hasAny(name, ['POR PAGAR', 'POR ENTERAR', 'ENTERAR', 'COBRADO'])
-  ) {
-    return 'caused';
-  }
+  if (isCausedSide || name.includes('COBRADO')) return 'caused';
   return 'other';
 }
 
@@ -177,6 +206,7 @@ export function discoverIvaObjetosByKind(records: AuxiliarContableRecord[]): Rec
     caused: new Set<string>(),
     'caused-accrued': new Set<string>(),
     withheld: new Set<string>(),
+    'withheld-pending': new Set<string>(),
     other: new Set<string>(),
   };
   for (const rec of records) {
@@ -224,6 +254,7 @@ export function groupIvaAccountsByKind(accounts: IvaLedgerAccount[]): Record<Iva
     caused: accounts.filter((account) => account.kind === 'caused'),
     'caused-accrued': accounts.filter((account) => account.kind === 'caused-accrued'),
     withheld: accounts.filter((account) => account.kind === 'withheld'),
+    'withheld-pending': accounts.filter((account) => account.kind === 'withheld-pending'),
     other: accounts.filter((account) => account.kind === 'other'),
   };
 }

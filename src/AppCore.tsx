@@ -137,7 +137,7 @@ import {
   mergeBankStatements,
   type BankQueryState,
 } from './domain/bankStatements';
-import { summarizeManualBankFreshness } from './domain/bankSourceFreshness';
+import { summarizeBankFreshnessByCompany, summarizeManualBankFreshness } from './domain/bankSourceFreshness';
 import { SANTANDER_FILE_FORMAT } from './domain/santanderCsv';
 import {
   type AbonoEnrichment,
@@ -1732,6 +1732,27 @@ export default function App() {
     [bankStatements],
   );
 
+  // Frescura bancaria por EMPRESA sobre TODO el set cargado (incluye los feeds
+  // JDE, que `manualBankHealthRows` no mira). Medido el 2026-09-07: cías 29, 30,
+  // 41 y 46 llevaban entre 3 y 25 SEMANAS sin un solo movimiento bancario, con
+  // todas sus cuentas calladas a la vez y cero aviso en la UI. La caja histórica
+  // se ancla al estado de cuenta, así que sin feed el saldo de esa cía se
+  // congela y MOTOR 1 se pasa en silencio a los sintéticos históricos.
+  //
+  // Sólo se emiten las cías REZAGADAS: una fila por cada empresa al día sería
+  // ruido que entrena al usuario a ignorar el panel.
+  const companyBankHealthRows = useMemo<DataHealthDatasetRow[]>(
+    () => summarizeBankFreshnessByCompany(bankStatements, todayISO())
+      .filter((f) => f.status !== 'fresh')
+      .map((f) => ({
+        key: `banks-cia-${f.cia}`,
+        label: `Bancos · empresa ${f.cia}${f.accountCount > 1 ? ` (${f.accountCount} cuentas)` : ''}`,
+        status: f.status === 'aging' ? ('stale' as const) : ('error' as const),
+        lastSync: f.lastMovementDate ?? undefined,
+      })),
+    [bankStatements],
+  );
+
   const dataHealthRows = useMemo<DataHealthDatasetRow[]>(() => {
     const maxTs = (...maps: Record<string, string>[]): string | undefined => {
       let max: string | undefined;
@@ -1745,6 +1766,7 @@ export default function App() {
     return [
       { key: 'banks', label: 'Bancos', status: datasetStatus.banks, lastSync: banksLastSync ?? undefined },
       ...manualBankHealthRows,
+      ...companyBankHealthRows,
       { key: 'cxp', label: 'CXP · Antigüedad de saldos', status: datasetStatus.cxp, lastSync: maxTs(cxpLoadedCias) },
       { key: 'cobranza', label: 'Cobranza', status: datasetStatus.cobranza, lastSync: maxTs(cobranzaLoadedCias, cobranzaPaymentsLoadedCias) },
       { key: 'compras', label: 'Compras (OCs)', status: datasetStatus.compras, lastSync: maxTs(comprasLoadedCias) },
@@ -1754,7 +1776,7 @@ export default function App() {
       { key: 'rol', label: 'ROL · Viajes', status: datasetStatus.rol, lastSync: maxTs(rolLoadedKeys) },
     ];
   }, [
-    datasetStatus, banksLastSync, manualBankHealthRows, cxpLoadedCias, cobranzaLoadedCias,
+    datasetStatus, banksLastSync, manualBankHealthRows, companyBankHealthRows, cxpLoadedCias, cobranzaLoadedCias,
     cobranzaPaymentsLoadedCias, comprasLoadedCias, pagoProveedorLoadedCias,
     auxiliarContableLoadedCias, nominaLoadedKeys, rolLoadedKeys,
   ]);

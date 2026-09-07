@@ -356,3 +356,120 @@ function budget(expenseMay: number): Budget {
     uploadedAt: '2026-04-22T00:00:00.000Z',
   };
 }
+
+describe('overlay de recibos en la fuente de proyección', () => {
+  // El input `cobranzaPayments` YA viajaba en el objeto que los dos tableros
+  // le pasan al servicio (`cacheProbeInput` hace spread de props), pero la
+  // interfaz no lo declaraba y el servicio lo ignoraba: el mapa de importes
+  // aplicados nunca llegaba al canónico. Este test cubre el cableado completo
+  // input → buildAppliedAmountByFactura → CanonicalProjectionInputs → MOTOR 2.
+  const cobranza = (importePendientePesos: number) => ({
+    cia: '00011',
+    noCliente: '3M',
+    nombreCliente: '3M MEXICO S.A. DE C.V.',
+    noFactura: 'RI-301306',
+    fechaFactura: '2026-08-10',
+    fechaVence: '2026-10-15',
+    fechaCobro: '',
+    diasVencida: 0,
+    importeBrutoPesos: 221_201.53,
+    importePendientePesos,
+    importeBrutoDolares: 0,
+    importePendienteDolares: 0,
+    moneda: 'MXN',
+    condPago: '',
+    estatus: 'PENDIENTE',
+    tipoCambio: 1,
+  });
+
+  const base = {
+    companyCode: 'all',
+    bankStatements: [],
+    clients: [],
+    providers: [],
+    cxpRecords: [],
+    assumptions: { year: 2026, globalCompliance: 1, factorajeDays: 30 },
+    budget: null,
+    startingBalance: 0,
+    asOfDate: '2026-09-07',
+  };
+
+  const recibo = (importeCobrado: number) => ([{
+    idPago: 'P-1',
+    cia: '00011',
+    fechaCobro: '2026-08-12',
+    fechaContable: '2026-08-12',
+    cuentaBancaria: '855877',
+    banco: 'BANAMEX',
+    noRecibo: '855877',
+    importeRecibo: importeCobrado,
+    pendienteAplicar: 0,
+    noCliente: '3M',
+    cliente: '3M MEXICO S.A. DE C.V.',
+    noBatch: '1',
+    tipoCambio: 1,
+    // Formato REAL de /cobranzaindicadores: guion con espacios.
+    applications: [{
+      idPago: 'P-1',
+      cia: '00011',
+      fechaAplicacion: '2026-08-12',
+      noCliente: '3M',
+      cliente: '3M MEXICO S.A. DE C.V.',
+      tipoDocto: 'RI',
+      noFactura: 'RI - 301306',
+      noFacturaNormalizada: 'RI-301306',
+      fechaFactura: '2026-08-10',
+      fechaVencimiento: '2026-10-15',
+      diasAntiguedadFafv: 0,
+      importeCobrado,
+      importeOriginalFactura: 221_201.53,
+      tasaIva: '16',
+      importeIvaFacturaOriginal: 30_510.56,
+    }],
+  }]);
+
+  const cxcMovement = (result: ReturnType<typeof buildFinancialProjectionSourceData>) =>
+    result.movements.find((m) => m.id === 'cxc:00011:3M:RI-301306');
+
+  it('descuenta el cobro que /cobranza no aplicó y saca la factura de la proyección', () => {
+    __clearProjectionSourceCache();
+    const result = buildFinancialProjectionSourceData({
+      ...base,
+      cobranzaRecords: [cobranza(221_201.53)],
+      cobranzaPayments: recibo(221_201.53),
+    });
+
+    expect(cxcMovement(result)).toBeUndefined();
+  });
+
+  it('sin recibos proyecta el pendiente reportado, byte-idéntico', () => {
+    __clearProjectionSourceCache();
+    const result = buildFinancialProjectionSourceData({
+      ...base,
+      cobranzaRecords: [cobranza(221_201.53)],
+    });
+
+    expect(cxcMovement(result)?.projectedAmount).toBe(221_201.53);
+  });
+
+  // El memo de módulo llavea por refId, así que la MISMA referencia de
+  // cobranzaRecords en los dos builds aísla la variable: si `cobranzaPayments`
+  // no estuviera en la llave, el segundo build recogería la entrada del
+  // primero y los dos reportarían lo mismo.
+  it('no comparte entrada de cache entre builds con y sin recibos', () => {
+    __clearProjectionSourceCache();
+    const records = [cobranza(221_201.53)];
+    const conRecibos = buildFinancialProjectionSourceData({
+      ...base,
+      cobranzaRecords: records,
+      cobranzaPayments: recibo(221_201.53),
+    });
+    const sinRecibos = buildFinancialProjectionSourceData({
+      ...base,
+      cobranzaRecords: records,
+    });
+
+    expect(cxcMovement(conRecibos)).toBeUndefined();
+    expect(cxcMovement(sinRecibos)?.projectedAmount).toBe(221_201.53);
+  });
+});

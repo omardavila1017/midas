@@ -27,7 +27,8 @@ import {
   type BankOutflowEnrichment,
 } from '../../../domain/auxiliarProjectionAdapter';
 import type { BankAccountStatement } from '../../../services/jde';
-import type { CobranzaRecord, RolRecord, ViajeEspecialRecord } from '../../../services/jdeTypes';
+import type { CobranzaPayment, CobranzaRecord, RolRecord, ViajeEspecialRecord } from '../../../services/jdeTypes';
+import { buildAppliedAmountByFactura } from '../../../domain/cobranzaReceiptsOverlay';
 import { todayISO } from '../../../formatters';
 import {
   currentBankStatements,
@@ -56,6 +57,20 @@ export interface FinancialProjectionSourceInput {
   providers: Provider[];
   cxpRecords: CXPRecord[];
   cobranzaRecords?: CobranzaRecord[];
+  /**
+   * Recibos aplicados de `/cobranzaindicadores`.
+   *
+   * Forma parte del cache key (memo + persistente): CAMBIA EL DINERO. Corrige
+   * a la baja el saldo por cobrar que `/cobranza` reporta inflado porque
+   * `jde.Cobranza_Citi` no aplica los cobros — medido 2026-09-07: 1,694
+   * facturas por $345.3M, de las cuales $310.5M son de la cía 00011 (grupo
+   * Citi), donde el cruce bancario por factura no funciona y `cobradaBancoKeys`
+   * no alcanza. Sin esto MOTOR 2 proyectaba ese dinero como entrada FUTURA
+   * mientras el depósito ya estaba pintado del lado banco: doble conteo.
+   *
+   * SÓLO a la baja, nunca suma ingreso — ver `domain/cobranzaReceiptsOverlay`.
+   */
+  cobranzaPayments?: CobranzaPayment[];
   /** ROL CITI: viajes ejecutados. Forma parte del cache key. */
   rolRecords?: RolRecord[];
   /**
@@ -191,6 +206,7 @@ function sourceCacheKey(input: FinancialProjectionSourceInput, asOfDate: string)
     refId(input.providers),
     refId(input.cxpRecords),
     refId(input.cobranzaRecords),
+    refId(input.cobranzaPayments),
     refId(input.rolRecords),
     refId(input.viajesEspecialesRecords),
     refId(input.purchaseReceipts),
@@ -266,6 +282,9 @@ export function buildFinancialProjectionSourceData(
     purchaseReceipts: input.purchaseReceipts ?? [],
     payrollCosts: input.payrollCosts ?? [],
     cobradaBancoKeys: bridge.cobradaBancoKeys,
+    // Overlay de recibos: la única señal que descuenta la cobranza ya cobrada
+    // de la cía 00011, donde el cruce bancario por factura no funciona.
+    cobranzaAppliedByFactura: buildAppliedAmountByFactura(input.cobranzaPayments),
     abonoEnrichments: bridge.abonoEnrichments,
     paidCxpKeys: bridge.paidCxpKeys,
     paidPurchaseOrderKeys: bridge.paidPurchaseOrderKeys,

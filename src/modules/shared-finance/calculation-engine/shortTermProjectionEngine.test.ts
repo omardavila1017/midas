@@ -6,6 +6,7 @@ import type { BankAccountStatement, BankStatementLine, CobranzaRecord, RolRecord
 import type { PayrollCostRecord, PurchaseReceiptRecord } from '../types';
 import { buildCanonicalProjection } from './canonicalProjection';
 import { buildShortTermProjectionMovements } from './shortTermProjectionEngine';
+import { buildAppliedAmountByFactura } from '../../../domain/cobranzaReceiptsOverlay';
 
 const assumptions: CashFlowAssumptions = {
   year: 2026,
@@ -285,6 +286,205 @@ describe('buildShortTermProjectionMovements (MOTOR 2)', () => {
     expect(rol!.projectedDate.slice(0, 7)).toBe('2026-06');
   });
 });
+
+describe('overlay de recibos: /cobranza no aplica los cobros', () => {
+  // MEDIDO CONTRA LA BD el 2026-09-07 (carga fresca del día): `jde.Cobranza_Citi`
+  // deja 1,694 facturas con `Importe_Pendiente > 0` que `jde.Cobranza_Indicadores`
+  // ya reporta cobradas — **$345.3M**, de los cuales **$310.5M son de la cía
+  // 00011** (grupo Citi). Ahí `cobradaBancoKeys` no puede ayudar: los depósitos
+  // entran a la concentradora y no cruzan a factura individual (es la razón de
+  // ser del prorrateo Citi). Sin el overlay, MOTOR 2 proyecta ese dinero como
+  // entrada de caja FUTURA mientras el mismo depósito ya está pintado del lado
+  // banco: doble conteo.
+  const CIA_CITI = '00011';
+
+  const run = (applied?: Map<string, number>, pendiente = 221_201.53) => {
+    const inputs = {
+      companyCode: 'all',
+      bankStatements: [],
+      clients: [],
+      providers: [],
+      cxpRecords: [],
+      cobranzaRecords: [
+        cobranzaRecord({
+          cia: CIA_CITI,
+          noCliente: '3M',
+          nombreCliente: '3M MEXICO S.A. DE C.V.',
+          noFactura: 'RI-301306',
+          fechaFactura: '2026-08-10',
+          // La ventana del canónico arranca el mes SIGUIENTE al asOfDate
+          // cuando no hay histórico bancario cargado.
+          fechaVence: '2026-10-15',
+          importeBrutoPesos: 221_201.53,
+          importePendientePesos: pendiente,
+        }),
+      ],
+      assumptions,
+      budget: null,
+      startingBalance: 0,
+      asOfDate: '2026-09-07',
+      cobranzaAppliedByFactura: applied,
+    };
+    const monthly = buildCanonicalProjection(inputs).monthly;
+    return buildShortTermProjectionMovements({ monthly, inputs })
+      .find((m) => m.id === `cxc:${CIA_CITI}:3M:RI-301306`);
+  };
+
+  it('NO proyecta la factura que los recibos reportan cobrada por completo', () => {
+    // Indicadores manda el folio con espacios ("RI - 301306"); la llave del
+    // overlay lo normaliza igual que /cobranza.
+    const applied = buildAppliedAmountByFactura([{
+      idPago: 'P-1',
+      cia: CIA_CITI,
+      fechaCobro: '2026-08-12',
+      fechaContable: '2026-08-12',
+      cuentaBancaria: '855877',
+      banco: 'BANAMEX',
+      noRecibo: '855877',
+      importeRecibo: 221_201.53,
+      pendienteAplicar: 0,
+      noCliente: '3M',
+      cliente: '3M MEXICO S.A. DE C.V.',
+      noBatch: '1',
+      tipoCambio: 1,
+      applications: [{
+        idPago: 'P-1',
+        cia: CIA_CITI,
+        fechaAplicacion: '2026-08-12',
+        noCliente: '3M',
+        cliente: '3M MEXICO S.A. DE C.V.',
+        tipoDocto: 'RI',
+        noFactura: 'RI - 301306',
+        noFacturaNormalizada: 'RI-301306',
+        fechaFactura: '2026-08-10',
+        fechaVencimiento: '2026-10-15',
+        diasAntiguedadFafv: 0,
+        importeCobrado: 221_201.53,
+        importeOriginalFactura: 221_201.53,
+        tasaIva: '16',
+        importeIvaFacturaOriginal: 30_510.56,
+      }],
+    }]);
+
+    expect(run(applied)).toBeUndefined();
+  });
+
+  it('proyecta sólo el residuo cuando el cobro fue parcial, con su IVA reescalado', () => {
+    const applied = new Map([[`${CIA_CITI}::RI-301306`, 200_000]]);
+    const movement = run(applied);
+
+    expect(movement).toBeTruthy();
+    expect(movement!.projectedAmount).toBeCloseTo(21_201.53, 2);
+    // El IVA debe seguir al importe REALMENTE proyectado: si se desglosara
+    // sobre el pendiente inflado, el causado FORECAST quedaría 10x arriba.
+    expect(movement!.taxAmount).toBeCloseTo(21_201.53 - 21_201.53 / 1.16, 2);
+  });
+
+  it('sin recibos el resultado es byte-idéntico al pendiente reportado', () => {
+    // Degrada solo: ene–may 2026 no tiene NI UNA fila en Cobranza_Indicadores,
+    // así que esos meses no se pueden mover ni un peso.
+    expect(run(undefined)!.projectedAmount).toBe(221_201.53);
+    expect(run(new Map())!.projectedAmount).toBe(221_201.53);
+  });
+
+  it('no descuenta dos veces la factura que /cobranza ya aplicó', () => {
+    // /cobranza ya bajó el pendiente a 21,201.53 Y el recibo dice 200,000
+    // cobrados: son el MISMO cobro. Restar el recibo del pendiente dejaría
+    // 0 y borraría un saldo que sí está vivo.
+    const applied = new Map([[`${CIA_CITI}::RI-301306`, 200_000]]);
+    expect(run(applied, 21_201.53)!.projectedAmount).toBeCloseTo(21_201.53, 2);
+  });
+
+  // El pozo se construye sobre el set COMPLETO de líneas, ANTES del dedup por
+  // folio del motor. Con dos líneas de $100k y un recibo de $150k, lo que
+  // `/cobranza` ya reconoce del folio es 0, el excedente es $150k y la línea
+  // que el motor sí emite se lleva $100k de ajuste — nunca más que su saldo.
+  // Calcular el pozo sobre el set dedupeado subestimaría lo ya aplicado.
+  it('el pozo del folio se calcula sobre TODAS las líneas, no sobre la dedupeada', () => {
+    const twoLines = (applied?: Map<string, number>) => {
+      const inputs = {
+        companyCode: 'all',
+        bankStatements: [],
+        clients: [],
+        providers: [],
+        cxpRecords: [],
+        cobranzaRecords: [
+          cobranzaRecord({
+            cia: CIA_CITI, noCliente: '3M', nombreCliente: '3M MEXICO S.A. DE C.V.',
+            noFactura: 'RI-301306', fechaFactura: '2026-08-10', fechaVence: '2026-10-15',
+            importeBrutoPesos: 100_000, importePendientePesos: 100_000,
+          }),
+          cobranzaRecord({
+            cia: CIA_CITI, noCliente: '3M', nombreCliente: '3M MEXICO S.A. DE C.V.',
+            noFactura: 'RI-301306', fechaFactura: '2026-08-10', fechaVence: '2026-10-15',
+            importeBrutoPesos: 100_000, importePendientePesos: 100_000,
+          }),
+        ],
+        assumptions,
+        budget: null,
+        startingBalance: 0,
+        asOfDate: '2026-09-07',
+        cobranzaAppliedByFactura: applied,
+      };
+      const monthly = buildCanonicalProjection(inputs).monthly;
+      return buildShortTermProjectionMovements({ monthly, inputs })
+        .filter((m) => m.id === `cxc:${CIA_CITI}:3M:RI-301306`);
+    };
+
+    // Sin recibos: el motor dedupea por folio y emite UNA línea de $100k.
+    expect(twoLines().map((m) => m.projectedAmount)).toEqual([100_000]);
+    // Con recibo de $150k: la línea emitida se agota (ajuste acotado a su
+    // saldo), no queda proyección — y el ajuste NUNCA excedió los $100k.
+    expect(twoLines(new Map([[`${CIA_CITI}::RI-301306`, 150_000]]))).toEqual([]);
+    // Con recibo de $60k: sólo baja $60k, quedan $40k proyectados.
+    expect(twoLines(new Map([[`${CIA_CITI}::RI-301306`, 60_000]])).map((m) => m.projectedAmount))
+      .toEqual([40_000]);
+  });
+
+  // ESTE es el caso que separa el pozo de comparar línea-contra-bruto, y el que
+  // hace DESAPARECER cobranza real: el cobro que el recibo reporta ya está
+  // aplicado por `/cobranza`, pero en OTRA línea del folio — invisible para el
+  // motor, que dedupea y sólo ve la primera. Comparando contra el bruto de la
+  // línea que sí emite, el recibo se descontaría otra vez.
+  it('no descuenta un cobro que /cobranza ya aplicó en otra línea del folio', () => {
+    const inputs = {
+      companyCode: 'all',
+      bankStatements: [],
+      clients: [],
+      providers: [],
+      cxpRecords: [],
+      cobranzaRecords: [
+        // Línea que el motor EMITE: nada aplicado, saldo completo.
+        cobranzaRecord({
+          cia: CIA_CITI, noCliente: '3M', nombreCliente: '3M MEXICO S.A. DE C.V.',
+          noFactura: 'RI-301306', fechaFactura: '2026-08-10', fechaVence: '2026-10-15',
+          importeBrutoPesos: 100_000, importePendientePesos: 100_000,
+        }),
+        // Línea que el dedup DESCARTA: /cobranza ya le aplicó $60k.
+        cobranzaRecord({
+          cia: CIA_CITI, noCliente: '3M', nombreCliente: '3M MEXICO S.A. DE C.V.',
+          noFactura: 'RI-301306', fechaFactura: '2026-08-10', fechaVence: '2026-10-15',
+          importeBrutoPesos: 100_000, importePendientePesos: 40_000,
+        }),
+      ],
+      assumptions,
+      budget: null,
+      startingBalance: 0,
+      asOfDate: '2026-09-07',
+      // El recibo reporta exactamente esos $60k: es el MISMO cobro.
+      cobranzaAppliedByFactura: new Map([[`${CIA_CITI}::RI-301306`, 60_000]]),
+    };
+    const monthly = buildCanonicalProjection(inputs).monthly;
+    const movements = buildShortTermProjectionMovements({ monthly, inputs })
+      .filter((m) => m.id === `cxc:${CIA_CITI}:3M:RI-301306`);
+
+    // El pozo ve el folio COMPLETO ($60k ya reconocidos) → excedente 0 → sin
+    // ajuste. Comparar contra el bruto de la línea emitida daría $40k, borrando
+    // $60k de saldo vivo.
+    expect(movements.map((m) => m.projectedAmount)).toEqual([100_000]);
+  });
+});
+
 
 // ── Fixtures ─────────────────────────────────────────────────────────────
 

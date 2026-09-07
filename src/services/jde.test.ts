@@ -76,8 +76,10 @@ describe('AuxiliarContable IVA discovery', () => {
   });
 
   it('incluye el rango activo cuando discovery encuentra solo causado', () => {
+    // Nombre REAL del mayor. Antes el fixture usaba 'IVA POR ENTERAR', que ya
+    // NO es causado: es la cuenta de liquidación (ver `classifyIvaAccount`).
     const objetos = __internal.selectIvaFullObjetoRanges([
-      auxRecord({ cuentaObjeto: '2360', nombreCuenta: 'IVA POR ENTERAR' }),
+      auxRecord({ cuentaObjeto: '2360', nombreCuenta: 'IVA 16% TRASLADADO COBRADO' }),
     ], candidates);
 
     expect(objetos).toEqual([
