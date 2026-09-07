@@ -16,6 +16,15 @@ import {
 } from '../../shared-finance/calculation-engine/financialProjectionEngine';
 import type { FinancialMovement, ForecastRun } from '../../shared-finance/types';
 import type { CustomKpi, KpiRow, SystemKpiDescriptor, SystemKpiId } from '../types';
+// Overlay de recibos: MISMA fórmula que el calendario y MOTOR 2. `/cobranza`
+// reporta `Importe_Pendiente` inflado porque `jde.Cobranza_Citi` no aplica los
+// cobros que `/cobranzaindicadores` sí registra. No la reimplementes aquí.
+import {
+  buildAppliedAmountByFactura,
+  buildReceiptSurplusByFolio,
+  consumeReceiptSurplus,
+  receiptOverlayKey,
+} from '../../../domain/cobranzaReceiptsOverlay';
 
 // ─────────────────────────────────────────────────────────────────────────
 // Catálogo de KPIs autocalculados.
@@ -371,9 +380,27 @@ function computeDerivedTotals(inputs: KpiInputs): DerivedTotals {
   const deficitDiasPlaneacion = planningRun?.summary.deficitDays ?? null;
   const activeBankAccounts = currentStatements.length;
 
+  // "Cobranza pendiente" = lo que REALMENTE falta cobrar, no lo que la fuente
+  // dice deber. Medido 2026-09-07: `/cobranza` deja 1,694 facturas por $345.3M
+  // ya cobradas según los recibos. Sin este descuento el KPI contradecía a
+  // Proyección/Planeación —que sí lo aplican desde MOTOR 2— sobre el mismo
+  // dinero. Sólo a la baja: el recibo nunca suma saldo. Aquí NO hay dedup por
+  // folio, así que el pozo se reparte entre las N líneas de la factura, que es
+  // exactamente la aritmética de una suma de saldos.
+  const receiptSurplusByFolio = buildReceiptSurplusByFolio(
+    scopedCobranzaRecords,
+    buildAppliedAmountByFactura(scopedCobranzaPayments),
+  );
   let cxcPendiente = 0;
   for (const record of scopedCobranzaRecords) {
-    cxcPendiente += Math.max(0, Number(record.importePendientePesos) || 0);
+    const pendiente = Math.max(0, Number(record.importePendientePesos) || 0);
+    if (pendiente <= 0) continue;
+    const ajuste = consumeReceiptSurplus(
+      receiptSurplusByFolio,
+      receiptOverlayKey(record.cia, record.noFactura),
+      pendiente,
+    );
+    cxcPendiente += Math.max(0, pendiente - ajuste);
   }
 
   let cxpPendiente = 0;

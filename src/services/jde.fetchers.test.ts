@@ -138,6 +138,51 @@ describe('fetchAgedBalances — mapAgedBalance', () => {
     expect(records[0].cia).toBe('00011');
     expect(records[0].importePendientePesos).toBe(100);
   });
+
+  // `jde.Antiguedad_Saldos` es la ÚNICA tabla del espejo que guarda sus fechas
+  // como varchar `DD-MM-YYYY` (auditoría 2026-09-07, verificado con su propio
+  // `Dias_Vencida`). Si el SP deja de convertir a ISO, sin esto TODA factura se
+  // queda sin vencimiento en silencio: `cleanDate` y `parseDateToIso` exigen
+  // `YYYY-MM-DD`, así que "Vencido / Por vencer / A pagar este mes" saldría en
+  // $0 y los egresos `cxp:` se re-fecharían al asOfDate.
+  it('normaliza el DD-MM-YYYY que guarda la tabla origen', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse([
+      {
+        Cia: '00011',
+        No_Proveedor: 'P-9',
+        No_Factura: 'F-9',
+        Fecha_Factura: '31-08-2026',
+        Fecha_Vence: '30-09-2026',
+        Fecha_Programacion_Pago: '05-10-2026',
+        Importe_Pendiente_Pesos: 100,
+      },
+    ])));
+
+    const [r] = await fetchAgedBalances({ cia: '00011' });
+    expect(r.fechaFactura).toBe('2026-08-31');
+    expect(r.fechaVence).toBe('2026-09-30');
+    // Día ≤ 12: se lee DD-MM (formato medido de la tabla), no MM-DD.
+    expect(r.fechaProgramacionPago).toBe('2026-10-05');
+  });
+
+  it('deja intacto el ISO y no inventa fecha con un valor irreconocible', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse([
+      {
+        Cia: '00011',
+        No_Proveedor: 'P-9',
+        Fecha_Factura: '2026-08-31 00:00:00.000',
+        Fecha_Vence: '2026/09/30',
+        Fecha_Programacion_Pago: '',
+        Importe_Pendiente_Pesos: 100,
+      },
+    ])));
+
+    const [r] = await fetchAgedBalances({ cia: '00011' });
+    expect(r.fechaFactura).toBe('2026-08-31');
+    // Diagonales: `M/D/YYYY` es formato US y sería ambiguo — passthrough.
+    expect(r.fechaVence).toBe('2026/09/30');
+    expect(r.fechaProgramacionPago).toBe('');
+  });
 });
 
 // ───────────────────────────────────────────────────────────────

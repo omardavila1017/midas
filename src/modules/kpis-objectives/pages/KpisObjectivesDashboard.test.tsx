@@ -7,13 +7,34 @@ import type {
   CobranzaPayment,
   CobranzaRecord,
 } from '../../../services/jdeTypes';
+import type { FinancialProjectionSourceInput } from '../../financial-projection/services/financialProjectionService';
 import KpisObjectivesDashboard from './KpisObjectivesDashboard';
+
+// Espía sobre la fuente de proyección: este tablero es el ÚNICO que la
+// construye por su cuenta (síncrono, `enablePredictive:false`), así que un
+// input de dinero que Proyección/Planeación sí mandan puede faltar aquí sin
+// que ninguna otra suite lo note.
+const captured = vi.hoisted(() => ({ inputs: [] as FinancialProjectionSourceInput[] }));
+
+vi.mock('../../financial-projection/services/financialProjectionService', async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import('../../financial-projection/services/financialProjectionService')
+  >();
+  return {
+    ...actual,
+    buildFinancialProjectionSourceData: (input: FinancialProjectionSourceInput) => {
+      captured.inputs.push(input);
+      return actual.buildFinancialProjectionSourceData(input);
+    },
+  };
+});
 
 describe('KpisObjectivesDashboard', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-05-29T18:00:00.000Z'));
     localStorage.clear();
+    captured.inputs.length = 0;
   });
 
   afterEach(() => {
@@ -50,6 +71,52 @@ describe('KpisObjectivesDashboard', () => {
     expect(screen.queryByText(/Mov\. banco/i)).toBeNull();
     expect(screen.getByText('Razones financieras')).toBeTruthy();
     expect(screen.getByText(/Días de caja 167 días/)).toBeTruthy();
+  });
+
+  // El overlay de recibos (`/cobranza` reporta `Importe_Pendiente` inflado
+  // porque `jde.Cobranza_Citi` no aplica los cobros) sólo descuenta si los
+  // recibos LLEGAN al motor. Este tablero arma su propia fuente, así que sin
+  // pasarlos seguía proyectando como entrada FUTURA dinero ya cobrado — el
+  // mismo doble conteo que MOTOR 2 cerró para Proyección y Planeación.
+  it('pasa los recibos de cobranza a la fuente de proyección', () => {
+    render(
+      <KpisObjectivesDashboard
+        bankStatements={[statement({ saldoInicial: 900, saldoFinal: 900 })]}
+        cobranzaRecords={[cobranzaRecord({ importePendientePesos: 400 })]}
+        cobranzaPayments={[
+          payment({
+            idPago: 'P-1',
+            importeRecibo: 400,
+            applications: [{
+              idPago: 'P-1',
+              cia: '00011',
+              fechaAplicacion: '2026-05-05',
+              noCliente: 'C',
+              cliente: 'Cliente',
+              tipoDocto: 'RI',
+              noFactura: 'F',
+              noFacturaNormalizada: 'F',
+              fechaFactura: '2026-05-01',
+              fechaVencimiento: '2026-05-31',
+              diasAntiguedadFafv: 0,
+              importeCobrado: 400,
+              importeOriginalFactura: 400,
+              tasaIva: '16',
+              importeIvaFacturaOriginal: 0,
+            }],
+          }),
+        ]}
+        cxpRecords={[]}
+        assumptions={{ year: 2026, globalCompliance: 1, factorajeDays: 30 }}
+      />,
+    );
+
+    expect(captured.inputs.length).toBeGreaterThan(0);
+    const last = captured.inputs[captured.inputs.length - 1];
+    const applied = (last.cobranzaPayments ?? [])
+      .flatMap((p) => p.applications ?? [])
+      .reduce((sum, app) => sum + app.importeCobrado, 0);
+    expect(applied).toBe(400);
   });
 });
 

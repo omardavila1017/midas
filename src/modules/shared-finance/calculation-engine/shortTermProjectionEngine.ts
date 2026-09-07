@@ -387,7 +387,14 @@ function collectInflowLines(
   _todayYm: string,
   context: InflowContext,
 ): RawLine[] {
-  const lines: RawLine[] = collectCxcInflowLines(month, inputs, context);
+  // Pozo de recibos COMPARTIDO por las dos capas de ingreso por factura (CXC
+  // de /cobranza y el sintético de Viajes Especiales): el recibo es del folio,
+  // no de la fuente que lo reporta, así que un pozo por capa podría descontar
+  // el MISMO cobro dos veces si un folio apareciera en ambas. Se construye
+  // sobre `context.cxcRecords` COMPLETO (antes del dedup por folio) y se agota
+  // en orden — primero CXC, que es la fuente más autoritativa.
+  const receiptSurplusByFolio = buildReceiptPool(inputs, context);
+  const lines: RawLine[] = collectCxcInflowLines(month, inputs, context, receiptSurplusByFolio);
 
   // ROL: viajes ejecutados aún no facturados. Monto real ejecutado, fechado
   // por la regla de pago del catálogo (overlay /cobranza). `amountLocked` →
@@ -436,7 +443,19 @@ function collectInflowLines(
     const projectedDate = projectViajeEspecialDate(viaje, inputs.asOfDate);
     if (!projectedDate || projectedDate.slice(0, 7) !== month.yearMonth) continue;
     const subTotal = viaje.totalNegociado;
-    const grossAmount = subTotal * 1.16;
+    const brutoViaje = subTotal * 1.16;
+    // MISMA regla que el CXC de /cobranza: si `/cobranzaindicadores` ya reporta
+    // cobrado el folio de este viaje, no se proyecta como entrada futura. El
+    // sintético existe justamente porque la factura NO está en /cobranza, así
+    // que `cobradaBancoKeys` y el pozo de esa fuente no lo cubren; sin esto, un
+    // viaje ya cobrado seguía proyectándose. Sólo a la baja — nunca suma.
+    const ajusteViaje = consumeReceiptSurplus(
+      receiptSurplusByFolio,
+      receiptOverlayKey(viaje.cia, viaje.facturaJDE),
+      brutoViaje,
+    );
+    const grossAmount = brutoViaje - ajusteViaje;
+    if (grossAmount <= 0) continue;
     const facturaLabel = viaje.facturaJDE || `K_Renta ${viaje.kRenta}`;
     lines.push({
       id: `cxc:especial:viaje:${viaje.cia}:${viaje.kRenta}`,
@@ -460,9 +479,18 @@ function collectInflowLines(
       lockState: 'RESTRICTED',
       taxTreatment: 'IVA_CAUSED',
       taxRate: 16,
-      taxBaseAmount: subTotal,
-      taxAmount: grossAmount - subTotal,
-      comment: `Viaje especial reportado por API ${viaje.facturaJDE ? 'con factura' : 'sin factura'} y aún no presente en cobranza JDE. Crédito y fecha provienen del API de Viajes Especiales.`,
+      // El IVA sigue al importe REALMENTE proyectado (mismo criterio que
+      // `cxcTaxMeta` con `amountOverride`): si se desglosara sobre el bruto,
+      // un viaje ya cobrado en parte seguiría aportando IVA de más al causado.
+      // Sin ajuste se conserva `subTotal` tal cual — byte-idéntico, sin ruido
+      // de punto flotante por dividir y multiplicar por 1.16.
+      taxBaseAmount: ajusteViaje > 0 ? grossAmount / 1.16 : subTotal,
+      taxAmount: ajusteViaje > 0 ? grossAmount - grossAmount / 1.16 : grossAmount - subTotal,
+      comment: `Viaje especial reportado por API ${viaje.facturaJDE ? 'con factura' : 'sin factura'} y aún no presente en cobranza JDE. Crédito y fecha provienen del API de Viajes Especiales.${
+        ajusteViaje > 0
+          ? ` Saldo ajustado: /cobranzaindicadores reporta cobro de la factura ${viaje.facturaJDE} que /cobranza aún no refleja.`
+          : ''
+      }`,
       amountLocked: true,
     });
   }
@@ -470,10 +498,27 @@ function collectInflowLines(
   return lines;
 }
 
+/**
+ * Excedente del recibo por folio, listo para consumirse. Se calcula sobre el
+ * set COMPLETO de líneas de `/cobranza` (la Σ de `bruto − pendiente` tiene que
+ * abarcar TODAS las líneas del folio, porque el recibo es del folio entero);
+ * calcularlo sobre el set dedupeado subestimaría lo ya aplicado y el excedente
+ * saldría inflado → descontaría de más.
+ */
+function buildReceiptPool(
+  inputs: CanonicalProjectionInputs,
+  context: InflowContext,
+): Map<string, number> {
+  return inputs.cobranzaAppliedByFactura
+    ? buildReceiptSurplusByFolio(context.cxcRecords, inputs.cobranzaAppliedByFactura)
+    : new Map<string, number>();
+}
+
 function collectCxcInflowLines(
   month: CanonicalMonthlyPoint,
   inputs: CanonicalProjectionInputs,
   context: InflowContext,
+  receiptSurplusByFolio: Map<string, number>,
 ): RawLine[] {
   if (context.cxcRecords.length === 0) return [];
   const lines: RawLine[] = [];
@@ -490,14 +535,6 @@ function collectCxcInflowLines(
   // cruce bancario por factura no funciona y `cobradaBancoKeys` no alcanza).
   // Sólo corrige a la BAJA — ver `cobranzaReceiptsOverlay`.
   //
-  // El pozo se construye sobre `context.cxcRecords` COMPLETO (antes del dedup
-  // por folio de abajo): la Σ de `bruto − pendiente` tiene que abarcar TODAS
-  // las líneas del folio, porque el recibo es del folio entero. Calcularla
-  // sobre el set dedupeado subestimaría lo que `/cobranza` ya aplicó y el
-  // excedente saldría inflado → descontaría de más.
-  const receiptSurplusByFolio = inputs.cobranzaAppliedByFactura
-    ? buildReceiptSurplusByFolio(context.cxcRecords, inputs.cobranzaAppliedByFactura)
-    : new Map<string, number>();
 
   for (const record of context.cxcRecords) {
     if (record.importePendientePesos <= 0) continue;
@@ -584,6 +621,13 @@ function collectCxcInflowLines(
       taxAmount: taxMeta.taxAmount,
       comment: [
         'Factura CXC abierta en JDE; se proyecta sólo el saldo pendiente.',
+        // Confiesa el ajuste: el drilldown pinta el `importePendientePesos`
+        // CRUDO del registro, así que sin esta línea el usuario ve un saldo
+        // mayor que el importe proyectado y nada que lo explique. Espejo del
+        // `statusLabel` que el calendario de Cobranza ya emite.
+        ajustePorRecibo > 0
+          ? `Saldo ajustado: /cobranzaindicadores reporta cobro que /cobranza aún no aplica (${Math.round(record.importePendientePesos).toLocaleString('es-MX')} → ${Math.round(pendienteEfectivo).toLocaleString('es-MX')}).`
+          : '',
         dateReason,
         dateInfo.moved ? 'La fecha esperada ya venció; se agenda al siguiente día operativo de la proyección.' : '',
       ].filter(Boolean).join(' '),

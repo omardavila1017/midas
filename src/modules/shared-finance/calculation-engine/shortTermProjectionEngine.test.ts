@@ -380,6 +380,70 @@ describe('overlay de recibos: /cobranza no aplica los cobros', () => {
     expect(movement!.taxAmount).toBeCloseTo(21_201.53 - 21_201.53 / 1.16, 2);
   });
 
+  // El drilldown de un `cxc:` pinta el `importePendientePesos` CRUDO del
+  // registro, así que un ajuste silencioso deja al usuario con un saldo mayor
+  // que el importe proyectado y nada que lo explique — la clase de artefacto
+  // plausible-pero-inexplicable que este repo persigue. El calendario ya lo
+  // confiesa en su `statusLabel`; el movimiento debe hacerlo en su comentario.
+  it('confiesa el ajuste por recibo en el comentario del movimiento', () => {
+    const applied = new Map([[`${CIA_CITI}::RI-301306`, 200_000]]);
+    expect(run(applied)!.comments?.join(' ')).toMatch(/Saldo ajustado/);
+    // Sin ajuste no se agrega ruido.
+    expect(run(undefined)!.comments?.join(' ')).not.toMatch(/Saldo ajustado/);
+  });
+
+  // El sintético de Viajes Especiales existe justamente porque la factura NO
+  // está en `/cobranza`, así que ni `cobradaBancoKeys` ni el pendiente de esa
+  // fuente lo cubren: sin mirar el pozo, un viaje que Indicadores ya reporta
+  // cobrado se seguía proyectando como entrada futura.
+  it('tampoco proyecta el viaje especial que los recibos reportan cobrado', () => {
+    const viaje = {
+      cia: CIA_CITI,
+      empresaCodigo: 'SIRS2',
+      kRenta: 991,
+      kCliente: 77,
+      dCliente: 'CLIENTE ESPECIAL',
+      rfc: 'XAXX010101000',
+      claveJDE: 'C-77',
+      totalNegociado: 100_000,
+      diasCredito: 30,
+      facturaJDE: 'RI-999001',
+      fechaFactura: '2026-09-20',
+    };
+    const inputsFor = (applied?: Map<string, number>) => ({
+      companyCode: 'all',
+      bankStatements: [],
+      clients: [],
+      providers: [],
+      cxpRecords: [],
+      cobranzaRecords: [],
+      viajesEspecialesRecords: [viaje],
+      assumptions,
+      budget: null,
+      startingBalance: 0,
+      asOfDate: '2026-09-07',
+      cobranzaAppliedByFactura: applied,
+    });
+    const runViaje = (applied?: Map<string, number>) => {
+      const inputs = inputsFor(applied);
+      const monthly = buildCanonicalProjection(inputs).monthly;
+      return buildShortTermProjectionMovements({ monthly, inputs })
+        .filter((m) => m.id === `cxc:especial:viaje:${CIA_CITI}:991`);
+    };
+
+    // Sin recibos: se proyecta el bruto con IVA (degrada solo).
+    const sinRecibos = runViaje();
+    expect(sinRecibos).toHaveLength(1);
+    expect(sinRecibos[0].projectedAmount).toBeCloseTo(116_000, 2);
+    // Recibo por el folio completo: sale de la proyección.
+    expect(runViaje(new Map([[`${CIA_CITI}::RI-999001`, 116_000]]))).toEqual([]);
+    // Cobro parcial: sólo el residuo, con su IVA reescalado.
+    const parcial = runViaje(new Map([[`${CIA_CITI}::RI-999001`, 100_000]]));
+    expect(parcial).toHaveLength(1);
+    expect(parcial[0].projectedAmount).toBeCloseTo(16_000, 2);
+    expect(parcial[0].taxAmount).toBeCloseTo(16_000 - 16_000 / 1.16, 2);
+  });
+
   it('sin recibos el resultado es byte-idéntico al pendiente reportado', () => {
     // Degrada solo: ene–may 2026 no tiene NI UNA fila en Cobranza_Indicadores,
     // así que esos meses no se pueden mover ni un peso.

@@ -313,6 +313,19 @@ describe('buildCollectionCalendar', () => {
       expect(calendar.events.some(e => e.source === 'JDE_PAID_UNMATCHED')).toBe(false);
     });
 
+    // La factura liquidada por el recibo NO produce evento (correcto: ya no hay
+    // saldo), pero entonces desaparecía del calendario sin rastro y el CSV de
+    // cruce la exportaba con FuenteDato/EstadoCalendario/MotivoFecha VACÍOS,
+    // indistinguible de una que el motor no supo clasificar.
+    it('registra la factura liquidada por el recibo para que el export la explique', () => {
+      const calendar = build([makePayment('RI - 310198', 100000)]);
+      expect(calendar.receiptSettledByFactura.get('00011::RI-310198')).toBe(100000);
+      // Un cobro parcial SÍ tiene evento, así que no entra al registro.
+      expect(build([makePayment('RI - 310198', 40000)]).receiptSettledByFactura.size).toBe(0);
+      // Sin recibos no hay nada que registrar.
+      expect(build().receiptSettledByFactura.size).toBe(0);
+    });
+
     it('cruza el folio pese al drift de formato entre los dos endpoints', () => {
       // Indicadores manda "RI - 310198"; /cobranza manda "RI-310198".
       expect(build([makePayment('RI - 310198', 40000)]).events

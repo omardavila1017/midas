@@ -132,6 +132,13 @@ export default function TaxDashboard(props: Props) {
       props.providers,
       props.cxpRecords,
       props.cobranzaRecords,
+      // MUEVE EL DINERO del source (descuenta el saldo por cobrar que
+      // `/cobranza` reporta inflado — ver `cobranzaReceiptsOverlay`), y el
+      // spread de arriba lo incluye. Sin la dep, este memo podía capturar un
+      // array de recibos stale y construir una fuente DISTINTA a la de
+      // Proyección/Planeación (que sí lo listan), con el costo extra de
+      // desalojarse mutuamente en el memo compartido (`SOURCE_CACHE_LIMIT = 1`).
+      props.cobranzaPayments,
       props.auxiliarReconciliation,
       props.purchaseReceipts,
       props.projectionPurchaseReceipts,

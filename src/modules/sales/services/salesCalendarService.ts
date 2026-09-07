@@ -13,9 +13,9 @@
  * (ROL/Especiales reportan subtotal sin IVA).
  */
 
-import type { CobranzaRecord, RolRecord, ViajeEspecialRecord } from '../../../services/jde';
+import type { CobranzaPayment, CobranzaRecord, RolRecord, ViajeEspecialRecord } from '../../../services/jde';
 import { buildRolCobranzaCross, normFactura } from '../../../domain/rolCobranzaMatch';
-import { segmentOf, SEGMENT_UNCLASSIFIED } from '../../../domain/cobranzaSegment';
+import { segmentOf, buildSegmentByFactura, SEGMENT_UNCLASSIFIED } from '../../../domain/cobranzaSegment';
 import { csvDate } from '../../../utils/export';
 import { sourceOf, type SourceAttribution, type SourceId } from '../../../domain/sourceAttribution';
 
@@ -123,13 +123,21 @@ export interface SaleSourceInputs {
   cobranza: CobranzaRecord[];
   rol: RolRecord[];
   viajesEspeciales: ViajeEspecialRecord[];
+  /**
+   * Recibos de `/cobranzaindicadores`. ÚNICA fuente del segmento: la tabla de
+   * `/cobranza` no tiene columna `Tipo_Servicio`, así que sin esto el filtro y
+   * el desglose por segmento nunca aparecen (ver `cobranzaSegment`). Sólo
+   * clasifica — no toca montos, fechas ni el dedup facturado/por-facturar.
+   */
+  cobranzaPayments?: CobranzaPayment[];
 }
 
 /**
  * Construye la lista de ventas (facturado + por facturar) sin doble conteo.
  */
-export function buildSaleEntries({ cobranza, rol, viajesEspeciales }: SaleSourceInputs): SaleEntry[] {
+export function buildSaleEntries({ cobranza, rol, viajesEspeciales, cobranzaPayments }: SaleSourceInputs): SaleEntry[] {
   const entries: SaleEntry[] = [];
+  const segmentByFactura = buildSegmentByFactura(cobranzaPayments);
 
   // 1. Facturado — cada factura de cobranza es una venta, fechada por fechaFactura.
   for (const r of cobranza) {
@@ -145,7 +153,7 @@ export function buildSaleEntries({ cobranza, rol, viajesEspeciales }: SaleSource
       referencia: cleanString(r.noFactura),
       cia: cleanString(r.cia),
       source: 'cobranza',
-      segmento: segmentOf(r),
+      segmento: segmentOf(r, segmentByFactura),
     });
   }
 

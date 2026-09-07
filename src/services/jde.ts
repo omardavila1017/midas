@@ -284,19 +284,53 @@ function splitIntoFixedDayWindows(from: string, to: string, windowDays: number):
 // 1. Antigüedad de Saldos
 // ───────────────────────────────────────────────────────────────
 
+/**
+ * Fecha de JDE → ISO `YYYY-MM-DD`, tolerando el formato `DD-MM-YYYY`.
+ *
+ * POR QUÉ: `jde.Antiguedad_Saldos` es la ÚNICA tabla del espejo que guarda sus
+ * fechas como varchar **`DD-MM-YYYY`** (`fecha_factura`, `fecha_vence`,
+ * `fecha_Programacion_Pago`); todas las demás guardan ISO. Verificado con la
+ * aritmética de la propia tabla (auditoría 2026-09-07): `fecha_factura`
+ * `'31-08-2026'` + `fecha_vence` `'30-09-2026'` + `Dias_Vencida = -29` al
+ * 01-sep sólo cuadra leyendo DD-MM.
+ *
+ * Si el SP de `/antiguedadsaldos` convierte a ISO, esta función es un
+ * **passthrough** y no cambia un solo registro. Si algún día deja de
+ * convertir, sin esto el vencimiento de CXP se cae por completo y en silencio:
+ * `cleanDate` (motor) y `parseDateToIso` (tab CXP) exigen `YYYY-MM-DD`, así que
+ * TODA factura quedaría sin vencimiento — "Vencido / Por vencer / A pagar este
+ * mes" en $0 y los egresos `cxp:` re-fechados al `asOfDate`.
+ *
+ * SÓLO con guiones: `M/D/YYYY` con diagonales es formato US y sería ambiguo.
+ * Un valor no reconocido se devuelve tal cual (mismo comportamiento previo).
+ */
+export function normalizeJdeDate(v: unknown): string {
+  const s = trimIsoDate(v);
+  if (!s || /^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const dmy = s.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+  if (!dmy) return s;
+  const [, dd, mm, yyyy] = dmy;
+  const day = Number(dd);
+  const month = Number(mm);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return s;
+  return `${yyyy}-${mm}-${dd}`;
+}
+
 function mapAgedBalance(raw: RawRecord): AgedBalanceRecord {
   return {
     cia:                     normalizeCia(pick(raw, ['cia', 'compania', 'company'])),
     noProveedor:             toStr(pick(raw, ['noProveedor', 'no_prov', 'no_proveedor', 'proveedor'])),
     nombre:                  toStr(pick(raw, ['nombre', 'nombreProveedor', 'razonSocial'])),
     noFactura:               toStr(pick(raw, ['noFactura', 'no_factura', 'factura'])),
-    // trimIsoDate: los consumidores fechan con cleanDate (regex estricto
+    // normalizeJdeDate: los consumidores fechan con cleanDate (regex estricto
     // ^\d{4}-\d{2}-\d{2}$). Si el API sirviera ISO+hora (como ya pasó en
     // /cobranza), las 3 fechas fallarían el regex y TODO el CXP abierto se
-    // re-fecharía silenciosamente a asOfDate.
-    fechaFactura:            trimIsoDate(pick(raw, ['fechaFactura', 'fecha_factura'])),
-    fechaVence:              trimIsoDate(pick(raw, ['fechaVence', 'fecha_vence', 'fechaVencimiento'])),
-    fechaProgramacionPago:   trimIsoDate(pick(raw, ['fechaProgramacionPago', 'fecha_programacion_pago', 'fechaProgPago'])),
+    // re-fecharía silenciosamente a asOfDate. La tabla origen guarda además
+    // `DD-MM-YYYY` en varchar (única del espejo), así que la normalización
+    // cubre las dos formas — passthrough si el SP ya entrega ISO.
+    fechaFactura:            normalizeJdeDate(pick(raw, ['fechaFactura', 'fecha_factura'])),
+    fechaVence:              normalizeJdeDate(pick(raw, ['fechaVence', 'fecha_vence', 'fechaVencimiento'])),
+    fechaProgramacionPago:   normalizeJdeDate(pick(raw, ['fechaProgramacionPago', 'fecha_programacion_pago', 'fechaProgPago'])),
     diasVencida:             toNum(pick(raw, ['diasVencida', 'dias_vencida', 'diasVencido'])),
     importeBrutoPesos:       toNum(pick(raw, ['importeBrutoPesos', 'importe_bruto_pesos'])),
     importePendientePesos:   toNum(pick(raw, ['importePendientePesos', 'importe_pendiente_pesos'])),

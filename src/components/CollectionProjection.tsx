@@ -23,7 +23,7 @@ import {
   type CollectionCalendarEventSource,
 } from '../domain/collectionCalendarEngine';
 import { buildRolProjectedInflows } from '../domain/rolProjectionEngine';
-import { segmentOf, listSegments, buildSegmentBreakdown, SEGMENT_UNCLASSIFIED } from '../domain/cobranzaSegment';
+import { segmentOf, listSegments, buildSegmentBreakdown, buildSegmentByFactura, SEGMENT_UNCLASSIFIED } from '../domain/cobranzaSegment';
 import {
   buildCobranzaBankCuadre,
   type CuadreStatus,
@@ -2314,16 +2314,22 @@ function CobranzaRealView({
   }, [records]);
 
   // Segmento / tipo de servicio (B2.3). El filtro y el desglose sólo aparecen
-  // cuando el API realmente trae al menos un segmento clasificado — así el
-  // mecanismo queda listo sin ensuciar la UI mientras el dato no fluya.
-  const allSegments = useMemo(() => listSegments(records), [records]);
+  // cuando realmente hay al menos un segmento clasificado — así el mecanismo
+  // queda listo sin ensuciar la UI mientras el dato no fluya.
+  //
+  // `jde.Cobranza_Citi` NO tiene la columna `Tipo_Servicio`, así que el dato
+  // llega por el RECIBO que cobró la factura (`/cobranzaindicadores`, donde sí
+  // viene al 100%). Sin este overlay el filtro nunca aparecía. Ver
+  // `cobranzaSegment` para la semántica.
+  const segmentByFactura = useMemo(() => buildSegmentByFactura(payments), [payments]);
+  const allSegments = useMemo(() => listSegments(records, segmentByFactura), [records, segmentByFactura]);
   const hasSegments = useMemo(() => allSegments.some(s => s !== SEGMENT_UNCLASSIFIED), [allSegments]);
 
   const filtered = useMemo(() => {
     return records.filter(r => {
       if (ciaFilter.size > 0 && !(r.cia && ciaFilter.has(r.cia))) return false;
       if (estatusFilter !== 'all' && r.estatus !== estatusFilter) return false;
-      if (segmentoFilter !== 'all' && segmentOf(r) !== segmentoFilter) return false;
+      if (segmentoFilter !== 'all' && segmentOf(r, segmentByFactura) !== segmentoFilter) return false;
       if (crossFilter !== 'all') {
         const m = matchByFactura.get(`${r.cia}::${r.noFactura}`);
         const matched = m?.status === 'cobrada-banco';
@@ -2342,9 +2348,9 @@ function CobranzaRealView({
       }
       return true;
     });
-  }, [records, ciaFilter, estatusFilter, segmentoFilter, crossFilter, query, matchByFactura]);
+  }, [records, ciaFilter, estatusFilter, segmentoFilter, crossFilter, query, matchByFactura, segmentByFactura]);
 
-  const segmentBreakdown = useMemo(() => buildSegmentBreakdown(filtered), [filtered]);
+  const segmentBreakdown = useMemo(() => buildSegmentBreakdown(filtered, segmentByFactura), [filtered, segmentByFactura]);
 
   if (records.length === 0 && payments.length === 0) {
     return (
@@ -2490,6 +2496,13 @@ function CobranzaRealView({
             const rows = filtered.map(r => {
               const m = matchByFactura.get(`${r.cia}::${r.noFactura}`);
               const calendarEvent = calendarEventByFactura.get(`${r.cia}::${r.noFactura}`);
+              // Factura sin evento porque el recibo absorbió su saldo: sin esto
+              // salía con FuenteDato/EstadoCalendario/MotivoFecha VACÍOS, igual
+              // que una que el motor no supo clasificar. Son las 1,111 facturas
+              // ($227.41M) que `/cobranza` sigue reportando abiertas.
+              const liquidadaPorRecibo = calendarEvent
+                ? undefined
+                : collectionCalendar.receiptSettledByFactura.get(`${r.cia}::${r.noFactura}`);
               return {
                 Cia: r.cia,
                 Cliente: r.nombreCliente,
@@ -2504,11 +2517,19 @@ function CobranzaRealView({
                 PendienteMXN: r.importePendientePesos,
                 Moneda: r.moneda,
                 EstatusJDE: r.estatus,
-                FuenteDato: calendarEvent ? COLLECTION_CALENDAR_SOURCE_LABELS[calendarEvent.source] : '',
+                FuenteDato: calendarEvent
+                  ? COLLECTION_CALENDAR_SOURCE_LABELS[calendarEvent.source]
+                  : liquidadaPorRecibo
+                    ? 'Recibo /cobranzaindicadores'
+                    : '',
                 FechaCalendario: csvDate(calendarEvent?.date ?? ''),
-                EstadoCalendario: calendarEvent?.statusLabel ?? '',
+                EstadoCalendario: calendarEvent?.statusLabel
+                  ?? (liquidadaPorRecibo ? 'Cobrada según recibos; fuera del calendario' : ''),
                 ReglaAplicada: calendarEvent?.ruleApplied ?? '',
-                MotivoFecha: calendarEvent?.dateReason ?? '',
+                MotivoFecha: calendarEvent?.dateReason
+                  ?? (liquidadaPorRecibo
+                    ? `/cobranzaindicadores reporta ${Math.round(liquidadaPorRecibo).toLocaleString('es-MX')} cobrados que /cobranza aún no aplica.`
+                    : ''),
                 EstatusCruce: m?.status ?? 'pendiente',
                 RevisionCruce: m?.reviewStatus ?? 'unmatched',
                 MotivoCruce: m?.matchReason ?? '',

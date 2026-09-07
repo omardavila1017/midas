@@ -1,4 +1,5 @@
-import type { CobranzaRecord } from '../services/jdeTypes';
+import type { CobranzaPayment, CobranzaRecord } from '../services/jdeTypes';
+import { receiptOverlayKey } from './cobranzaReceiptsOverlay';
 
 /**
  * Segmento / tipo de servicio de cobranza (B2.3).
@@ -7,13 +8,63 @@ import type { CobranzaRecord } from '../services/jdeTypes';
  * puede venir vacío; aquí lo colapsamos a una etiqueta de segmento estable,
  * agrupando lo no clasificado bajo `SEGMENT_UNCLASSIFIED`. Todo es display-only
  * — no toca el motor de proyección ni de conciliación.
+ *
+ * DE DÓNDE SALE EL DATO (2026-09-07)
+ * ----------------------------------
+ * `jde.Cobranza_Citi` —la fuente de `/cobranza`— **no tiene** columna
+ * `Tipo_Servicio`, así que `record.tipoServicio` viene vacío SIEMPRE y el
+ * filtro "Segmento" (que sólo se pinta con ≥1 segmento clasificado) nunca
+ * aparecía: el mecanismo estaba completo y muerto. La columna sí existe, y al
+ * 100%, en `jde.Cobranza_Indicadores` — que Midas ya baja y ya mapea a
+ * `CobranzaPayment.tipoServicio` (6 valores distintos medidos).
+ *
+ * Por eso el segmento admite un OVERLAY `factura → segmento` derivado de los
+ * recibos (`buildSegmentByFactura`). **Semántica explícita:** es el segmento
+ * del COBRO que liquidó (total o parcialmente) esa factura, atribuido a la
+ * factura. Una factura sin recibo sigue en `Sin clasificar` — nunca se inventa.
+ * El campo propio del registro MANDA cuando existe: si el backend algún día
+ * publica `Tipo_Servicio` en `/cobranza`, ese dato gana sin tocar código.
  */
 export const SEGMENT_UNCLASSIFIED = 'Sin clasificar';
 
-/** Etiqueta de segmento de una factura; `Sin clasificar` cuando no hay dato. */
-export function segmentOf(r: CobranzaRecord): string {
+/**
+ * `cia::folio` → tipo de servicio del recibo que cobró esa factura.
+ *
+ * Llave con `receiptOverlayKey` (folio normalizado con la `normFactura`
+ * canónica): los dos endpoints difieren de formato — Indicadores manda
+ * `"RI - 92238"` y `/cobranza` manda `"RI-310071"`. Gana la PRIMERA aplicación
+ * con segmento que se ve para el folio (determinista sobre la lista de entrada;
+ * un folio cobrado por varios recibos del mismo cliente trae el mismo servicio).
+ */
+export function buildSegmentByFactura(
+  payments: CobranzaPayment[] | undefined,
+): Map<string, string> {
+  const byFactura = new Map<string, string>();
+  for (const payment of payments ?? []) {
+    const segmento = (payment.tipoServicio ?? '').replace(/\s+/g, ' ').trim();
+    if (!segmento) continue;
+    for (const application of payment.applications ?? []) {
+      const key = receiptOverlayKey(application.cia || payment.cia, application.noFactura);
+      if (!key || byFactura.has(key)) continue;
+      byFactura.set(key, segmento);
+    }
+  }
+  return byFactura;
+}
+
+/**
+ * Etiqueta de segmento de una factura; `Sin clasificar` cuando no hay dato.
+ * El `overlay` (segmento del recibo) sólo se consulta si el registro no trae
+ * el suyo — el dato propio de la factura siempre manda.
+ */
+export function segmentOf(r: CobranzaRecord, overlay?: Map<string, string>): string {
   const raw = (r.tipoServicio ?? '').replace(/\s+/g, ' ').trim();
-  return raw || SEGMENT_UNCLASSIFIED;
+  if (raw) return raw;
+  if (overlay && overlay.size > 0) {
+    const fromReceipt = overlay.get(receiptOverlayKey(r.cia, r.noFactura));
+    if (fromReceipt) return fromReceipt;
+  }
+  return SEGMENT_UNCLASSIFIED;
 }
 
 export interface SegmentTotal {
@@ -30,10 +81,10 @@ export interface SegmentTotal {
  * Lista de segmentos presentes, ordenada: los clasificados por bruto desc,
  * con "Sin clasificar" siempre al final. Útil para poblar el filtro.
  */
-export function listSegments(records: CobranzaRecord[]): string[] {
+export function listSegments(records: CobranzaRecord[], overlay?: Map<string, string>): string[] {
   const seen = new Map<string, string>(); // key (upper) → label (first seen)
   for (const r of records) {
-    const label = segmentOf(r);
+    const label = segmentOf(r, overlay);
     const key = label.toUpperCase();
     if (!seen.has(key)) seen.set(key, label);
   }
@@ -46,10 +97,13 @@ export function listSegments(records: CobranzaRecord[]): string[] {
  * segmento en mayúsculas para no fragmentar por casing, mostrando el primer
  * casing visto.
  */
-export function buildSegmentBreakdown(records: CobranzaRecord[]): SegmentTotal[] {
+export function buildSegmentBreakdown(
+  records: CobranzaRecord[],
+  overlay?: Map<string, string>,
+): SegmentTotal[] {
   const byKey = new Map<string, SegmentTotal>();
   for (const r of records) {
-    const label = segmentOf(r);
+    const label = segmentOf(r, overlay);
     const key = label.toUpperCase();
     let row = byKey.get(key);
     if (!row) {

@@ -138,6 +138,7 @@ import {
   type BankQueryState,
 } from './domain/bankStatements';
 import { summarizeBankFreshnessByCompany, summarizeManualBankFreshness } from './domain/bankSourceFreshness';
+import { summarizeSourceDataFreshness } from './domain/sourceDataFreshness';
 import { SANTANDER_FILE_FORMAT } from './domain/santanderCsv';
 import {
   type AbonoEnrichment,
@@ -1753,6 +1754,35 @@ export default function App() {
     [bankStatements],
   );
 
+  // Antigüedad del DATO (no de la consulta) de los datasets JDE fechados. La
+  // fila normal de cada dataset reporta `lastSync` = cuándo Midas pidió, así
+  // que una fuente MUERTA se ve "al día". Medido el 2026-09-07:
+  // `jde.Antiguedad_Saldos` llevaba 6 días sin insertar una fila y el CXP de
+  // Midas terminaba el 31-ago, sin un solo aviso. Hermana de
+  // `companyBankHealthRows`, que cerró lo mismo del lado banco.
+  //
+  // Sólo se emite la fila cuando la fuente está REZAGADA: una por dataset al
+  // día sería ruido que entrena al usuario a ignorar el panel.
+  const staleSourceHealthRows = useMemo<DataHealthDatasetRow[]>(() => {
+    const today = todayISO();
+    const rows: DataHealthDatasetRow[] = [];
+    const push = (key: string, label: string, dates: Iterable<string | undefined>) => {
+      const f = summarizeSourceDataFreshness(dates, today);
+      // `no-data` sin registros = el dataset simplemente no se ha cargado; eso
+      // ya lo dice su propia fila de estado. Sólo hablamos de fuente rezagada.
+      if (f.status === 'fresh' || (f.status === 'no-data' && !f.lastDataDate)) return;
+      rows.push({ key, label, status: f.status === 'aging' ? 'stale' : 'error', lastSync: f.lastDataDate ?? undefined });
+    };
+    if (cxpRecords.length > 0) {
+      push('cxp-data-age', 'CXP · dato más reciente en la fuente', cxpRecords.map((r) => r.fechaFactura));
+    }
+    if (cobranzaRecords.length > 0) {
+      push('cobranza-data-age', 'Cobranza · dato más reciente en la fuente',
+        cobranzaRecords.flatMap((r) => [r.fechaFactura, r.fechaCobro]));
+    }
+    return rows;
+  }, [cxpRecords, cobranzaRecords]);
+
   const dataHealthRows = useMemo<DataHealthDatasetRow[]>(() => {
     const maxTs = (...maps: Record<string, string>[]): string | undefined => {
       let max: string | undefined;
@@ -1768,6 +1798,7 @@ export default function App() {
       ...manualBankHealthRows,
       ...companyBankHealthRows,
       { key: 'cxp', label: 'CXP · Antigüedad de saldos', status: datasetStatus.cxp, lastSync: maxTs(cxpLoadedCias) },
+      ...staleSourceHealthRows,
       { key: 'cobranza', label: 'Cobranza', status: datasetStatus.cobranza, lastSync: maxTs(cobranzaLoadedCias, cobranzaPaymentsLoadedCias) },
       { key: 'compras', label: 'Compras (OCs)', status: datasetStatus.compras, lastSync: maxTs(comprasLoadedCias) },
       { key: 'pagos', label: 'Pagos a proveedores', status: datasetStatus.pagos, lastSync: maxTs(pagoProveedorLoadedCias) },
@@ -1776,7 +1807,8 @@ export default function App() {
       { key: 'rol', label: 'ROL · Viajes', status: datasetStatus.rol, lastSync: maxTs(rolLoadedKeys) },
     ];
   }, [
-    datasetStatus, banksLastSync, manualBankHealthRows, companyBankHealthRows, cxpLoadedCias, cobranzaLoadedCias,
+    datasetStatus, banksLastSync, manualBankHealthRows, companyBankHealthRows,
+    staleSourceHealthRows, cxpLoadedCias, cobranzaLoadedCias,
     cobranzaPaymentsLoadedCias, comprasLoadedCias, pagoProveedorLoadedCias,
     auxiliarContableLoadedCias, nominaLoadedKeys, rolLoadedKeys,
   ]);
@@ -6039,6 +6071,7 @@ export default function App() {
                   cobranzaRecords={cobranzaRecords}
                   rolRecords={rolRecords}
                   viajesEspecialesRecords={viajesEspecialesRecords}
+                  cobranzaPayments={cobranzaPayments}
                   companies={companies}
                 />
               </Suspense>

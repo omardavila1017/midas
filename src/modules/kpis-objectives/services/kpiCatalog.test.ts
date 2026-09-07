@@ -123,7 +123,59 @@ describe('buildKpiRows', () => {
     expect(value('system:caja_final_planeacion')).toBe(9_000);
     expect(value('system:deficit_dias_planeacion')).toBe(2);
   });
+  // `/cobranza` reporta `Importe_Pendiente` inflado porque `jde.Cobranza_Citi`
+  // no aplica los cobros que `/cobranzaindicadores` sí registra (medido
+  // 2026-09-07: 1,694 facturas por $345.3M). El KPI mide "cuánto falta cobrar",
+  // así que descuenta lo ya cobrado — misma regla que MOTOR 2 y el calendario,
+  // y sólo a la baja.
+  it('descuenta del CXC pendiente lo que los recibos ya reportan cobrado', () => {
+    const run = (applications: CobranzaPayment['applications']) => buildKpiRows(
+      {
+        today: '2026-05-29',
+        bankStatements: [statement({ saldoInicial: 1_000, saldoFinal: 1_000 })],
+        cobranzaRecords: [
+          cobranzaRecord({ noFactura: 'RI-500', importeBrutoPesos: 400, importePendientePesos: 400 }),
+        ],
+        cobranzaPayments: [payment({ importeRecibo: 400, applications })],
+        cxpRecords: [cxp({ importePendientePesos: 750 })],
+      },
+      [],
+    ).find((row) => row.key === 'system:cobertura_caja_cxc')?.value;
+
+    // Sin aplicaciones: degrada solo — el pendiente reportado entra completo.
+    expect(run([])).toBeCloseTo((1_000 + 400) / 750);
+    // Recibo del folio completo (formato con espacios de Indicadores): el
+    // pendiente se va a 0 y el KPI deja de contar dinero ya cobrado.
+    expect(run([application({ noFactura: 'RI - 500', importeCobrado: 400 })]))
+      .toBeCloseTo(1_000 / 750);
+    // Cobro parcial: sólo el residuo.
+    expect(run([application({ noFactura: 'RI-500', importeCobrado: 300 })]))
+      .toBeCloseTo((1_000 + 100) / 750);
+  });
 });
+
+function application(
+  patch: Partial<CobranzaPayment['applications'][number]>,
+): CobranzaPayment['applications'][number] {
+  return {
+    idPago: 'P',
+    cia: '00011',
+    fechaAplicacion: '2026-05-05',
+    noCliente: 'C',
+    cliente: 'Cliente',
+    tipoDocto: 'RI',
+    noFactura: 'RI-500',
+    noFacturaNormalizada: 'RI-500',
+    fechaFactura: '2026-05-01',
+    fechaVencimiento: '2026-05-31',
+    diasAntiguedadFafv: 0,
+    importeCobrado: 0,
+    importeOriginalFactura: 400,
+    tasaIva: '16',
+    importeIvaFacturaOriginal: 0,
+    ...patch,
+  };
+}
 
 function statement(patch: Partial<BankAccountStatement>): BankAccountStatement {
   return {

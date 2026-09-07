@@ -111,6 +111,14 @@ export default function KpisObjectivesDashboard({
         providers,
         cxpRecords,
         cobranzaRecords,
+        // Overlay de recibos: `/cobranza` reporta `Importe_Pendiente` inflado
+        // porque `jde.Cobranza_Citi` no aplica los cobros que
+        // `/cobranzaindicadores` sí registra (medido 2026-09-07: $345.3M, de
+        // los cuales $310.5M son de la cía 00011). Sin pasarlo aquí, la base de
+        // planeación de este tablero seguía proyectando ese dinero como entrada
+        // FUTURA — el mismo doble conteo que MOTOR 2 ya descuenta para
+        // Proyección y Planeación. Es input de DINERO, no de display.
+        cobranzaPayments,
         auxiliarReconciliation,
         rolRecords,
         viajesEspecialesRecords,

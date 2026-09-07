@@ -14,7 +14,7 @@ import PageHeader from '../../../components/ui/PageHeader';
 import { fmtCurrency, fmtCompact, fmtKpi, todayISO } from '../../../formatters';
 import { MONTHS } from '../../../types';
 import { useDataWindow } from '../../../contexts/DataWindowContext';
-import type { CobranzaRecord, RolRecord, ViajeEspecialRecord, Company } from '../../../services/jde';
+import type { CobranzaPayment, CobranzaRecord, RolRecord, ViajeEspecialRecord, Company } from '../../../services/jde';
 import { SEGMENT_UNCLASSIFIED } from '../../../domain/cobranzaSegment';
 import {
   aggregateByCompany,
@@ -35,6 +35,8 @@ interface SalesCalendarDashboardProps {
   cobranzaRecords: CobranzaRecord[];
   rolRecords: RolRecord[];
   viajesEspecialesRecords: ViajeEspecialRecord[];
+  /** Recibos: ÚNICA fuente del segmento (ver `cobranzaSegment`). */
+  cobranzaPayments?: CobranzaPayment[];
   companies: Company[];
 }
 
@@ -97,11 +99,17 @@ export default function SalesCalendarDashboard({
   cobranzaRecords,
   rolRecords,
   viajesEspecialesRecords,
+  cobranzaPayments = [],
   companies,
 }: SalesCalendarDashboardProps) {
   const allEntries = useMemo(
-    () => buildSaleEntries({ cobranza: cobranzaRecords, rol: rolRecords, viajesEspeciales: viajesEspecialesRecords }),
-    [cobranzaRecords, rolRecords, viajesEspecialesRecords],
+    () => buildSaleEntries({
+      cobranza: cobranzaRecords,
+      rol: rolRecords,
+      viajesEspeciales: viajesEspecialesRecords,
+      cobranzaPayments,
+    }),
+    [cobranzaRecords, rolRecords, viajesEspecialesRecords, cobranzaPayments],
   );
 
   const companyName = useMemo(() => {

@@ -150,6 +150,18 @@ export interface BuildCollectionCalendarInput {
 export interface BuildCollectionCalendarResult {
   events: CollectionCalendarEvent[];
   summaryBySource: Record<CollectionCalendarEventSource, CollectionCalendarSourceSummary>;
+  /**
+   * `cia::noFactura` (folio CRUDO, misma llave que los eventos) → importe que
+   * el recibo absorbió, para las facturas que el overlay dejó SIN saldo.
+   *
+   * POR QUÉ EXISTE: esas facturas no producen evento —correcto, ya no hay nada
+   * que cobrar— pero entonces desaparecían del calendario sin dejar rastro, y
+   * en el CSV de cruce salían con `FuenteDato`/`EstadoCalendario`/`MotivoFecha`
+   * VACÍOS, indistinguibles de una factura que el motor no supo clasificar.
+   * Son las 1,111 facturas por $227.41M medidas el 2026-08-17. Es puramente
+   * informativo: no mueve montos, fechas ni eventos.
+   */
+  receiptSettledByFactura: Map<string, number>;
 }
 
 const DAY_MS = 86_400_000;
@@ -241,6 +253,10 @@ export function buildCollectionCalendar(input: BuildCollectionCalendarInput): Bu
   // `cobranzaReceiptsOverlay`. Se calcula sobre el set COMPLETO de líneas.
   const receiptSurplusByFolio = buildReceiptSurplusByFolio(cobranzaRecords, appliedByFactura);
 
+  // Facturas cuyo saldo absorbió por completo el recibo: no generan evento,
+  // así que sin este registro desaparecerían del calendario sin explicación.
+  const receiptSettledByFactura = new Map<string, number>();
+
   const consumedByBank = new Set<string>();
   for (const abono of reconciliation.abonoEnrichments) {
     events.push(eventFromAbono(abono, cobranzaByFactura, clientMatchByFactura, assumptions));
@@ -305,6 +321,10 @@ export function buildCollectionCalendar(input: BuildCollectionCalendarInput): Bu
         pendienteEfectivo,
         ajustePorRecibo > 0,
       ));
+    } else if (ajustePorRecibo > 0) {
+      // Liquidada según los recibos: no se emite evento (no queda saldo), pero
+      // se registra para que el export lo pueda decir en vez de dejarla muda.
+      receiptSettledByFactura.set(key, ajustePorRecibo);
     }
   }
 
@@ -341,6 +361,7 @@ export function buildCollectionCalendar(input: BuildCollectionCalendarInput): Bu
   return {
     events,
     summaryBySource: summarizeBySource(events),
+    receiptSettledByFactura,
   };
 }
 

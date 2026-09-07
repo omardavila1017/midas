@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { SEGMENT_UNCLASSIFIED, segmentOf, listSegments, buildSegmentBreakdown } from './cobranzaSegment';
-import type { CobranzaRecord } from '../services/jdeTypes';
+import { SEGMENT_UNCLASSIFIED, segmentOf, listSegments, buildSegmentBreakdown, buildSegmentByFactura } from './cobranzaSegment';
+import type { CobranzaPayment, CobranzaRecord } from '../services/jdeTypes';
 
 function inv(tipoServicio: string | undefined, bruto = 1000, pendiente = 0): CobranzaRecord {
   return {
@@ -62,5 +62,70 @@ describe('listSegments', () => {
   it('lists distinct segments with "Sin clasificar" last', () => {
     expect(listSegments([inv('Spot'), inv('Dedicado'), inv(undefined), inv('spot')]))
       .toEqual(['Dedicado', 'Spot', SEGMENT_UNCLASSIFIED]);
+  });
+});
+
+// `jde.Cobranza_Citi` (la fuente de /cobranza) NO tiene columna `Tipo_Servicio`,
+// así que `record.tipoServicio` viene vacío SIEMPRE y el filtro "Segmento" —que
+// sólo se pinta con ≥1 segmento clasificado— nunca aparecía. La columna sí
+// existe, al 100%, en `jde.Cobranza_Indicadores`, que Midas ya baja y ya mapea.
+describe('segmento derivado del recibo (/cobranzaindicadores)', () => {
+  function pago(tipoServicio: string | undefined, noFactura: string): CobranzaPayment {
+    return {
+      idPago: 'P-1',
+      cia: '00011',
+      fechaCobro: '2026-01-20',
+      fechaContable: '2026-01-20',
+      cuentaBancaria: '123',
+      banco: 'BANAMEX',
+      noRecibo: 'R',
+      importeRecibo: 1000,
+      pendienteAplicar: 0,
+      noCliente: '1',
+      cliente: 'X',
+      noBatch: 'B',
+      tipoCambio: 1,
+      tipoServicio,
+      applications: [{
+        idPago: 'P-1',
+        cia: '00011',
+        fechaAplicacion: '2026-01-20',
+        noCliente: '1',
+        cliente: 'X',
+        tipoDocto: 'RI',
+        noFactura,
+        noFacturaNormalizada: noFactura,
+        fechaFactura: '2026-01-10',
+        fechaVencimiento: '2026-02-10',
+        diasAntiguedadFafv: 0,
+        importeCobrado: 1000,
+        importeOriginalFactura: 1000,
+        tasaIva: '16',
+        importeIvaFacturaOriginal: 0,
+      }],
+    } as CobranzaPayment;
+  }
+
+  it('clasifica la factura con el segmento de su recibo, cruzando el drift de folio', () => {
+    // Indicadores manda "RI - 1"; /cobranza manda "RI-1".
+    const overlay = buildSegmentByFactura([pago('Dedicado', 'RI - 1')]);
+    expect(segmentOf(inv(undefined), overlay)).toBe('Dedicado');
+    expect(listSegments([inv(undefined)], overlay)).toEqual(['Dedicado']);
+    expect(buildSegmentBreakdown([inv(undefined, 500, 100)], overlay)[0])
+      .toMatchObject({ segment: 'Dedicado', invoiceCount: 1, bruto: 500, pendiente: 100 });
+  });
+
+  it('el dato propio de la factura MANDA sobre el del recibo', () => {
+    const overlay = buildSegmentByFactura([pago('Dedicado', 'RI-1')]);
+    expect(segmentOf(inv('Spot'), overlay)).toBe('Spot');
+  });
+
+  it('nunca inventa: sin recibo, sin segmento en el recibo o sin overlay sigue Sin clasificar', () => {
+    expect(segmentOf(inv(undefined), buildSegmentByFactura([pago(undefined, 'RI-1')])))
+      .toBe(SEGMENT_UNCLASSIFIED);
+    expect(segmentOf(inv(undefined), buildSegmentByFactura([pago('Dedicado', 'RI-999')])))
+      .toBe(SEGMENT_UNCLASSIFIED);
+    expect(segmentOf(inv(undefined))).toBe(SEGMENT_UNCLASSIFIED);
+    expect(buildSegmentByFactura(undefined).size).toBe(0);
   });
 });
