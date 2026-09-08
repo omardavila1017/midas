@@ -24,6 +24,7 @@ import {
 } from '../domain/collectionCalendarEngine';
 import { buildRolProjectedInflows } from '../domain/rolProjectionEngine';
 import { segmentOf, listSegments, buildSegmentBreakdown, buildSegmentByFactura, SEGMENT_UNCLASSIFIED } from '../domain/cobranzaSegment';
+import { buildAppliedAmountByFactura } from '../domain/cobranzaReceiptsOverlay';
 import {
   buildCobranzaBankCuadre,
   type CuadreStatus,
@@ -2350,7 +2351,17 @@ function CobranzaRealView({
     });
   }, [records, ciaFilter, estatusFilter, segmentoFilter, crossFilter, query, matchByFactura, segmentByFactura]);
 
-  const segmentBreakdown = useMemo(() => buildSegmentBreakdown(filtered, segmentByFactura), [filtered, segmentByFactura]);
+  // El pendiente del desglose descuenta el cobro que los recibos reportan y
+  // `/cobranza` aún no aplica. `allRecords: records` es load-bearing: el pozo
+  // por folio se agota sobre el set COMPLETO, no sobre lo filtrado.
+  const appliedByFactura = useMemo(() => buildAppliedAmountByFactura(payments), [payments]);
+  const segmentBreakdown = useMemo(
+    () => buildSegmentBreakdown(filtered, segmentByFactura, {
+      allRecords: records,
+      appliedByFactura,
+    }),
+    [filtered, records, segmentByFactura, appliedByFactura],
+  );
 
   if (records.length === 0 && payments.length === 0) {
     return (

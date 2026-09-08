@@ -534,8 +534,6 @@ function collectCxcInflowLines(
   // inflado ($345.3M medidos el 2026-09-07; $310.5M de la cía 00011, donde el
   // cruce bancario por factura no funciona y `cobradaBancoKeys` no alcanza).
   // Sólo corrige a la BAJA — ver `cobranzaReceiptsOverlay`.
-  //
-
   for (const record of context.cxcRecords) {
     if (record.importePendientePesos <= 0) continue;
     // Factura intercompañía (empresa propia del grupo): traspaso, no

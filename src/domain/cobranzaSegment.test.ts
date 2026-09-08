@@ -129,3 +129,82 @@ describe('segmento derivado del recibo (/cobranzaindicadores)', () => {
     expect(buildSegmentByFactura(undefined).size).toBe(0);
   });
 });
+
+/**
+ * El PENDIENTE del desglose aplica el overlay de recibos (2026-09-08).
+ *
+ * Ironía estructural que hace crítico este caso: el segmento SÓLO existe cuando
+ * hay recibo, así que toda fila clasificada de la tabla es justo la que trae el
+ * pendiente inflado por `jde.Cobranza_Citi`. Medido 2026-09-08: $354.4M de
+ * "Pendiente", $341.9M ya cobrados (96.5%).
+ */
+describe('pendiente del desglose: overlay de recibos, sólo a la baja', () => {
+  function linea(
+    noFactura: string,
+    bruto: number,
+    pendiente: number,
+    tipoServicio?: string,
+  ): CobranzaRecord {
+    return { ...inv(tipoServicio, bruto, pendiente), noFactura } as CobranzaRecord;
+  }
+
+  function aplicado(entries: Array<[string, number]>): Map<string, number> {
+    return new Map(entries.map(([folio, monto]) => [`00011::${folio}`, monto]));
+  }
+
+  it('descuenta el cobro que los recibos reportan y /cobranza aún no aplica', () => {
+    // Cifras del segmento medido: la factura sigue "abierta" en /cobranza con su
+    // pendiente completo, pero el recibo ya la cobró entera.
+    const records = [linea('RI-1', 3_000_000, 3_000_000, 'SIR CONTRATO')];
+    const rows = buildSegmentBreakdown(records, undefined, {
+      allRecords: records,
+      appliedByFactura: aplicado([['RI-1', 3_000_000]]),
+    });
+    expect(rows[0]).toMatchObject({ segment: 'SIR CONTRATO', bruto: 3_000_000, pendiente: 0 });
+  });
+
+  it('reparte el pozo POR FOLIO entre sus líneas, no lo resta íntegro a cada una', () => {
+    // Un folio, dos líneas de 100k; el recibo cubrió 150k. Queda 50k por cobrar.
+    const records = [
+      linea('RI-7', 100_000, 100_000, 'IMSS'),
+      linea('RI-7', 100_000, 100_000, 'IMSS'),
+    ];
+    const rows = buildSegmentBreakdown(records, undefined, {
+      allRecords: records,
+      appliedByFactura: aplicado([['RI-7', 150_000]]),
+    });
+    expect(rows[0].pendiente).toBe(50_000);
+  });
+
+  it('el filtro NO hace desaparecer cobranza real: el pozo se agota sobre el set completo', () => {
+    // Mismo folio de arriba, pero el filtro sólo deja ver la segunda línea. Su
+    // pendiente correcto es 50k (el recibo agotó los 100k de la primera).
+    // Consumir el pozo sobre lo filtrado le restaría los 150k enteros → 0.
+    const l1 = linea('RI-7', 100_000, 100_000, 'IMSS');
+    const l2 = linea('RI-7', 100_000, 100_000, 'IMSS');
+    const rows = buildSegmentBreakdown([l2], undefined, {
+      allRecords: [l1, l2],
+      appliedByFactura: aplicado([['RI-7', 150_000]]),
+    });
+    expect(rows[0]).toMatchObject({ invoiceCount: 1, bruto: 100_000, pendiente: 50_000 });
+  });
+
+  it('nunca suma: un recibo mayor que el saldo vivo no vuelve negativo el pendiente', () => {
+    const records = [linea('RI-9', 100_000, 40_000, 'FEDERAL')];
+    const rows = buildSegmentBreakdown(records, undefined, {
+      allRecords: records,
+      appliedByFactura: aplicado([['RI-9', 500_000]]),
+    });
+    expect(rows[0].pendiente).toBe(0);
+  });
+
+  it('degrada solo: sin recibos el resultado es idéntico al previo', () => {
+    const records = [linea('RI-1', 500, 100, 'Dedicado')];
+    const base = buildSegmentBreakdown(records);
+    expect(buildSegmentBreakdown(records, undefined, { allRecords: records })).toEqual(base);
+    expect(
+      buildSegmentBreakdown(records, undefined, { allRecords: records, appliedByFactura: new Map() }),
+    ).toEqual(base);
+    expect(base[0].pendiente).toBe(100);
+  });
+});

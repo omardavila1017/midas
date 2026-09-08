@@ -1,5 +1,9 @@
 import type { CobranzaPayment, CobranzaRecord } from '../services/jdeTypes';
-import { receiptOverlayKey } from './cobranzaReceiptsOverlay';
+import {
+  buildReceiptSurplusByFolio,
+  consumeReceiptSurplus,
+  receiptOverlayKey,
+} from './cobranzaReceiptsOverlay';
 
 /**
  * Segmento / tipo de servicio de cobranza (B2.3).
@@ -73,7 +77,10 @@ export interface SegmentTotal {
   invoiceCount: number;
   /** Σ importe bruto en pesos. */
   bruto: number;
-  /** Σ importe pendiente en pesos. */
+  /**
+   * Σ importe pendiente en pesos, YA descontado el cobro que los recibos
+   * reportan y `/cobranza` aún no aplica (ver `buildSegmentBreakdown`).
+   */
   pendiente: number;
 }
 
@@ -96,13 +103,60 @@ export function listSegments(records: CobranzaRecord[], overlay?: Map<string, st
  * (clasificados por bruto desc, "Sin clasificar" al final). Agrupa por el
  * segmento en mayúsculas para no fragmentar por casing, mostrando el primer
  * casing visto.
+ *
+ * EL PENDIENTE APLICA EL OVERLAY DE RECIBOS (2026-09-08)
+ * -----------------------------------------------------
+ * `jde.Cobranza_Citi` no aplica los recibos que `jde.Cobranza_Indicadores` sí
+ * registra, así que su `Importe_Pendiente` está inflado. Aquí muerde con una
+ * ironía estructural: el segmento SÓLO existe cuando hay recibo (es de donde
+ * sale), de modo que **toda fila clasificada de esta tabla es justo la que más
+ * probabilidad tiene de traer el pendiente mal**. Medido 2026-09-08: $354.4M de
+ * "Pendiente" en las facturas con recibo, de los cuales **$341.9M ya estaban
+ * cobrados** (96.5%) — la tabla presentaba lo ya cobrado como por cobrar, y
+ * contradecía a Proyección y al calendario sobre el mismo dinero.
+ *
+ * Se usa la MISMA fórmula que las otras superficies (`cobranzaReceiptsOverlay`):
+ * pozo POR FOLIO, sólo a la baja, nunca suma. Sin `appliedByFactura` el
+ * resultado es byte-idéntico al previo (degrada solo).
+ *
+ * `allRecords` es load-bearing: el pozo se construye y se consume sobre el set
+ * COMPLETO (`/cobranza` devuelve N líneas por folio y el repo NO las colapsa a
+ * propósito), y sólo se acumulan al desglose las filas VISIBLES. Consumirlo
+ * sobre el set ya filtrado le aplicaría a las visibles el excedente de las
+ * líneas que el filtro escondió — haría desaparecer cobranza real, el defecto
+ * contrario y peor.
  */
 export function buildSegmentBreakdown(
   records: CobranzaRecord[],
   overlay?: Map<string, string>,
+  options?: {
+    /** Set COMPLETO de líneas (sin filtrar) sobre el que se agota el pozo. */
+    allRecords?: CobranzaRecord[];
+    /** Importe aplicado por factura según los recibos (`buildAppliedAmountByFactura`). */
+    appliedByFactura?: Map<string, number>;
+  },
 ): SegmentTotal[] {
+  const applied = options?.appliedByFactura;
+  const receipts = applied && applied.size > 0 ? applied : undefined;
+  const scanned = receipts ? (options?.allRecords ?? records) : records;
+  const surplusByFolio = receipts ? buildReceiptSurplusByFolio(scanned, receipts) : null;
+  // Identidad por referencia: `records` (lo filtrado) son elementos de `scanned`.
+  const visible = scanned === records ? null : new Set(records);
+
   const byKey = new Map<string, SegmentTotal>();
-  for (const r of records) {
+  for (const r of scanned) {
+    const pendienteCrudo = Number.isFinite(r.importePendientePesos) ? r.importePendientePesos : 0;
+    // El pozo se agota SIEMPRE, aunque la fila no se pinte: así el ajuste de
+    // cada línea es el mismo con cualquier filtro activo.
+    const ajuste = surplusByFolio
+      ? consumeReceiptSurplus(
+          surplusByFolio,
+          receiptOverlayKey(r.cia, r.noFactura),
+          pendienteCrudo,
+        )
+      : 0;
+    if (visible && !visible.has(r)) continue;
+
     const label = segmentOf(r, overlay);
     const key = label.toUpperCase();
     let row = byKey.get(key);
@@ -112,7 +166,7 @@ export function buildSegmentBreakdown(
     }
     row.invoiceCount += 1;
     row.bruto += Number.isFinite(r.importeBrutoPesos) ? r.importeBrutoPesos : 0;
-    row.pendiente += Number.isFinite(r.importePendientePesos) ? r.importePendientePesos : 0;
+    row.pendiente += Math.max(0, pendienteCrudo - ajuste);
   }
   const rows = Array.from(byKey.values());
   rows.sort((a, b) => {
