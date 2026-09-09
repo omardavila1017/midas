@@ -110,12 +110,12 @@ function statement(movs: BankStatementLine[], overrides: Partial<BankAccountStat
 // ── Cobertura CXP: acumulación sobre una llave repetida ─────────────────────
 
 describe('reconcilePayments — acumulación de cxpCoverage', () => {
-  it('acumula sobre una entrada existente cuando el subset toma dos CXP con la MISMA llave', () => {
+  it('NO infla la cobertura cuando el subset toma dos CXP con la MISMA llave', () => {
     // Dos registros CXP duplicados (misma cia/factura/proveedor) que el
-    // subset-sum toma juntos: la segunda vuelta de acumulación cae en la rama
-    // `existing`. NOTA: el motor suma `payment.importePesos` COMPLETO por cada
-    // hit, así que un duplicado real inflaría `totalPaidPesos` — comportamiento
-    // observado, no corregido aquí.
+    // subset-sum toma juntos. Este test pineaba el defecto: el motor sumaba
+    // `payment.importePesos` COMPLETO por cada hit, así que un pago de $1,500
+    // contra dos duplicados de $750 dejaba `totalPaidPesos = $3,000` y la
+    // marcaba `PAID`. Ahora un pago aporta a una llave UNA vez.
     const result = reconcilePayments({
       payments: [pago({ importePesos: 1500, comentarioPago: 'sin folio' })],
       cxpRecords: [
@@ -124,11 +124,12 @@ describe('reconcilePayments — acumulación de cxpCoverage', () => {
       ],
       bankStatements: [],
     });
+    // El match sigue reportando los dos hits (es lo que el subset tomó): lo que
+    // cambia es la ACUMULACIÓN de cobertura.
     expect(result.paymentMatches[0].cxpMatches).toHaveLength(2);
     const cov = result.cxpCoverage.get('00038::DUPE::3228');
-    expect(cov?.payments).toHaveLength(2);
-    expect(cov?.totalPaidPesos).toBe(3000);
-    expect(cov?.status).toBe('PAID');
+    expect(cov?.payments).toHaveLength(1);
+    expect(cov?.totalPaidPesos).toBe(1500);
   });
 
   it('marca OPEN cuando la CXP tiene importe bruto 0 (no hay base para el ratio)', () => {

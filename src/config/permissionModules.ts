@@ -48,9 +48,28 @@ export const PERMISSION_MODULE_IDS: readonly AppTabId[] = [
 
 const PERMISSION_MODULE_SET: ReadonlySet<string> = new Set(PERMISSION_MODULE_IDS);
 
+/**
+ * `casing del token → id canónico`. El CSV lo escribe este mismo cliente, así
+ * que la deriva de casing sólo puede venir de una edición MANUAL de la BD — y
+ * el resultado de no tolerarla es que el token se descarte y el usuario pierda
+ * ese módulo **en silencio**. Resolver por minúsculas devuelve siempre el id
+ * canónico, así que nunca se guarda de vuelta un token con casing raro.
+ */
+const PERMISSION_MODULE_BY_LOWER: ReadonlyMap<string, AppTabId> = new Map(
+  PERMISSION_MODULE_IDS.map((id) => [id.toLowerCase(), id]),
+);
+
 /** Type guard: ¿es `value` uno de los módulos válidos del contrato CSV? */
 export function isPermissionModule(value: string): value is AppTabId {
   return PERMISSION_MODULE_SET.has(value);
+}
+
+/**
+ * Id canónico del módulo para un token del CSV, tolerante al casing.
+ * `undefined` si el token no está en el vocabulario.
+ */
+export function resolvePermissionModule(value: string): AppTabId | undefined {
+  return PERMISSION_MODULE_BY_LOWER.get(value.trim().toLowerCase());
 }
 
 /**
@@ -63,8 +82,8 @@ export function parsePermissionsCsv(csv: string | null | undefined): AppTabId[] 
   if (!csv) return [];
   const out: AppTabId[] = [];
   for (const raw of csv.split(',')) {
-    const token = raw.trim();
-    if (token && isPermissionModule(token) && !out.includes(token)) out.push(token);
+    const token = resolvePermissionModule(raw);
+    if (token && !out.includes(token)) out.push(token);
   }
   return out;
 }

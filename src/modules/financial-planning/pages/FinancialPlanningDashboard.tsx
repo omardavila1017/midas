@@ -6,7 +6,7 @@ import {
 } from '../../shared-finance/services/sharedSourceWorker';
 import { AlertTriangle, CheckCircle2, Copy, Download, Eye, Trash2, Wallet, AlertTriangle as AlertIcon, TrendingUp } from 'lucide-react';
 import type { Budget } from '../../../domain/budget';
-import { computeMinimumOperatingExpense } from '../../../domain/minimumOperatingExpense';
+import { operatingFloorMonthly } from '../../../domain/minimumOperatingExpense';
 import type { CXPRecord } from '../../../domain/persistence';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
 import type { BankAccountStatement } from '../../../services/jde';
@@ -2040,10 +2040,12 @@ function MiniStat({ label, value }: { label: string; value: string }) {
  * El fallback sobrevive sólo para el arranque sin catálogo de proveedores
  * (piso 0 = nunca hay déficit, que es peor que un umbral aproximado).
  */
-function minimumCashFor(providers: Provider[], payrollMonthlyActualJDE?: number): number {
-  const floor = computeMinimumOperatingExpense(providers, null, payrollMonthlyActualJDE).totalMonthly;
-  return floor > 0 ? floor : 20_000_000;
-}
+// Fuente única compartida con Proyección (`operatingFloorMonthly`): los dos
+// tableros derivaban el piso por su cuenta y NO coincidían — Planeación caía a
+// $20M sin catálogo y Proyección a 0, así que el mismo escenario reportaba
+// distintos días en déficit en cada tab. `minimumCash` además entra en la llave
+// de la corrida, así que la paridad no es opcional.
+const minimumCashFor = operatingFloorMonthly;
 
 
 function EmptyDataState() {

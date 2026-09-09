@@ -296,3 +296,32 @@ export function resolveMinimumExpenseForMonth(
   }
   return { amount: baseMonthly, isOverride: false };
 }
+
+/**
+ * Piso operativo mensual contra el que se miden los DÍAS EN DÉFICIT.
+ *
+ * **Fuente única de Proyección y Planeación.** Los dos tableros tenían su
+ * propio wrapper y no coincidían: `minimumCashFor` (Planeación) caía a
+ * `$20,000,000` cuando el catálogo venía vacío y `operatingFloorMonthlyFor`
+ * (Proyección) devolvía `0`, así que para el MISMO escenario los dos tabs
+ * reportaban distintos días en déficit — y un piso 0 significa "nunca hay
+ * déficit", que es la dirección que ESCONDE el riesgo.
+ *
+ * El fallback se conserva (un umbral aproximado es mejor que apagar la alerta)
+ * pero vive en UN solo lugar. En la práctica sólo aplica antes de que cargue el
+ * catálogo de proveedores, y el splash espera al 100%, así que el usuario no
+ * llega a ver ese estado.
+ *
+ * `minimumCash` entra en la llave de la corrida de Planeación
+ * (`planningSharedRunInputsKey`), así que los dos tableros TIENEN que derivarlo
+ * igual o pierden la paridad de cache.
+ */
+export const OPERATING_FLOOR_FALLBACK_MONTHLY = 20_000_000;
+
+export function operatingFloorMonthly(
+  providers: Provider[],
+  payrollMonthlyActualJDE?: number,
+): number {
+  const floor = computeMinimumOperatingExpense(providers, null, payrollMonthlyActualJDE).totalMonthly;
+  return floor > 0 ? floor : OPERATING_FLOOR_FALLBACK_MONTHLY;
+}

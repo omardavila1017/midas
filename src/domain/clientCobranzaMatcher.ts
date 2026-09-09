@@ -271,20 +271,20 @@ export function buildMatchSuggestions(
       invoiceCount: acc.invoiceCount,
     };
 
-    if (best.confidence >= AUTO_ACCEPT_THRESHOLD) {
-      autoAccepted.push(suggestion);
-    } else if (best.confidence >= REVIEW_THRESHOLD) {
-      needsReview.push(suggestion);
-    } else {
-      orphanNoClientes.push({
-        cia: acc.cia,
-        noCliente: acc.noCliente,
-        nombreCliente: acc.nombreCliente,
-        rfc: acc.rfc,
-        invoiceCount: acc.invoiceCount,
-        bestGuess: suggestion,
-      });
-    }
+    // No hay tercera rama: `REVIEW_THRESHOLD` es el PISO del tier más bajo
+    // (`token-overlap` con jaccard 0.5 devuelve exactamente 0.62), así que un
+    // candidato que puntuó siempre alcanza review. La rama `else` que existía
+    // aquí —empujar el orphan con `bestGuess`— era inalcanzable por
+    // construcción, y hacía creer que un orphan podía traer conjetura desde el
+    // matcher. La conjetura se la pone `AppCore` a los `needsReview` por debajo
+    // de `AUTO_MERGE_THRESHOLD`; el bucket `orphanNoClientes` de aquí es sólo
+    // "ningún candidato puntuó", y por eso va sin `bestGuess`.
+    //
+    // El piso está pineado por test: si alguien baja la confianza de un tier
+    // por debajo de `REVIEW_THRESHOLD`, truena en vez de perder silenciosamente
+    // ese candidato.
+    if (best.confidence >= AUTO_ACCEPT_THRESHOLD) autoAccepted.push(suggestion);
+    else needsReview.push(suggestion);
   }
 
   return { autoAccepted, needsReview, orphanNoClientes };

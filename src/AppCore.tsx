@@ -1,5 +1,10 @@
 import { startTransition, useState, useEffect, useRef, useCallback, useMemo, useDeferredValue, lazy, Suspense, type ReactNode } from 'react';
 import { TabId, CashFlowOverrides } from './types';
+// Contrato de datos por tab (qué APIs consume cada uno). Vive en su propio
+// módulo con test porque `allowedDatasets` lo usa para decidir qué se baja: un
+// tab que sub-declara deja a un usuario acotado con números plausibles y
+// equivocados. Ver `src/config/tabDatasets.ts`.
+import { TAB_DATASETS, type DatasetKey } from './config/tabDatasets';
 import { todayISO } from './formatters';
 import { Provider, Client, CashFlowAssumptions, ConfirmedPayment } from './domain/types';
 import { MidasStore, loadLightStore, saveLightStore, CXPRecord, type AuxiliarIvaLoadedCiaMeta } from './domain/persistence';
@@ -395,42 +400,8 @@ const RECONCILIATION_TABS = new Set<TabId>([
   'taxes',
 ]);
 
-type DatasetKey = 'cxp' | 'cobranza' | 'compras' | 'pagos' | 'nomina' | 'rol' | 'banks' | 'auxiliar';
 type DatasetStatus = 'idle' | 'loading' | 'ready' | 'stale' | 'error';
 
-// Datasets each tab's component actually consumes. This is the REAL data
-// contract: allowedDatasets (permission gating) is the union over permitted
-// tabs, so a tab that under-declares leaves scoped users with silently
-// incomplete numbers (taxes/concurso/pagos without banks → IVA=$0, empty Pagos).
-// Keep in sync with each tab's render props below.
-const TAB_DATASETS: Partial<Record<TabId, DatasetKey[]>> = {
-  netflow: ['banks'],
-  bancos: ['banks'],
-  cxp: ['cxp', 'pagos'],
-  concursoMercantil: ['cxp', 'banks'],
-  venta: ['cobranza', 'rol'],
-  collections: ['cobranza', 'banks', 'rol'],
-  fideicomiso: ['banks'],
-  compras: ['compras'],
-  pasivoDistribuir: ['compras'],
-  pagos: ['pagos', 'banks', 'compras'],
-  payroll: ['nomina'],
-  financialProjection: ['cxp', 'cobranza', 'compras', 'pagos', 'nomina', 'rol', 'auxiliar'],
-  financialPlanning: ['cxp', 'cobranza', 'compras', 'pagos', 'nomina', 'rol', 'auxiliar'],
-  taxes: ['cxp', 'cobranza', 'compras', 'pagos', 'nomina', 'auxiliar', 'banks'],
-  providers: [],
-  clients: [],
-  // Declares everything KpisObjectivesDashboard consumes (auxiliar/rol/compras/
-  // nomina feed the auto-calculated KPIs) so a kpis-scoped user gets complete
-  // numbers, not just the admin who happens to hold every permission.
-  kpisObjectives: ['cxp', 'cobranza', 'banks', 'compras', 'nomina', 'rol', 'auxiliar'],
-  // TEMPORAL fuentes-datos: cada sub-tab declara solo lo que su vista lee,
-  // para no obligar a un usuario con un solo sub-tab a bajar todo el lake.
-  fuentesBancos: ['banks'],
-  fuentesJde: ['cxp', 'cobranza', 'compras', 'pagos', 'banks', 'auxiliar'],
-  fuentesTress: ['nomina'],
-  fuentesRol: ['rol'],
-};
 
 const KEEP_ALIVE_TABS = new Set<TabId>(['financialProjection', 'financialPlanning']);
 
@@ -1712,9 +1683,18 @@ export default function App() {
   const payrollTruncatedHealthRows = useMemo<DataHealthDatasetRow[]>(() => {
     const skipped = payrollFloor?.skippedTruncated ?? [];
     if (skipped.length === 0) return [];
+    // Se nombran los grupos (cía · tipo) que dispararon el descarte: el corte del
+    // gateway es PARCIAL, así que "el mes no trae aportaciones" sería falso — lo
+    // que falta es el bloque de una cía/tipo concretos, y eso es lo accionable.
+    const groups = Array.from(new Set(
+      (payrollFloor?.byMonth ?? [])
+        .filter((m) => skipped.includes(m.month))
+        .flatMap((m) => m.truncatedGroups),
+    ));
+    const detail = groups.length > 0 ? ` · falta ${groups.join(', ')}` : '';
     return [{
       key: 'nomina-truncada',
-      label: `Nómina · ${skipped.length === 1 ? 'mes' : 'meses'} sin aportaciones patronales (${skipped.join(', ')})`,
+      label: `Nómina · ${skipped.length === 1 ? 'mes' : 'meses'} con aportaciones patronales incompletas (${skipped.join(', ')})${detail}`,
       status: 'error' as const,
       lastSync: undefined,
     }];

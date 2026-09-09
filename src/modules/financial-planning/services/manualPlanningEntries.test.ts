@@ -96,3 +96,44 @@ describe('manualPlanningEntries', () => {
     });
   });
 });
+
+describe('recurrencia mensual anclada a la fecha de inicio', () => {
+  // Encadenar cada ocurrencia desde la ANTERIOR pierde el día para siempre en
+  // cuanto un mes corto lo trunca: una entrada del 31-ene daba 31-ene · 28-feb
+  // · 28-mar · 28-abr… Anclando al inicio, el truncamiento es local al mes
+  // corto y el día vuelve en los meses que lo tienen.
+  const monthly = (startDate: string, endDate: string) => expandManualPlanningEntriesToMovements(
+    [createManualPlanningEntry({
+      scenarioIds: ['s'], type: 'OUTFLOW', category: 'OPEX', name: 'Renta',
+      amount: 1000, startDate, endDate, recurrence: 'MONTHLY',
+    })],
+    { scenarioId: 's', startDate: '2026-01-01', endDate: '2026-12-31', asOfDate: '2026-01-01' },
+  ).map((m) => m.projectedDate);
+
+  it('el día 31 vuelve después de febrero', () => {
+    expect(monthly('2026-01-31', '2026-05-31')).toEqual([
+      '2026-01-31', '2026-02-28', '2026-03-31', '2026-04-30', '2026-05-31',
+    ]);
+  });
+
+  it('el día 30 vuelve después de febrero', () => {
+    expect(monthly('2026-01-30', '2026-04-30')).toEqual([
+      '2026-01-30', '2026-02-28', '2026-03-30', '2026-04-30',
+    ]);
+  });
+
+  it('trimestral ancla igual', () => {
+    const quarterly = expandManualPlanningEntriesToMovements(
+      [createManualPlanningEntry({
+        scenarioIds: ['s'], type: 'OUTFLOW', category: 'OPEX', name: 'Predial',
+        amount: 1000, startDate: '2026-05-31', endDate: '2027-02-28', recurrence: 'QUARTERLY',
+      })],
+      { scenarioId: 's', startDate: '2026-01-01', endDate: '2027-12-31', asOfDate: '2026-01-01' },
+    ).map((m) => m.projectedDate);
+    expect(quarterly).toEqual(['2026-05-31', '2026-08-31', '2026-11-30', '2027-02-28']);
+  });
+
+  it('un día que existe en todos los meses no cambia', () => {
+    expect(monthly('2026-01-15', '2026-03-15')).toEqual(['2026-01-15', '2026-02-15', '2026-03-15']);
+  });
+});

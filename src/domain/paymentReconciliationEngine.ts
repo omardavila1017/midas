@@ -391,8 +391,18 @@ export function reconcilePayments(input: {
     paymentMatches.push({ payment, status, bankCoverage, cxpMatches: cxpHits, cargoMatch, reason });
 
     // ── Acumular coverage CXP ──
+    // Un pago aporta su importe a una llave CXP UNA sola vez. `cxpHits` puede
+    // traer dos hits con la MISMA `cia::noFactura::noProveedor` cuando JDE
+    // manda la factura duplicada: sin este dedup se sumaba `importePesos`
+    // COMPLETO por cada hit, así que un pago de $1,500 contra dos duplicados de
+    // $750 dejaba `totalPaidPesos = $3,000` y la marcaba `PAID`. Eso infla la
+    // cobertura y —peor— `paidCxpKeys` saca del egreso proyectado una factura
+    // que en realidad quedó a medias.
+    const seenCxpKeys = new Set<string>();
     for (const hit of cxpHits) {
       const key = cxpKey(hit.cxp);
+      if (seenCxpKeys.has(key)) continue;
+      seenCxpKeys.add(key);
       const existing = cxpCoverage.get(key);
       const paid = payment.importePesos;
       if (existing) {

@@ -434,3 +434,42 @@ describe('reconcilePayments — full integration', () => {
     expect(cov?.status).toBe('PARTIAL');
   });
 });
+
+describe('reconcilePayments — factura CXP duplicada en JDE', () => {
+  // `cxpHits` puede traer dos hits con la MISMA `cia::noFactura::noProveedor`
+  // cuando JDE manda la factura duplicada. Sumar `importePesos` COMPLETO por
+  // hit deja la llave sobre-cubierta: infla `totalPaidPesos` y —lo caro—
+  // `paidCxpKeys` saca del egreso proyectado una factura que quedó a medias.
+  it('un pago aporta su importe a la llave UNA vez, no una por duplicado', () => {
+    // Se fuerza la capa subset-sum (la única que emite N hits): el comentario no
+    // trae folio y ninguna factura empata sola con el importe del pago.
+    const duplicada = { noFactura: 'DUP-1', importeBrutoPesos: 750, importePendientePesos: 750 };
+    const res = reconcilePayments({
+      payments: [pago({ importePesos: 1_500, comentarioPago: 'PAGO VARIOS' })],
+      cxpRecords: [cxp(duplicada), cxp(duplicada)],
+      bankStatements: [],
+    });
+
+    const cov = res.cxpCoverage.get('00038::DUP-1::3228');
+    expect(cov).toBeDefined();
+    expect(cov!.totalPaidPesos).toBe(1_500);
+    expect(cov!.payments).toHaveLength(1);
+  });
+
+  it('dos facturas DISTINTAS del mismo pago sí acumulan cada una', () => {
+    // El dedup es por llave, no por pago: un pago que cubre dos facturas
+    // reales tiene que aportar a las dos.
+    const res = reconcilePayments({
+      payments: [pago({ importePesos: 1_500, comentarioPago: 'PAGO VARIOS' })],
+      cxpRecords: [
+        cxp({ noFactura: 'A-1', importeBrutoPesos: 750, importePendientePesos: 750 }),
+        cxp({ noFactura: 'B-2', importeBrutoPesos: 750, importePendientePesos: 750 }),
+      ],
+      bankStatements: [],
+    });
+
+    expect(res.cxpCoverage.get('00038::A-1::3228')?.totalPaidPesos).toBe(1_500);
+    expect(res.cxpCoverage.get('00038::B-2::3228')?.totalPaidPesos).toBe(1_500);
+    expect(res.cxpCoverage.size).toBe(2);
+  });
+});

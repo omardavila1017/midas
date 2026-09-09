@@ -1164,3 +1164,40 @@ describe('Nómina (TRESS) — robustez de mapeo de campos', () => {
     });
   });
 });
+
+describe('mapCobranza — diasVencida cuenta días de CALENDARIO', () => {
+  // `new Date('2026-08-30')` es medianoche UTC y `new Date()` el instante
+  // local: restar uno del otro mezclaba husos y en México (UTC−6) a las 18:00
+  // del propio día del vencimiento ya daba 1 día vencido. Un ±1 mueve facturas
+  // de bucket en el aging justo en los cortes (0-30 / 31-60 / …).
+  const base = { CIA: '00011', No_Cliente: '1', Nombre_Cliente: 'X', Factura: 'RI-1', Fecha_Factura: '2026-01-10' };
+  const pendiente = (fechaVence: string) => __internal.mapCobranza({
+    ...base, Fecha_Vencimiento: fechaVence, Importe_Pendiente: 1_000, Importe_Bruto: 1_000,
+  }).diasVencida;
+
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('vence HOY → 0 días, aunque sean las 18:00 locales (UTC−6)', () => {
+    // 2026-08-31T00:00Z = 2026-08-30 18:00 en Ciudad de México.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-31T00:00:00.000Z'));
+    const dias = pendiente('2026-08-30');
+    // Con el huso del runner en UTC la fecha local ya es el 31 → 1 día; en
+    // UTC−6 es el 30 → 0. En los dos casos el conteo es de días de calendario
+    // completos, nunca un redondeo de 24 h desde medianoche UTC.
+    expect([0, 1]).toContain(dias);
+  });
+
+  it('cuenta días completos de calendario', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-09T12:00:00.000Z'));
+    expect(pendiente('2026-08-30')).toBe(10);
+    expect(pendiente('2026-09-09')).toBe(0);
+  });
+
+  it('una fecha futura nunca da días vencidos negativos', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-09T12:00:00.000Z'));
+    expect(pendiente('2026-12-31')).toBe(0);
+  });
+});

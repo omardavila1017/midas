@@ -69,6 +69,50 @@ describe('financialProjectionPersistentCache', () => {
   // mapa es el conteo de CARGOs del banco y no dice nada de los pagos — con más
   // pagos cruzados sobre los MISMOS estados de cuenta la llave no se movía y
   // IDB servía la entrada vieja, sin clasificar.
+  // `BANKS_PARTIAL_REVALIDATE_DAYS` (14) re-pide días recientes que YA tenían
+  // datos, porque JDE puede haber tenido sólo PARTE de los movimientos cuando
+  // se cacheó el día. El refetch REEMPLAZA los movimientos de una fecha ya
+  // vista, así que longitud + máxima fecha pueden quedar idénticos con otros
+  // importes: es la única fuente donde la revalidación reescribe en sitio por
+  // diseño, y sin señal de contenido IDB servía una proyección construida con
+  // el día incompleto.
+  describe('día parcial revalidado en la llave', () => {
+    const mov = (patch: Partial<{ fechaOperacion: string; importe: number; tipoMovimiento: string }>) => ({
+      cia: '00001', banco: '002', cuenta: '123', moneda: 'MXN',
+      fechaOperacion: '2026-05-10', referencia: 'r', concepto: 'c',
+      tipoMovimiento: 'ABONO', importe: 1_000,
+      ...patch,
+    });
+    const statementWith = (movimientos: unknown[]) => ([{
+      cia: '00001', banco: '002', nombreBanco: 'BANAMEX', cuenta: '123', moneda: 'MXN',
+      fechaEstadoCuenta: '2026-05-31', saldoInicial: 0, saldoFinal: 1_000,
+      movimientos,
+    }] as unknown as FinancialProjectionSourceInput['bankStatements']);
+
+    it('mueve la llave cuando cambia el IMPORTE a igual conteo y misma fecha máxima', () => {
+      const parcial = projectionInput({ bankStatements: statementWith([mov({ importe: 1_000 })]) });
+      const completo = projectionInput({ bankStatements: statementWith([mov({ importe: 12_500 })]) });
+      expect(projectionSourcePersistentCacheKey(parcial))
+        .not.toBe(projectionSourcePersistentCacheKey(completo));
+    });
+
+    it('mueve la llave cuando un CARGO se reclasifica a ABONO por el MISMO monto', () => {
+      // La suma de |importe| no se mueve; el neto firmado sí. Sin el neto, un
+      // egreso convertido en ingreso pasaría desapercibido.
+      const cargo = projectionInput({ bankStatements: statementWith([mov({ tipoMovimiento: 'CARGO' })]) });
+      const abono = projectionInput({ bankStatements: statementWith([mov({ tipoMovimiento: 'ABONO' })]) });
+      expect(projectionSourcePersistentCacheKey(cargo))
+        .not.toBe(projectionSourcePersistentCacheKey(abono));
+    });
+
+    it('la MISMA cartera sigue pegando (no invalida por ruido de punto flotante)', () => {
+      const movimientos = [mov({ importe: 0.1 }), mov({ importe: 0.2 }), mov({ importe: 1_234.56 })];
+      const a = projectionInput({ bankStatements: statementWith(movimientos) });
+      const b = projectionInput({ bankStatements: statementWith([...movimientos].reverse()) });
+      expect(projectionSourcePersistentCacheKey(a)).toBe(projectionSourcePersistentCacheKey(b));
+    });
+  });
+
   describe('cruce PagoProveedor ↔ CARGO en la llave', () => {
     const cargoMap = (entries: Array<'MATCHED' | 'ORPHAN'>) =>
       new Map(entries.map((status, i) => [
@@ -331,6 +375,13 @@ const MUTATIONS: { [K in keyof FullProjectionInput]: (input: FullProjectionInput
   enablePredictive: (i) => ({ ...i, enablePredictive: false }),
 };
 
+/**
+ * El `patch` se aplica COMPLETO (spread al final). Antes sólo se leía
+ * `patch.startingBalance` y todo lo demás se descartaba en silencio: un test
+ * que pasara `bankStatements` comparaba dos inputs idénticos y pasaba siempre,
+ * verificando nada. De ahí que los demás casos de este archivo hagan
+ * `{ ...projectionInput({...}), campo }` para esquivarlo.
+ */
 function projectionInput(patch: Partial<FinancialProjectionSourceInput>): FinancialProjectionSourceInput {
   return {
     companyCode: 'all',
@@ -340,8 +391,9 @@ function projectionInput(patch: Partial<FinancialProjectionSourceInput>): Financ
     cxpRecords: [],
     assumptions: { year: 2026, globalCompliance: 1, factorajeDays: 30 },
     budget: null,
-    startingBalance: patch.startingBalance ?? 0,
+    startingBalance: 0,
     asOfDate: '2026-05-18',
+    ...patch,
   };
 }
 

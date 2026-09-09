@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
+  OPERATING_FLOOR_FALLBACK_MONTHLY,
   computeMinimumOperatingExpense,
+  operatingFloorMonthly,
   payrollForMonth,
   floorForMonth,
   prorateMinimumExpense,
@@ -226,5 +228,23 @@ describe('minimum expense overrides (localStorage)', () => {
       amount: 100,
       isOverride: false,
     });
+  });
+});
+
+describe('operatingFloorMonthly — fuente única de los dos tableros', () => {
+  // Proyección y Planeación derivaban el piso por su cuenta y NO coincidían:
+  // Planeación caía a $20M sin catálogo y Proyección a 0. Un piso 0 significa
+  // "nunca hay déficit", o sea la dirección que ESCONDE el riesgo, y los dos
+  // tabs se contradecían sobre el mismo escenario. `minimumCash` además entra
+  // en la llave de la corrida de Planeación, así que la paridad no es opcional.
+  it('sin catálogo ni piso de nómina cae al umbral, nunca a 0', () => {
+    expect(operatingFloorMonthly([])).toBe(OPERATING_FLOOR_FALLBACK_MONTHLY);
+    expect(operatingFloorMonthly([])).toBeGreaterThan(0);
+  });
+
+  it('con piso de nómina real usa el cómputo, no el fallback', () => {
+    const floor = operatingFloorMonthly([], 86_803_575.25);
+    expect(floor).toBeGreaterThan(OPERATING_FLOOR_FALLBACK_MONTHLY);
+    expect(floor).toBe(computeMinimumOperatingExpense([], null, 86_803_575.25).totalMonthly);
   });
 });

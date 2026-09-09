@@ -122,7 +122,9 @@ function buildRecord(
   return {
     cia: r.cia,
     noProveedor: r.noProveedor,
-    supplierName: r.nombreProveedor || 'Proveedor sin nombre',
+    // `.trim()`: JDE manda nombres con relleno de espacios, y un nombre de sólo
+    // espacios no caía al placeholder — salía como contraparte en blanco.
+    supplierName: r.nombreProveedor?.trim() || 'Proveedor sin nombre',
     invoiceNo: r.noFactura,
     purchaseOrderNo: r.noOrden,
     receiptNo: r.lineaOrden ? String(r.lineaOrden) : '',

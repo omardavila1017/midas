@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeAll } from 'vitest';
 import {
+  clearDailyCache,
   fetchRangeWithMonthlyCache,
   fetchRangeWithDailyCache,
   setMonthCached,
@@ -139,5 +140,50 @@ describe('fetchRangeWithDailyCache — revalidateSince', () => {
 
     expect(fetchDay).not.toHaveBeenCalled();
     expect(result).toEqual([{ d: '2026-06-05', v: 1 }]);
+  });
+});
+
+describe('clearDailyCache — también borra las entradas MENSUALES del mismo API', () => {
+  // Las mensuales viven en el mismo object store con prefijo `M:`. Un clear que
+  // sólo borraba `{api}.` dejaba vivo el cache mensual: "limpié el cache de
+  // compras" y el siguiente fetch mensual seguía sirviendo lo viejo, en
+  // silencio.
+  it('un fetch mensual después del clear vuelve a pegar a la red', async () => {
+    const api = 'test-clear-monthly';
+    setMonthCached(api, '2026-04', [{ m: '2026-04', v: 1 }], undefined, TODAY);
+
+    const removed = await clearDailyCache(api);
+    expect(removed).toBeGreaterThan(0);
+
+    const fetchMonth = vi.fn(async (from: string) => [{ m: from.slice(0, 7), v: 2 }]);
+    const result = await fetchRangeWithMonthlyCache<{ m: string; v: number }>(api, {
+      from: '2026-04-01',
+      to: '2026-04-30',
+      fetchMonth,
+      today: TODAY,
+    });
+
+    expect(fetchMonth).toHaveBeenCalledTimes(1);
+    expect(result.map((r) => r.v)).toEqual([2]);
+  });
+
+  it('no toca las mensuales de OTRO api', async () => {
+    const mine = 'test-clear-mine';
+    const other = 'test-clear-other';
+    setMonthCached(mine, '2026-04', [{ m: '2026-04', v: 1 }], undefined, TODAY);
+    setMonthCached(other, '2026-04', [{ m: '2026-04', v: 9 }], undefined, TODAY);
+
+    await clearDailyCache(mine);
+
+    const fetchMonth = vi.fn(async (from: string) => [{ m: from.slice(0, 7), v: 2 }]);
+    const result = await fetchRangeWithMonthlyCache<{ m: string; v: number }>(other, {
+      from: '2026-04-01',
+      to: '2026-04-30',
+      fetchMonth,
+      today: TODAY,
+    });
+
+    expect(fetchMonth).not.toHaveBeenCalled();
+    expect(result.map((r) => r.v)).toEqual([9]);
   });
 });

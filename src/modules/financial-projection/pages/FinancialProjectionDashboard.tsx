@@ -34,7 +34,7 @@ import {
   MinimumExpenseKpi,
   computeRunYtd,
 } from '../components/MergedDashboardKpis';
-import { computeMinimumOperatingExpense } from '../../../domain/minimumOperatingExpense';
+import { computeMinimumOperatingExpense, operatingFloorMonthly } from '../../../domain/minimumOperatingExpense';
 import { ScenarioComparisonBar } from '../components/ScenarioComparisonBar';
 import { DeferredMount } from '../components/DeferredMount';
 import { ChartSkeleton } from '../components/SectionSkeletons';
@@ -1606,9 +1606,11 @@ function shiftIsoDate(date: string, days: number, floorDate: string): string {
  * Debe computarse idéntico en `preloadProjectionScenarioRuns` y en el
  * dashboard interno para que el cache-key empate.
  */
-function operatingFloorMonthlyFor(providers: Provider[], payrollMonthlyActualJDE?: number): number {
-  return computeMinimumOperatingExpense(providers, null, payrollMonthlyActualJDE).totalMonthly;
-}
+// Fuente única compartida con Planeación (`operatingFloorMonthly`). Antes este
+// wrapper devolvía 0 sin catálogo de proveedores mientras Planeación caía a
+// $20M: un piso 0 significa "nunca hay déficit", la dirección que ESCONDE el
+// riesgo, y los dos tabs se contradecían sobre el mismo escenario.
+const operatingFloorMonthlyFor = operatingFloorMonthly;
 
 function addUtcDays(date: string, days: number): string {
   const value = new Date(`${date}T00:00:00Z`);

@@ -52,3 +52,21 @@ describe('permissionModules', () => {
     expect(parsePermissionsCsv(serializePermissionsCsv(tabs))).toEqual(tabs);
   });
 });
+
+describe('parsePermissionsCsv — tolerante al casing', () => {
+  // El CSV lo escribe este mismo cliente, así que la deriva de casing sólo
+  // viene de una edición MANUAL de la BD. No tolerarla descartaba el token y el
+  // usuario perdía ese módulo EN SILENCIO. Se resuelve al id canónico, así que
+  // nunca se guarda de vuelta un token con casing raro.
+  it('resuelve un token con casing distinto al id canónico', () => {
+    expect(parsePermissionsCsv('Netflow,BANCOS')).toEqual(['netflow', 'bancos']);
+  });
+
+  it('sigue descartando lo que no está en el vocabulario', () => {
+    expect(parsePermissionsCsv('netflow,basura,users,permisos')).toEqual(['netflow']);
+  });
+
+  it('dedup a través del casing', () => {
+    expect(parsePermissionsCsv('netflow,NETFLOW,Netflow')).toEqual(['netflow']);
+  });
+});

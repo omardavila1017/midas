@@ -4,6 +4,7 @@ import {
   rankClientsForAccount,
   suggestionToLink,
   AUTO_ACCEPT_THRESHOLD,
+  REVIEW_THRESHOLD,
 } from './clientCobranzaMatcher';
 import type { Client } from './types';
 import type { CobranzaRecord } from '../services/jdeTypes';
@@ -275,5 +276,36 @@ describe('rankClientsForAccount', () => {
 
     const withoutCount = rankClientsForAccount(account('CORNING OPTICAL'), clients);
     expect(withoutCount[0].invoiceCount).toBe(0);
+  });
+});
+
+describe('REVIEW_THRESHOLD es el PISO del tier más bajo', () => {
+  // El orphan bucket de `buildMatchSuggestions` significa "ningún candidato
+  // puntuó" y sale SIN `bestGuess`; eso sólo es cierto mientras todo tier que
+  // puntúa alcance review. `token-overlap` con jaccard 0.5 devuelve exactamente
+  // `REVIEW_THRESHOLD`, así que si alguien baja la confianza de un tier por
+  // debajo de ese piso, un candidato real caería al orphan y la conjetura se
+  // perdería en silencio. Esto truena antes.
+  it('todo candidato que puntúa alcanza review; el orphan va sin conjetura', () => {
+    const clients = [mkClient({ id: 'c1', name: 'TRANSPORTES DEL NORTE UNIDOS' })];
+    const records = [
+      // Jaccard 0.5 sobre tokens significativos = el piso exacto del tier.
+      mkRecord({ noCliente: '1', nombreCliente: 'TRANSPORTES NORTE' }),
+      // Sin ningún token en común: nadie puntúa → orphan real.
+      mkRecord({ noCliente: '2', nombreCliente: 'ZZZQQQ WWW YYY' }),
+    ];
+
+    const out = buildMatchSuggestions(clients, records);
+
+    for (const s of [...out.autoAccepted, ...out.needsReview]) {
+      expect(s.confidence).toBeGreaterThanOrEqual(REVIEW_THRESHOLD);
+    }
+    for (const o of out.orphanNoClientes) {
+      expect(o.bestGuess).toBeUndefined();
+    }
+  });
+
+  it('el piso declarado coincide con el mínimo que produce token-overlap', () => {
+    expect(REVIEW_THRESHOLD).toBe(0.62);
   });
 });

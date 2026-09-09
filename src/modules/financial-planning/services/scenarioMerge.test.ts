@@ -77,6 +77,44 @@ describe('scenarioMerge', () => {
     expect(result.scenarios.find((item) => item.id === draft.id)?.archivedAt).toBeTruthy();
   });
 
+  // Colisión: el draft edita la MISMA celda que ya tenía un override aprobado.
+  // El promovido REUSA `existing.id`, así que el filtro por id dejaba pasar
+  // también al aprobado viejo: dos valores bajo el mismo id, y cuál ganaba
+  // dependía del orden de iteración de `applyCellOverridesToBuckets`.
+  it('reemplaza el override aprobado en colisión, sin dejarlo duplicado bajo el mismo id', () => {
+    const approvedCell = cell('co-approved', approved.id, 100);
+    const draftCell = cell('co-draft', draft.id, 250);
+    const result = applyMerge({
+      approved,
+      draft,
+      scenarios: [approved, draft],
+      approvedOverrides: [approvedCell],
+      draftOverrides: [draftCell],
+      allOverrides: [approvedCell, draftCell],
+      approvedAdjustments: [],
+      draftAdjustments: [],
+      allAdjustments: [],
+      approvedCustomRows: [],
+      draftCustomRows: [],
+      allCustomRows: [],
+      manualEntries: [],
+      changeLog: [],
+      selectedChanges: [
+        { kind: 'CELL_OVERRIDE', id: `${draftCell.conceptKey}::${draftCell.granularity}::${draftCell.bucketKey}` },
+      ],
+      archiveDraft: true,
+      user: 'tester@senda.local',
+    });
+
+    const forCell = result.cellOverrides.filter((o) =>
+      o.conceptKey === approvedCell.conceptKey && o.bucketKey === approvedCell.bucketKey,
+    );
+    expect(forCell).toHaveLength(1);
+    expect(forCell[0].value).toBe(250);
+    expect(forCell[0].scenarioId).toBe(approved.id);
+    expect(new Set(result.cellOverrides.map((o) => o.id)).size).toBe(result.cellOverrides.length);
+  });
+
   it('applies only selected changes during a partial merge', () => {
     const draftCell = cell('co-draft', draft.id, 100);
     const draftAdjustment = adjustment('adj-draft', [draft.id]);

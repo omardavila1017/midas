@@ -247,7 +247,17 @@ export function purchaseReceiptToMovement(
     sourceObjectId: record.invoiceNo || record.purchaseOrderNo || record.receiptNo || undefined,
     type: 'OUTFLOW',
     category: 'AP_PAYMENT',
-    subcategory: record.familyName || record.categoryName || record.categoryCode || 'Compras',
+    // `subcategory` es la etiqueta que el usuario LEE (sub-bucket en el grid),
+    // así que pasa por el mismo gate de centinelas que `providerCategory`: sin
+    // él, los placeholders del capturista de JDE (`.`, `Seleccionar Familia`)
+    // se pintaban como si fueran una categoría de gasto. El gate ya prefiere
+    // familia (hijo) sobre categoría (padre) y desprioriza los genéricos, así
+    // que la cadena de precedencia es la misma que la de arriba.
+    subcategory: usableJdeProviderCategory(
+      record.familyName,
+      record.subfamilyName,
+      record.categoryName,
+    ) || record.categoryCode || 'Compras',
     companyId: normalizeCia(record.cia),
     businessUnitId: record.costCenter,
     counterpartyId: record.noProveedor,

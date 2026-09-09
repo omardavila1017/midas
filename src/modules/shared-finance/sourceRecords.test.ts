@@ -251,3 +251,37 @@ describe('buildPurchaseReceiptMovements — árbol de clasificación de compras 
     expect(pick('.', 'CONSULTORÍA')).toBe('CONSULTORÍA');
   });
 });
+
+describe('subcategory de la OC — los centinelas de JDE no se pintan como categoría', () => {
+  // `subcategory` es la etiqueta que el usuario LEE en el grid. Sin el gate,
+  // los placeholders del capturista (`.` como Desc_Categoria, `Seleccionar
+  // Familia` como Desc_Familia — 1,050 líneas / $4.28M medidas en OCs 2026) se
+  // mostraban como si fueran una categoría de gasto real.
+  const subcategoryFor = (patch: Partial<ComprasRecord>) => {
+    const receipts = comprasToPurchaseReceipts([comprasRecord(patch)], { asOfDate: '2026-04-15' });
+    const [movement] = buildPurchaseReceiptMovements({
+      purchaseReceipts: receipts,
+      cxpRecords: [],
+      companyCode: 'all',
+      asOfDate: '2026-04-15',
+    });
+    return movement.subcategory;
+  };
+
+  it('descarta `Seleccionar Familia` y cae al siguiente nivel usable', () => {
+    expect(subcategoryFor({ descFamilia: 'Seleccionar Familia', descSubFamilia: '', descCategoria: 'MOTOR' }))
+      .toBe('MOTOR');
+  });
+
+  it('descarta `.` y no lo pinta como categoría', () => {
+    expect(subcategoryFor({ descFamilia: '', descSubFamilia: '', descCategoria: '.' })).not.toBe('.');
+  });
+
+  it('familia (hijo) le gana al padre genérico', () => {
+    expect(subcategoryFor({ descFamilia: 'LLANTAS', descCategoria: 'Directos' })).toBe('LLANTAS');
+  });
+
+  it('una familia real sigue saliendo tal cual', () => {
+    expect(subcategoryFor({})).toBe('PRODUCTOS DE LIMPIEZA');
+  });
+});

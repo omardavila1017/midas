@@ -881,9 +881,14 @@ export async function clearDailyCache(api: string, cia?: string): Promise<number
   await ensureMemoryReady();
   if (!keyIndex) return 0;
   const prefix = cia ? `${api}.${cia}.` : `${api}.`;
+  // Las entradas MENSUALES viven en el mismo object store con el prefijo `M:`
+  // (`M:{api}.{cia}.{YYYY-MM}`), así que un clear que sólo borraba `{api}.`
+  // dejaba vivo el cache mensual del mismo API — "limpié el cache de compras" y
+  // el siguiente fetch mensual seguía sirviendo lo viejo, en silencio.
+  const monthPrefix = `${MONTH_KEY_TAG}${prefix}`;
   const toRemove: string[] = [];
   for (const key of keyIndex) {
-    if (key.startsWith(prefix)) toRemove.push(key);
+    if (key.startsWith(prefix) || key.startsWith(monthPrefix)) toRemove.push(key);
   }
   for (const key of toRemove) {
     keyIndex.delete(key);

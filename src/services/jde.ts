@@ -1300,11 +1300,20 @@ function mapCobranza(raw: RawRecord): CobranzaRecord {
   );
   let diasVencida = diasVencidaApi;
   if (importePendientePesos > 0 && fechaVence) {
-    // factura pendiente: días vencida = hoy − fechaVencimiento
-    const hoy = new Date();
+    // Factura pendiente: días vencida = hoy − fechaVencimiento, contado en DÍAS
+    // DE CALENDARIO.
+    //
+    // Los dos lados tienen que estar en el MISMO marco. `new Date('2026-08-30')`
+    // parsea medianoche UTC y `new Date()` es el instante local, así que restar
+    // uno del otro mezclaba husos: en México (UTC−6), a las 18:00 locales del
+    // día del vencimiento la diferencia ya daba 24 h → `diasVencida = 1` con la
+    // factura vencida ese mismo día. Un ±1 día mueve facturas de bucket en el
+    // aging justo en los cortes (0-30 / 31-60 / …).
+    const now = new Date();
+    const hoyUtc = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
     const venc = new Date(fechaVence);
     if (!Number.isNaN(venc.getTime())) {
-      const ms = hoy.getTime() - venc.getTime();
+      const ms = hoyUtc - Date.UTC(venc.getUTCFullYear(), venc.getUTCMonth(), venc.getUTCDate());
       diasVencida = Math.max(0, Math.round(ms / 86_400_000));
     }
   } else if (importePendientePesos === 0 && diasVencidaApi <= 0) {

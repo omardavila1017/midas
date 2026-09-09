@@ -478,14 +478,44 @@ function bankStatementFingerprint(statement: FinancialProjectionSourceInput['ban
   // después de P2: `foldHash` + `fingerprintArray` calientes). Para 2 años
   // de movimientos × ~10 cuentas, el walk completo era ~50k iteraciones por
   // cómputo de clave.
+  //
+  // Pero longitud + máxima fecha NO alcanzan: `BANKS_PARTIAL_REVALIDATE_DAYS`
+  // (14) re-pide días recientes que YA tenían datos porque JDE puede haber
+  // tenido sólo PARTE de los movimientos cuando se cacheó el día. Ese refetch
+  // REEMPLAZA los movimientos de una fecha ya vista, así que puede cambiar
+  // importes/tipos sin mover el conteo ni el máximo — y entonces IDB le sirve
+  // al tablero una proyección construida con el día incompleto. Es la única
+  // fuente donde la revalidación reescribe en sitio por diseño, así que es la
+  // única donde la señal estructural no basta.
+  //
+  // El arreglo NO cuesta una iteración más: el bucle ya recorre los N
+  // movimientos, así que se acumula en el MISMO pase un neto firmado
+  // (ABONO − CARGO) y la suma de |importe|. Son dos sumas de punto flotante por
+  // movimiento — nada de construir un string por item, que es el costo que este
+  // archivo evita a propósito. El neto firmado además distingue un CARGO que se
+  // reclasificó a ABONO por el mismo monto (el neto se mueve, la suma no).
+  //
+  // Trade-off que queda: no distingue dos movimientos que se permutan
+  // conservando neto y suma — mismo trade-off estructural que `reconciliation`
+  // y los `len:`, y un reemplazo así no cambia ninguna cifra del motor.
   const movs = statement.movimientos ?? [];
   let maxFecha = '';
+  let net = 0;
+  let gross = 0;
   for (const m of movs) {
-    const f = (m as { fechaOperacion?: string }).fechaOperacion ?? '';
+    const mov = m as { fechaOperacion?: string; importe?: number; tipoMovimiento?: string };
+    const f = mov.fechaOperacion ?? '';
     if (f > maxFecha) maxFecha = f;
+    const importe = typeof mov.importe === 'number' && Number.isFinite(mov.importe) ? mov.importe : 0;
+    gross += Math.abs(importe);
+    net += mov.tipoMovimiento === 'CARGO' ? -importe : importe;
   }
   return fields(statement, ['cia', 'banco', 'nombreBanco', 'cuenta', 'moneda', 'fechaEstadoCuenta', 'saldoInicial', 'saldoFinal'])
-    + `:mov=len:${movs.length}:max:${maxFecha}`;
+    + `:mov=len:${movs.length}:max:${maxFecha}`
+    // 2 decimales: los importes son pesos y la representación binaria del float
+    // puede variar entre dos sumas equivalentes (orden distinto de los mismos
+    // movimientos). Redondear evita un cache miss espurio por ese ruido.
+    + `:net:${net.toFixed(2)}:gross:${gross.toFixed(2)}`;
 }
 
 function budgetFingerprint(value: unknown): string {

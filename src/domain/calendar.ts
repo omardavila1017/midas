@@ -147,7 +147,14 @@ export function resolveRealPaymentDate(
     }
     cursor = addDays(cursor, 1);
   }
-  return toUTC(theoreticalDate);
+  // Patrón que no empata en toda la ventana (p.ej. `DOM` día 32, que no existe):
+  // se devuelve la fecha teórica, pero con el MISMO deslizamiento a día hábil
+  // que aplica el camino normal. Sin él este fallback era el único que podía
+  // entregar una fecha de cobro/pago en sábado o día inhábil, y toda la
+  // proyección asume días hábiles.
+  let fallback = toUTC(theoreticalDate);
+  while (isNonOperatingDay(fallback)) fallback = addDays(fallback, 1);
+  return fallback;
 }
 
 /**
@@ -178,8 +185,15 @@ export function advanceOneCycle(d: Date, f: Frequency): Date {
       return addDays(d, 14);
     case 'Mensual':
     case 'Contado': {
+      // `setUTCMonth(+1)` sobre un día 29-31 hace ROLLOVER de JS: el 31-ene se
+      // convierte en "31-feb" y aterriza el 3-mar, así que el ciclo SE SALTA
+      // febrero entero. Se sujeta al último día del mes destino.
       const next = new Date(d.getTime());
+      const day = next.getUTCDate();
+      next.setUTCDate(1);
       next.setUTCMonth(next.getUTCMonth() + 1);
+      const lastDay = new Date(Date.UTC(next.getUTCFullYear(), next.getUTCMonth() + 1, 0)).getUTCDate();
+      next.setUTCDate(Math.min(day, lastDay));
       return next;
     }
   }

@@ -181,10 +181,12 @@ describe('expandManualPlanningEntriesToMovements — category / recurrence branc
 
     expect(weekly.map((m) => m.projectedDate)).toEqual(['2026-03-02', '2026-03-09', '2026-03-16', '2026-03-23']);
     expect(biweekly.map((m) => m.projectedDate)).toEqual(['2026-03-02', '2026-03-16', '2026-03-30', '2026-04-13']);
-    // NOTE (pinned behaviour, not an assertion of correctness): each step advances from the
-    // PREVIOUS occurrence, so a day that gets clamped by a short month (31 → Apr 30) stays
-    // clamped for every later occurrence instead of returning to the anchor day.
-    expect(quarterly.map((m) => m.projectedDate)).toEqual(['2026-01-31', '2026-04-30', '2026-07-30', '2026-10-30']);
+    // Este test pineaba el defecto: cada paso avanzaba desde la ocurrencia
+    // ANTERIOR, así que un día truncado por un mes corto (31 → 30-abr) se
+    // quedaba truncado para siempre (31-ene · 30-abr · 30-jul · 30-oct). Ahora
+    // cada ocurrencia se cuenta desde la fecha de INICIO, así que el día vuelve
+    // en los meses que sí lo tienen.
+    expect(quarterly.map((m) => m.projectedDate)).toEqual(['2026-01-31', '2026-04-30', '2026-07-31', '2026-10-31']);
     expect(weekly[0].concept).toBe('Movimiento manual (1/4)');
   });
 

@@ -206,7 +206,9 @@ export function applyMerge(args: ApplyMergeArgs): ApplyMergeResult {
       previousAggregatedValue: draftOverride.previousAggregatedValue,
       updatedAt: now,
     });
-    if (existing) approvedByKey.delete(key);
+    // `approvedByKey` está indexado por `approvedKey`, no por el `cellChangeId`
+    // de la selección: borrar con `key` nunca quitaba nada.
+    if (existing) approvedByKey.delete(approvedKey);
     draftIdsToRemove.add(draftOverride.id);
   }
 
@@ -230,15 +232,20 @@ export function applyMerge(args: ApplyMergeArgs): ApplyMergeResult {
   }
 
   // Build new collections.
-  const remainingApprovedOverrides = args.approvedOverrides.filter((override) => {
-    const key = `${override.conceptKey}::${override.granularity}::${override.bucketKey}`;
-    // Keep approved overrides that were NOT replaced by a promoted draft override.
-    return !promotedOverrides.some((promoted) =>
-      promoted.scenarioId === args.approved.id
-      && `${promoted.conceptKey}::${promoted.granularity}::${promoted.bucketKey}` === key
-      && promoted.id !== override.id,
-    );
-  });
+  // Se conservan los overrides aprobados que NINGÚN draft promovido reemplaza.
+  // El descarte es por LLAVE (concepto+granularidad+bucket), no por id: cuando
+  // hay colisión el promovido REUSA `existing.id`, así que el `promoted.id !==
+  // override.id` de antes daba `false` y el aprobado viejo se quedaba —los dos
+  // valores terminaban en `cellOverrides` bajo el MISMO id, y cuál ganaba
+  // dependía del orden de iteración de `applyCellOverridesToBuckets`.
+  const promotedApprovedKeys = new Set(
+    promotedOverrides
+      .filter((promoted) => promoted.scenarioId === args.approved.id)
+      .map((promoted) => `${promoted.conceptKey}::${promoted.granularity}::${promoted.bucketKey}`),
+  );
+  const remainingApprovedOverrides = args.approvedOverrides.filter((override) =>
+    !promotedApprovedKeys.has(`${override.conceptKey}::${override.granularity}::${override.bucketKey}`),
+  );
 
   const otherOverrides = args.allOverrides.filter((override) =>
     override.scenarioId !== args.approved.id

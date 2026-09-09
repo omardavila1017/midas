@@ -163,10 +163,27 @@ export function classifyIvaAccount(nombreCuenta: string | undefined): IvaAccount
   if (notPaidYet && !isCausedSide) return 'creditable-pending';
   if (notCollectedYet && !isCreditableSide) return 'caused-accrued';
 
-  // Acreditable consumado: IVA sobre compras/gastos efectivamente pagado.
-  if (isCreditableSide || name.includes('PAGADO')) return 'creditable';
-  // Causado consumado: IVA sobre ventas efectivamente cobrado (o ya exigible).
-  if (isCausedSide || name.includes('COBRADO')) return 'caused';
+  // El participio DESNUDO (`PAGADO` / `COBRADO`) sólo decide cuando la cuenta
+  // NO declara lado. Antes no estaba guardado, y la colisión de substring iba
+  // en la peor dirección: una cuenta del lado causado cuyo nombre contuviera
+  // `PAGADO` (un hipotético `IVA TRASLADADO PAGADO`) salía **acreditable**, o
+  // sea inflando el saldo a favor. No está vivo — el vocabulario medido escribe
+  // el causado con `COBRADO`/`NO COBRADO` — pero es la misma clase de colisión
+  // que ya costó $37.45M con `'PAGADO'` dentro de `'NO PAGADO'`.
+  //
+  // Cuando el lado declarado y el participio se CONTRADICEN, el destino es
+  // `'other'`: no se inventa la semántica fiscal de un nombre que hoy no
+  // existe (¿`TRASLADADO PAGADO` es causado del periodo, o IVA ya enterado al
+  // SAT, que no es ninguno de los dos?). Queda visible en
+  // `window.__midas__.ivaLedger.accountsByKind.other` para que un humano
+  // decida — mismo criterio conservador que la guarda de liquidación de arriba.
+  const saysPaid = name.includes('PAGADO');
+  const saysCollected = name.includes('COBRADO');
+  if (isCreditableSide && isCausedSide) return 'other';
+  if (isCreditableSide) return saysCollected ? 'other' : 'creditable';
+  if (isCausedSide) return saysPaid ? 'other' : 'caused';
+  if (saysPaid) return 'creditable';
+  if (saysCollected) return 'caused';
   return 'other';
 }
 

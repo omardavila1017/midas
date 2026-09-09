@@ -188,12 +188,17 @@ describe('comprasToPurchaseReceipts — campos de catálogo vacíos', () => {
     expect(rec.workflowState).toBeUndefined();
   });
 
-  it('nombre de proveedor SÓLO-espacios NO cae al placeholder (no se trima, a diferencia del resto)', () => {
-    // Comportamiento real observado: `supplierName` usa `r.nombreProveedor || …`
-    // sin trim, mientras que los demás campos descriptivos sí trimean. Un
-    // nombre en blanco del API se propaga tal cual.
+  it('nombre de proveedor SÓLO-espacios cae al placeholder', () => {
+    // Este test pineaba el defecto: `supplierName` era el único campo
+    // descriptivo sin `.trim()`, así que un nombre en blanco del API (JDE
+    // rellena con espacios) se propagaba tal cual y salía como contraparte
+    // vacía en vez de caer al placeholder.
     const rec = one({ nombreProveedor: '   ' });
-    expect(rec.supplierName).toBe('   ');
+    expect(rec.supplierName).toBe('Proveedor sin nombre');
+  });
+
+  it('un nombre real con relleno de espacios se entrega trimeado', () => {
+    expect(one({ nombreProveedor: '  PROVEEDOR X  ' }).supplierName).toBe('PROVEEDOR X');
   });
 
   it('estadoSiguiente ausente (undefined) no rompe el mapeo', () => {

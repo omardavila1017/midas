@@ -250,3 +250,37 @@ describe('summarizeIvaAccounts / hasIvaLedgerCoverage', () => {
     expect(hasIvaLedgerCoverage(undefined)).toBe(false);
   });
 });
+
+describe('classifyIvaAccount — el participio desnudo no puede pisar el lado declarado', () => {
+  // Hallazgo abierto desde 2026-08-12: los fallbacks por participio no estaban
+  // guardados por lado, así que una cuenta del lado CAUSADO cuyo nombre
+  // contuviera `PAGADO` salía `creditable` — la peor dirección (infla el saldo
+  // a favor). Misma clase de colisión de substring que ya costó $37.45M con
+  // `'PAGADO'` dentro de `'NO PAGADO'`.
+  it('una cuenta del lado causado con PAGADO NO sale acreditable', () => {
+    expect(classifyIvaAccount('IVA 16% TRASLADADO PAGADO')).not.toBe('creditable');
+    expect(classifyIvaAccount('IVA CAUSADO PAGADO')).not.toBe('creditable');
+  });
+
+  it('el lado y el participio en conflicto van a `other`, no se inventa semántica', () => {
+    // Queda visible en el diagnóstico por cuenta para que un humano decida si
+    // es causado del periodo o IVA ya enterado al SAT (que no es ninguno).
+    expect(classifyIvaAccount('IVA 16% TRASLADADO PAGADO')).toBe('other');
+    expect(classifyIvaAccount('IVA 16% ACREDITABLE COBRADO')).toBe('other');
+  });
+
+  it('el vocabulario REAL del mayor no cambia', () => {
+    expect(classifyIvaAccount('IVA 8% ACREDIT PAGADO')).toBe('creditable');
+    expect(classifyIvaAccount('IVA 16% ACREDIT NO PAGADO')).toBe('creditable-pending');
+    expect(classifyIvaAccount('IVA 16% TRASLADADO COBRADO')).toBe('caused');
+    expect(classifyIvaAccount('IVA 16% TRASLADADO NO COBRADO')).toBe('caused-accrued');
+    expect(classifyIvaAccount('RETENCION IVA 4% PAGADO')).toBe('withheld');
+    expect(classifyIvaAccount('RETENCION IVA 4% NO PAGADO')).toBe('withheld-pending');
+    expect(classifyIvaAccount('IVA POR PAGAR')).toBe('other');
+  });
+
+  it('sin lado declarado, el participio sigue decidiendo', () => {
+    expect(classifyIvaAccount('IVA PAGADO')).toBe('creditable');
+    expect(classifyIvaAccount('IVA COBRADO')).toBe('caused');
+  });
+});

@@ -98,9 +98,13 @@ describe('resolveRealPaymentDate', () => {
   });
 
   it('falls back to the theoretical date when no match is found within MAX_SCAN_DAYS', () => {
-    // Day 32 never exists; the scan gives up and returns the theoretical date
-    // untouched (even if it is a Saturday).
-    expect(resolveIso(utc(2026, 1, 10), { kind: 'DOM', day: 32 })).toBe('2026-01-10');
+    // Day 32 never exists, so the scan gives up. Antes devolvía la fecha teórica
+    // TAL CUAL, así que este fallback era el único camino capaz de entregar una
+    // fecha de cobro en sábado (2026-01-10 lo es) o en día inhábil. Ahora aplica
+    // el mismo deslizamiento a día hábil que el camino normal → lunes 12.
+    expect(resolveIso(utc(2026, 1, 10), { kind: 'DOM', day: 32 })).toBe('2026-01-12');
+    // Un día hábil no se mueve.
+    expect(resolveIso(utc(2026, 1, 14), { kind: 'DOM', day: 32 })).toBe('2026-01-14');
   });
 
   it('normalizes any time-of-day component to a pure UTC date', () => {
@@ -133,9 +137,14 @@ describe('advanceOneCycle', () => {
     expect(toISODate(advanceOneCycle(utc(2026, 4, 30), 'Contado'))).toBe('2026-05-30');
   });
 
-  it('Mensual from Jan 31 overflows into March (JS setUTCMonth rollover — observed behavior)', () => {
-    // Feb 2026 has 28 days, so Jan 31 + 1 month lands on Mar 3.
-    expect(toISODate(advanceOneCycle(utc(2026, 1, 31), 'Mensual'))).toBe('2026-03-03');
+  it('Mensual from Jan 31 clamps to Feb 28 instead of overflowing into March', () => {
+    // Antes pineaba el rollover de JS (`2026-03-03`) como "observed behavior":
+    // el ciclo se SALTABA febrero entero. Se sujeta al último día del mes.
+    expect(toISODate(advanceOneCycle(utc(2026, 1, 31), 'Mensual'))).toBe('2026-02-28');
+    // Bisiesto: el clamp respeta el 29 real.
+    expect(toISODate(advanceOneCycle(utc(2028, 1, 31), 'Mensual'))).toBe('2028-02-29');
+    // Semanal/Quincenal siguen siendo desplazamientos fijos, sin clamp.
+    expect(toISODate(advanceOneCycle(utc(2026, 1, 31), 'Semanal'))).toBe('2026-02-07');
   });
 
   it('does not mutate the input date', () => {

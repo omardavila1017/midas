@@ -222,10 +222,12 @@ describe('applyMerge — promotion branches', () => {
     expect(promoted).toHaveLength(1);
     // The promoted override reuses the id of the approved override it replaces.
     expect(promoted[0].id).toBe(approvedOverride.id);
-    // KNOWN DEFECT pinned here: `remainingApprovedOverrides` only drops the replaced approved
-    // override when the promoted copy got a DIFFERENT id, so reusing `existing.id` leaves BOTH
-    // the stale (90) and the promoted (100) rows in the collection under the same id.
-    expect(result.cellOverrides.filter((override) => override.id === approvedOverride.id)).toHaveLength(2);
+    // Este test pineaba el defecto: `remainingApprovedOverrides` sólo descartaba el aprobado
+    // reemplazado cuando el promovido recibía un id DISTINTO, así que reusar `existing.id`
+    // dejaba en la colección el viejo (90) Y el promovido (100) bajo el MISMO id — cuál ganaba
+    // dependía del orden de iteración. Ahora el descarte es por llave.
+    expect(result.cellOverrides.filter((override) => override.id === approvedOverride.id)).toHaveLength(1);
+    expect(result.cellOverrides.find((override) => override.id === approvedOverride.id)?.value).toBe(100);
     // The unselected draft override survives untouched; foreign scenarios are preserved too.
     expect(result.cellOverrides.some((override) => override.id === unselectedDraft.id)).toBe(true);
     expect(result.cellOverrides.some((override) => override.id === foreignOverride.id)).toBe(true);

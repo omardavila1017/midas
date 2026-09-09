@@ -194,25 +194,35 @@ function enumerateDates(
 ): string[] {
   if (!isIsoDate(startDate) || !isIsoDate(endDate)) return [];
   const out: string[] = [];
-  let cursor = parseIsoDate(startDate);
+  const anchor = parseIsoDate(startDate);
+  let cursor = anchor;
   const limit = parseIsoDate(endDate < rangeEnd ? endDate : rangeEnd);
   const min = parseIsoDate(rangeStart);
 
+  // Cada ocurrencia se calcula desde la fecha de INICIO, no desde la anterior.
+  // Encadenar `cursor = next(cursor)` hace que el día se pierda para siempre en
+  // cuanto un mes corto lo trunca: una entrada mensual del 31-ene daba
+  // 31-ene · 28-feb · 28-mar · 28-abr… (o, con `addMonths` clamping, 31-ene ·
+  // 28-feb · 28-mar), cuando lo correcto es volver al 31 en los meses que lo
+  // tienen. Anclando al inicio, el truncamiento es local al mes corto.
+  let step = 0;
   while (cursor <= limit && out.length < 260) {
     const iso = toIsoDate(cursor);
     if (cursor >= min && iso >= rangeStart && iso <= rangeEnd) out.push(iso);
     if (recurrence === 'ONE_TIME') break;
-    cursor = nextOccurrence(cursor, recurrence);
+    step += 1;
+    cursor = occurrenceAt(anchor, recurrence, step);
   }
   return out;
 }
 
-function nextOccurrence(date: Date, recurrence: ManualPlanningRecurrence): Date {
-  if (recurrence === 'WEEKLY') return addDays(date, 7);
-  if (recurrence === 'BIWEEKLY') return addDays(date, 14);
-  if (recurrence === 'MONTHLY') return addMonthsKeepingDay(date, 1);
-  if (recurrence === 'QUARTERLY') return addMonthsKeepingDay(date, 3);
-  return addDays(date, 9999);
+/** Ocurrencia número `step` contada desde `anchor` (nunca desde la anterior). */
+function occurrenceAt(anchor: Date, recurrence: ManualPlanningRecurrence, step: number): Date {
+  if (recurrence === 'WEEKLY') return addDays(anchor, 7 * step);
+  if (recurrence === 'BIWEEKLY') return addDays(anchor, 14 * step);
+  if (recurrence === 'MONTHLY') return addMonthsKeepingDay(anchor, step);
+  if (recurrence === 'QUARTERLY') return addMonthsKeepingDay(anchor, 3 * step);
+  return addDays(anchor, 9999);
 }
 
 function movementCategory(entry: ManualPlanningEntry): FinancialMovementCategory {

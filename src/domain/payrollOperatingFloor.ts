@@ -58,6 +58,8 @@
 /** Subset de `NominaRecord` que necesita el cálculo. */
 export interface PayrollFloorRecordLike {
   cia?: string;
+  /** Tipo/turno de nómina. Granularidad del troceo del fetch → del truncamiento. */
+  payrollType?: string;
   conceptName?: string;
   paymentDate?: string;
   periodEndDate?: string;
@@ -73,11 +75,27 @@ export interface PayrollFloorRecordLike {
  * agrupado por semana: la fecha de pago manda, porque es cuando el dinero sale.
  */
 export function payrollMonthKey(r: PayrollFloorRecordLike): string | null {
-  const fromDate = r.paymentDate || r.periodEndDate;
-  if (fromDate && fromDate.length >= 7) return fromDate.slice(0, 7);
+  // Se exige forma ISO (`YYYY-MM…`), no sólo longitud. `trimIsoDate` (el mapper)
+  // recorta a 10 chars SIN validar formato, así que una fecha en otro formato
+  // pasaría tal cual: `'2026/08/15'.slice(0,7)` = `'2026/08'`, una llave de mes
+  // que no empata con ninguna otra fila del mismo mes y que además ordena por
+  // ENCIMA del mes en curso (`'/'` > `'-'` en ASCII), así que el filtro de meses
+  // cerrados la excluiría para siempre: el monto desaparecería del piso sin
+  // aparecer en `skippedTruncated`. Con la validación, esa fila cae al fallback
+  // `year`/`month`, que es donde el dato correcto sí está.
+  //
+  // Passthrough para el formato real de la fuente (`tress.Nomina.FechaPago` es
+  // `smalldatetime` → el API serializa ISO): cero cambio hoy, cierra el latente.
+  const fromDate = isoMonthPrefix(r.paymentDate) ?? isoMonthPrefix(r.periodEndDate);
+  if (fromDate) return fromDate;
   if (r.year > 0 && r.month > 0) return `${r.year}-${String(r.month).padStart(2, '0')}`;
-  if (r.sourcePeriod && r.sourcePeriod.length >= 7) return r.sourcePeriod.slice(0, 7);
-  return null;
+  return isoMonthPrefix(r.sourcePeriod);
+}
+
+/** `YYYY-MM` si el valor arranca con una fecha ISO; `null` si no. */
+function isoMonthPrefix(v: string | undefined): string | null {
+  if (!v || !/^\d{4}-\d{2}(?:$|[-T])/.test(v)) return null;
+  return v.slice(0, 7);
 }
 
 /**
@@ -113,8 +131,27 @@ export interface PayrollFloorMonth {
   gross: number;
   /** Σ aportaciones patronales. `0` con `gross > 0` = payload truncado. */
   employerTax: number;
-  /** Firma de truncamiento del gateway: hay percepciones y CERO aportaciones. */
+  /**
+   * Firma de truncamiento del gateway. Se evalúa por (cía, tipo de nómina) —
+   * NO sobre el total del mes: ver `truncatedGroups`.
+   */
   truncated: boolean;
+  /**
+   * Los `cía · tipo` con percepciones y CERO aportaciones. Vacío = mes sano.
+   *
+   * El total del mes NO sirve como firma: el fetch se trocea por empresa y tipo
+   * (`nominaLacksEmployerTax` en `jde.ts`), así que el corte del gateway es
+   * PARCIAL por naturaleza — si el chunk de la cía 11 pierde su bloque de
+   * Obligación Empresa pero el de la cía 1 llega completo, el `employerTax`
+   * AGREGADO sale > 0 y el mes pasaba como sano, con el piso corto por las
+   * ~$25M/mes de aportaciones de la cía 11 (su chunk es el más grande, o sea el
+   * primer candidato a rebasar el límite de 1MB). Medido en `tress.Nomina`
+   * jun–ago 2026, sin la cía 33: CERO combinaciones (mes, cía, tipo) con
+   * percepciones y sin aportaciones, así que evaluar a esta granularidad no
+   * produce falsos positivos — un grupo en esa forma es truncamiento, no un mes
+   * legítimamente sin aportación patronal.
+   */
+  truncatedGroups: string[];
 }
 
 export interface PayrollFloorResult {
@@ -144,6 +181,9 @@ export function computePayrollMonthlyFloor(
 
   const ciaFilter = options.ciaFilter ?? '';
   const acc = new Map<string, { gross: number; employerTax: number }>();
+  // Sub-agregado por (mes, cía, tipo) — la granularidad a la que el gateway
+  // trunca. Sólo alimenta la firma `truncated`; los montos salen de `acc`.
+  const byGroup = new Map<string, Map<string, { gross: number; employerTax: number }>>();
 
   for (const r of records) {
     if (ciaFilter && r.cia !== ciaFilter) continue;
@@ -156,21 +196,37 @@ export function computePayrollMonthlyFloor(
     if (isGross) e.gross += r.amount;
     else e.employerTax += r.amount;
     acc.set(key, e);
+
+    const groups = byGroup.get(key) ?? new Map();
+    const groupKey = `${r.cia ?? ''} · ${r.payrollType || 'sin tipo'}`;
+    const g = groups.get(groupKey) ?? { gross: 0, employerTax: 0 };
+    if (isGross) g.gross += r.amount;
+    else g.employerTax += r.amount;
+    groups.set(groupKey, g);
+    byGroup.set(key, groups);
   }
 
   const byMonth: PayrollFloorMonth[] = Array.from(acc.entries())
-    .map(([month, e]) => ({
-      month,
-      amount: e.gross + e.employerTax,
-      gross: e.gross,
-      employerTax: e.employerTax,
+    .map(([month, e]) => {
       // El gateway de TRESS corta payloads >1MB y el corte cae justo en el
       // bloque "Obligación Empresa" (`nominaLacksEmployerTax` en `jde.ts` ya
-      // trocea el fetch por esta firma, pero devuelve best-effort). Un mes
-      // cerrado con percepciones y CERO aportaciones no es un mes sin
-      // aportaciones: es un payload incompleto.
-      truncated: e.gross > 0 && e.employerTax === 0,
-    }))
+      // trocea el fetch por esta firma, pero devuelve best-effort). Un grupo
+      // (cía, tipo) con percepciones y CERO aportaciones no es un grupo sin
+      // aportaciones: es un payload incompleto. Se evalúa por grupo porque el
+      // troceo es por grupo — un total agregado esconde el corte parcial.
+      const truncatedGroups = Array.from(byGroup.get(month) ?? [])
+        .filter(([, g]) => g.gross > 0 && g.employerTax === 0)
+        .map(([groupKey]) => groupKey)
+        .sort();
+      return {
+        month,
+        amount: e.gross + e.employerTax,
+        gross: e.gross,
+        employerTax: e.employerTax,
+        truncated: truncatedGroups.length > 0,
+        truncatedGroups,
+      };
+    })
     .sort((a, b) => (a.month < b.month ? 1 : a.month > b.month ? -1 : 0));
 
   // Único requisito de elegibilidad: el mes tiene que estar COMPLETO. Un mes en
@@ -180,9 +236,10 @@ export function computePayrollMonthlyFloor(
   const closed = byMonth.filter((m) => m.month < currentMonth && m.amount > 0);
 
   // Un mes truncado se SALTA, no se reporta bajo. Desde que el piso incluye las
-  // aportaciones (~37% del efectivo de nómina), servir un mes sin ellas daría un
-  // piso plausible y 37% corto — el modo de falla caro. Se prefiere el mes
-  // anterior completo, y los saltados se confiesan en `skippedTruncated`.
+  // aportaciones (~37% del efectivo de nómina), servir un mes al que le falta
+  // aunque sea el bloque de UNA cía daría un piso plausible y corto — el modo de
+  // falla caro. Se prefiere el mes anterior completo, y los saltados se
+  // confiesan en `skippedTruncated` (+ `byMonth[].truncatedGroups`).
   const usable = closed.find((m) => !m.truncated);
   const skippedTruncated = closed.filter((m) => m.truncated).map((m) => m.month);
 

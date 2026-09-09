@@ -221,3 +221,95 @@ describe('isAccruedNotDisbursed', () => {
     })).toBe(false);
   });
 });
+
+describe('truncamiento PARCIAL: falta el bloque de UNA cía, no del mes entero', () => {
+  // El fetch se trocea por empresa y tipo (`nominaLacksEmployerTax`), así que el
+  // corte del gateway es parcial por naturaleza: es MÁS probable que se pierdan
+  // las aportaciones de la cía más grande que las de todas a la vez. Medido en
+  // `tress.Nomina` jun–ago 2026 (sin la cía 33): cero combinaciones
+  // (mes, cía, tipo) con percepciones y sin aportaciones — así que un grupo en
+  // esa forma es truncamiento, no un mes legítimamente sin aportación patronal.
+  const sano = (month: string, cia: string, bruto: number, aport: number): PayrollFloorRecordLike[] => [
+    { paymentDate: `${month}-15`, cia, payrollType: 'Semanal', year: Number(month.slice(0, 4)), month: Number(month.slice(5, 7)), amount: bruto, cashTreatment: 'CASH_OUT', conceptName: 'SUELDO' },
+    { paymentDate: `${month}-15`, cia, payrollType: 'Semanal', year: Number(month.slice(0, 4)), month: Number(month.slice(5, 7)), amount: aport, cashTreatment: 'EMPLOYER_TAX', conceptName: 'IMSS PATRONAL' },
+  ];
+  const soloBruto = (month: string, cia: string, bruto: number): PayrollFloorRecordLike[] => [
+    { paymentDate: `${month}-15`, cia, payrollType: 'Semanal', year: Number(month.slice(0, 4)), month: Number(month.slice(5, 7)), amount: bruto, cashTreatment: 'CASH_OUT', conceptName: 'SUELDO' },
+  ];
+
+  it('descarta el mes cuando a UNA cía le faltan sus aportaciones, aunque el total del mes traiga', () => {
+    const res = computePayrollMonthlyFloor(
+      [
+        // Ago: la cía 00011 (el chunk más grande, ~$25M de aportaciones) perdió
+        // su bloque. El employerTax AGREGADO del mes sale > 0 por la cía 00001.
+        ...sano('2026-08', '00001', 12_700_000, 10_351_707),
+        ...soloBruto('2026-08', '00011', 20_494_567),
+        ...sano('2026-07', '00001', 12_875_971, 10_048_784),
+        ...sano('2026-07', '00011', 21_523_799, 26_510_806),
+      ],
+      { todayIso: '2026-09-09' },
+    );
+    expect(res.monthUsed).toBe('2026-07');
+    expect(res.monthly).toBeCloseTo(12_875_971 + 10_048_784 + 21_523_799 + 26_510_806, 2);
+    expect(res.skippedTruncated).toEqual(['2026-08']);
+    const ago = res.byMonth.find((m) => m.month === '2026-08')!;
+    expect(ago.truncated).toBe(true);
+    expect(ago.truncatedGroups).toEqual(['00011 · Semanal']);
+  });
+
+  it('un mes con TODAS las cías completas no se descarta y no reporta grupos', () => {
+    const res = computePayrollMonthlyFloor(
+      [...sano('2026-08', '00001', 12_700_000, 10_351_707), ...sano('2026-08', '00011', 20_494_567, 24_768_541)],
+      { todayIso: '2026-09-09' },
+    );
+    expect(res.monthUsed).toBe('2026-08');
+    expect(res.skippedTruncated).toEqual([]);
+    expect(res.byMonth[0].truncatedGroups).toEqual([]);
+  });
+
+  it('el truncamiento se evalúa por TIPO además de por cía (el troceo es por los dos)', () => {
+    const quincenal = (month: string, cia: string, bruto: number): PayrollFloorRecordLike[] => [
+      { paymentDate: `${month}-15`, cia, payrollType: 'Quincenal', year: 2026, month: 8, amount: bruto, cashTreatment: 'CASH_OUT', conceptName: 'SUELDO' },
+    ];
+    const res = computePayrollMonthlyFloor(
+      [...sano('2026-08', '00001', 12_700_000, 10_351_707), ...quincenal('2026-08', '00001', 3_000_000)],
+      { todayIso: '2026-09-09' },
+    );
+    expect(res.byMonth[0].truncatedGroups).toEqual(['00001 · Quincenal']);
+    expect(res.monthUsed).toBeUndefined();
+  });
+});
+
+describe('payrollMonthKey — fecha en formato no-ISO cae al fallback year/month', () => {
+  // `trimIsoDate` (el mapper) recorta a 10 chars SIN validar formato. Sin la
+  // validación, `'2026/08/15'.slice(0,7)` = `'2026/08'`: una llave que no empata
+  // con ninguna otra fila del mes y que ordena por ENCIMA del mes en curso
+  // (`'/'` 47 > `'-'` 45), así que el filtro de meses cerrados la excluye para
+  // siempre — el monto desaparece del piso sin aparecer en `skippedTruncated`.
+  const base = { amount: 1_000, cashTreatment: 'CASH_OUT', conceptName: 'SUELDO', year: 2026, month: 8 };
+
+  it('usa year/month cuando la fecha no es ISO', () => {
+    expect(payrollMonthKey({ ...base, paymentDate: '2026/08/15' })).toBe('2026-08');
+    expect(payrollMonthKey({ ...base, paymentDate: '15-08-2026' })).toBe('2026-08');
+  });
+
+  it('el monto de esa fila sigue contando en el piso de su mes real', () => {
+    const res = computePayrollMonthlyFloor(
+      [
+        { paymentDate: '2026-08-15', cia: '00001', payrollType: 'Semanal', year: 2026, month: 8, amount: 1_000_000, cashTreatment: 'CASH_OUT', conceptName: 'SUELDO' },
+        { paymentDate: '2026/08/20', cia: '00001', payrollType: 'Semanal', year: 2026, month: 8, amount: 500_000, cashTreatment: 'CASH_OUT', conceptName: 'SUELDO' },
+        { paymentDate: '2026-08-15', cia: '00001', payrollType: 'Semanal', year: 2026, month: 8, amount: 800_000, cashTreatment: 'EMPLOYER_TAX', conceptName: 'IMSS PATRONAL' },
+      ],
+      { todayIso: '2026-09-09' },
+    );
+    expect(res.monthUsed).toBe('2026-08');
+    expect(res.monthly).toBe(2_300_000);
+    expect(res.byMonth).toHaveLength(1);
+  });
+
+  it('passthrough para el formato real de la fuente (ISO): sin cambio', () => {
+    expect(payrollMonthKey({ ...base, paymentDate: '2026-08-15' })).toBe('2026-08');
+    expect(payrollMonthKey({ ...base, paymentDate: '2026-08-15T12:00:00.000Z' })).toBe('2026-08');
+    expect(payrollMonthKey({ ...base, paymentDate: '2026-08' })).toBe('2026-08');
+  });
+});
