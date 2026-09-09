@@ -51,9 +51,16 @@ export function latestUsableDataDate(
   let latest: string | null = null;
   for (const raw of values) {
     const day = (raw ?? '').trim().slice(0, 10);
+    // Cortes baratos ANTES del regex: esta función barre datasets de cientos
+    // de miles de filas (compras y auxiliar rondan las 334k cada uno), y el
+    // grueso de los valores son vacíos o repetidos. Descartar por `day <=
+    // latest` no puede cambiar el máximo — `latest` ya es válido y no menor —,
+    // así que el resultado es idéntico con o sin este atajo.
+    if (day.length !== 10) continue;
+    if (latest !== null && day <= latest) continue;
     if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) continue;
     if (day > today) continue;
-    if (!latest || day > latest) latest = day;
+    latest = day;
   }
   return latest;
 }

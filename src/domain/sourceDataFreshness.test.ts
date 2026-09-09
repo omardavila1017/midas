@@ -42,4 +42,30 @@ describe('summarizeSourceDataFreshness', () => {
   it('tolera fechas con hora (recorta a día)', () => {
     expect(latestUsableDataDate(['2026-09-04T00:00:00.000'], '2026-09-07')).toBe('2026-09-04');
   });
+
+  // El barrido descarta por `day <= latest` ANTES de validar el formato (los
+  // datasets grandes llegan a cientos de miles de filas). El atajo sólo es
+  // legítimo si el resultado NO depende del orden de entrada ni deja pasar
+  // basura que ordene por encima del máximo válido.
+  describe('el atajo de barrido no cambia el resultado', () => {
+    it('descarta el DD-MM-YYYY de Antiguedad_Saldos aunque nada lo corte por futuro', () => {
+      // `jde.Antiguedad_Saldos` es la única tabla del espejo que guarda sus
+      // fechas como `DD-MM-YYYY` en varchar (medido 2026-09-07). Mide 10 chars
+      // y ordena por encima de una ISO del mismo año ('3' > '2'), así que pasa
+      // los dos cortes baratos: el regex es la ÚNICA defensa. Con un `today`
+      // lejano el corte de futuro no lo alcanza, y sin el regex el máximo
+      // saldría '31-08-2026' — una fecha que ningún consumidor puede leer.
+      expect(latestUsableDataDate(['2026-09-04', '31-08-2026'], '9999-12-31')).toBe('2026-09-04');
+      // Y también cuando llega PRIMERO, sin un `latest` que lo frene.
+      expect(latestUsableDataDate(['31-08-2026', '2026-09-04'], '9999-12-31')).toBe('2026-09-04');
+    });
+
+    it('es indiferente al orden de entrada', () => {
+      const values = ['', '2026-08-31', '2026-12-31', '2026-09-04', 'N/A', '2026-08-28', '31-08-2026'];
+      const expected = '2026-09-04';
+      expect(latestUsableDataDate(values, '2026-09-07')).toBe(expected);
+      expect(latestUsableDataDate([...values].reverse(), '2026-09-07')).toBe(expected);
+      expect(latestUsableDataDate([...values].sort(), '2026-09-07')).toBe(expected);
+    });
+  });
 });

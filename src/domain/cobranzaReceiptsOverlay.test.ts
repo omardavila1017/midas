@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { CobranzaPayment, CobranzaPaymentApplication } from '../services/jdeTypes';
 import {
   buildAppliedAmountByFactura,
+  buildEffectivePendingByLine,
   buildReceiptSurplusByFolio,
   consumeReceiptSurplus,
   receiptOverlayKey,
@@ -241,5 +242,56 @@ describe('overlay por folio (pozo consumido línea por línea)', () => {
   it('sin pozo no hace trabajo ni ajuste', () => {
     expect(buildReceiptSurplusByFolio([line()], new Map()).size).toBe(0);
     expect(consumeReceiptSurplus(new Map(), '00011::RI-1', 1_000)).toBe(0);
+  });
+});
+
+describe('buildEffectivePendingByLine', () => {
+  const applied = (amount: number, folio = 'RI-310071') =>
+    new Map([[receiptOverlayKey('00011', folio), amount]]);
+
+  it('devuelve un Map vacío sin recibos — el caller sirve el dato de la fuente', () => {
+    const lines = [line({ importeBrutoPesos: 1_000, importePendientePesos: 1_000 })];
+    expect(buildEffectivePendingByLine(lines, new Map()).size).toBe(0);
+  });
+
+  it('reparte el pozo del folio entre sus líneas sin borrar el saldo que sigue vivo', () => {
+    // Dos líneas de $100k con un recibo de $150k: quedan $50k por cobrar, no
+    // $0. Aplicar el recibo entero a cada línea es el defecto que hace
+    // DESAPARECER cobranza real.
+    const lines = [
+      line({ importeBrutoPesos: 100_000, importePendientePesos: 100_000 }),
+      line({ importeBrutoPesos: 100_000, importePendientePesos: 100_000 }),
+    ];
+    const byLine = buildEffectivePendingByLine(lines, applied(150_000));
+    const total = lines.reduce((s, l) => s + (byLine.get(l) ?? l.importePendientePesos), 0);
+    expect(total).toBe(50_000);
+  });
+
+  it('sólo indexa las líneas que SÍ recibieron ajuste', () => {
+    const lines = [
+      line({ importeBrutoPesos: 100_000, importePendientePesos: 100_000 }),
+      line({ noFactura: 'RI-999', importeBrutoPesos: 7_000, importePendientePesos: 7_000 }),
+    ];
+    const byLine = buildEffectivePendingByLine(lines, applied(100_000));
+    expect(byLine.get(lines[0])).toBe(0);
+    // La factura sin recibo no aparece: su pendiente es el de la fuente.
+    expect(byLine.has(lines[1])).toBe(false);
+  });
+
+  it('nunca deja un pendiente negativo aunque el recibo exceda el saldo', () => {
+    const lines = [line({ importeBrutoPesos: 1_000, importePendientePesos: 1_000 })];
+    expect(buildEffectivePendingByLine(lines, applied(5_000)).get(lines[0])).toBe(0);
+  });
+
+  it('coincide con el overlay de los motores línea por línea', () => {
+    // Fuente única: este helper orquesta el MISMO pozo, así que no puede
+    // divergir del ajuste que aplican MOTOR 2 y el calendario.
+    const lines = [
+      line({ importeBrutoPesos: 100_000, importePendientePesos: 40_000 }),
+      line({ importeBrutoPesos: 60_000, importePendientePesos: 60_000 }),
+    ];
+    const map = buildEffectivePendingByLine(lines, applied(90_000));
+    const motores = applyOverlay(lines, applied(90_000));
+    expect(lines.map((l) => map.get(l) ?? l.importePendientePesos)).toEqual(motores);
   });
 });

@@ -24,7 +24,7 @@ import {
 } from '../domain/collectionCalendarEngine';
 import { buildRolProjectedInflows } from '../domain/rolProjectionEngine';
 import { segmentOf, listSegments, buildSegmentBreakdown, buildSegmentByFactura, SEGMENT_UNCLASSIFIED } from '../domain/cobranzaSegment';
-import { buildAppliedAmountByFactura } from '../domain/cobranzaReceiptsOverlay';
+import { buildAppliedAmountByFactura, buildEffectivePendingByLine } from '../domain/cobranzaReceiptsOverlay';
 import {
   buildCobranzaBankCuadre,
   type CuadreStatus,
@@ -2363,6 +2363,17 @@ function CobranzaRealView({
     [filtered, records, segmentByFactura, appliedByFactura],
   );
 
+  // Pendiente ajustado por LÍNEA para el export. Sin esto el CSV sólo llevaba
+  // el pendiente crudo de `/cobranza`, así que sumar esa columna en Excel daba
+  // un por-cobrar inflado ($359.7M medidos el 2026-09-09) que contradice al
+  // KPI de la propia app y al calendario. Mismo pozo por folio, agotado sobre
+  // `records` COMPLETO — consumirlo sobre `filtered` haría desaparecer
+  // cobranza real de las filas visibles.
+  const effectivePendingByLine = useMemo(
+    () => buildEffectivePendingByLine(records, appliedByFactura),
+    [records, appliedByFactura],
+  );
+
   if (records.length === 0 && payments.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-16 text-center bg-white border border-[var(--gray-200)]/60 rounded-[var(--radius)]">
@@ -2525,7 +2536,11 @@ function CobranzaRealView({
                 FechaPromesaPago: csvDate((r.fechaPromesaPago || '').slice(0, 10)),
                 DiasVencida: r.diasVencida,
                 BrutoMXN: r.importeBrutoPesos,
+                // Crudo de `/cobranza` (útil para reclamar al origen) +
+                // ajustado por los recibos (el que de verdad falta cobrar).
+                // Iguales cuando el recibo no aporta nada.
                 PendienteMXN: r.importePendientePesos,
+                PendienteAjustadoMXN: effectivePendingByLine.get(r) ?? r.importePendientePesos,
                 Moneda: r.moneda,
                 EstatusJDE: r.estatus,
                 FuenteDato: calendarEvent

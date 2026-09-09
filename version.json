@@ -1,4 +1,4 @@
 {
-  "pr": 274,
+  "pr": 275,
   "_comment": "Número del PR que produjo este árbol. Es la FUENTE ÚNICA de la versión que se muestra en el login (V1.<pr>). Vive en un archivo COMMITEADO —no se deriva de git— porque el deploy se alimenta por `rsync --exclude='.git'`: sin historial, cualquier cálculo desde git cae a un fallback constante y la versión NUNCA cambia en el servidor (fue exactamente el defecto que motivó este archivo). Se actualiza SOLO: `.github/workflows/sync.yml` lo reescribe con el PR del merge antes del rsync al deploy; a mano, `npm run version:pr`."
 }

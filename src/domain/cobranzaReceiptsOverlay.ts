@@ -155,3 +155,37 @@ export function consumeReceiptSurplus(
   surplusByFolio.set(folioKey, surplus - adjustment);
   return adjustment;
 }
+
+/**
+ * Pendiente EFECTIVO por línea, indexado por la línea misma.
+ *
+ * Para superficies que necesitan el saldo ajustado de una línea CONCRETA (un
+ * export, un detalle por factura) en vez de un agregado. El pozo se construye
+ * y se agota sobre el set COMPLETO — `lines` — porque el excedente es del folio
+ * entero: agotarlo sobre un subconjunto filtrado le aplicaría a las líneas
+ * visibles el ajuste de las que el filtro escondió, y eso hace DESAPARECER
+ * cobranza real (el defecto contrario y peor, ver el docblock del módulo).
+ * El consumidor toma del Map sólo las líneas que le interesan.
+ *
+ * Sin recibos devuelve un Map VACÍO, no uno lleno de pendientes crudos: así el
+ * caller distingue "no hay ajuste que aplicar" y sirve el valor de la fuente.
+ */
+export function buildEffectivePendingByLine<T extends ReceiptOverlayLine>(
+  lines: readonly T[],
+  appliedByFactura: Map<string, number>,
+): Map<T, number> {
+  const byLine = new Map<T, number>();
+  if (appliedByFactura.size === 0) return byLine;
+  const surplusByFolio = buildReceiptSurplusByFolio(lines, appliedByFactura);
+  if (surplusByFolio.size === 0) return byLine;
+  for (const line of lines) {
+    const pendiente = Number.isFinite(line.importePendientePesos) ? line.importePendientePesos : 0;
+    const ajuste = consumeReceiptSurplus(
+      surplusByFolio,
+      receiptOverlayKey(line.cia, line.noFactura),
+      pendiente,
+    );
+    if (ajuste > 0) byLine.set(line, Math.max(0, pendiente - ajuste));
+  }
+  return byLine;
+}

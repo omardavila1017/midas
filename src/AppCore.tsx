@@ -1763,25 +1763,88 @@ export default function App() {
   //
   // Sólo se emite la fila cuando la fuente está REZAGADA: una por dataset al
   // día sería ruido que entrena al usuario a ignorar el panel.
-  const staleSourceHealthRows = useMemo<DataHealthDatasetRow[]>(() => {
+  // Antigüedad del DATO por fuente, indexada por el dataset al que pertenece
+  // para poder pintar cada fila JUNTO a la suya en el panel.
+  //
+  // Cubre TODAS las fuentes JDE/TRESS/CITI, no sólo CXP y Cobranza: el defecto
+  // que esta capa cierra (una fuente muerta que se ve “al día” porque la
+  // consulta sí corrió) no es exclusivo de un dataset. Medido 2026-09-09:
+  // `jde.Antiguedad_Saldos` llevaba 8 días sin insertar una fila y el CXP de
+  // Midas terminaba el 31-ago; las otras nueve tablas cargaron esa madrugada,
+  // así que hoy sólo CXP emite fila — pero cualquiera de las otras puede
+  // morir igual y hasta ahora ninguna lo habría dicho.
+  //
+  // La fecha de cada fuente es la que prueba que SIGUE CARGANDO (la del hecho
+  // de negocio, no la de la consulta). Las fechas futuras se ignoran aguas
+  // abajo: una factura o un pago post-fechado no prueba nada.
+  //
+  // `rol` y `viajes` van en filas SEPARADAS aunque compartan el slot de boot:
+  // son dos fuentes distintas (`citi.Flujo_Efectivo_Rol_Diario` y
+  // `sentur.Viajes_Especiales`) y tomar el máximo de ambas escondería a la
+  // que murió. El fetch derivado del IVA del mayor queda FUERA a propósito:
+  // su cobertura depende del descubrimiento de objetos, así que un rezago ahí
+  // puede significar “sin movimiento de IVA en el objeto”, no “fuente muerta”.
+  //
+  // Los iterables son generadores, no `.map()`: estos datasets llegan a
+  // cientos de miles de filas y alocar un arreglo de fechas por cada uno en
+  // cada ola del boot no compra nada.
+  const staleSourceRowsByDataset = useMemo<Map<string, DataHealthDatasetRow[]>>(() => {
     const today = todayISO();
-    const rows: DataHealthDatasetRow[] = [];
-    const push = (key: string, label: string, dates: Iterable<string | undefined>) => {
+    const byDataset = new Map<string, DataHealthDatasetRow[]>();
+    const push = (dataset: string, key: string, label: string, dates: Iterable<string | undefined>) => {
       const f = summarizeSourceDataFreshness(dates, today);
       // `no-data` sin registros = el dataset simplemente no se ha cargado; eso
       // ya lo dice su propia fila de estado. Sólo hablamos de fuente rezagada.
       if (f.status === 'fresh' || (f.status === 'no-data' && !f.lastDataDate)) return;
-      rows.push({ key, label, status: f.status === 'aging' ? 'stale' : 'error', lastSync: f.lastDataDate ?? undefined });
+      const row: DataHealthDatasetRow = {
+        key,
+        label,
+        status: f.status === 'aging' ? 'stale' : 'error',
+        lastSync: f.lastDataDate ?? undefined,
+      };
+      const list = byDataset.get(dataset);
+      if (list) list.push(row); else byDataset.set(dataset, [row]);
     };
-    if (cxpRecords.length > 0) {
-      push('cxp-data-age', 'CXP · dato más reciente en la fuente', cxpRecords.map((r) => r.fechaFactura));
+    const age = (dataset: string, source: string, records: { length: number }, dates: () => Iterable<string | undefined>) => {
+      if (records.length === 0) return;
+      push(dataset, `${dataset}-data-age`, `${source} · dato más reciente en la fuente`, dates());
+    };
+
+    age('cxp', 'CXP', cxpRecords, function* () {
+      for (const r of cxpRecords) yield r.fechaFactura;
+    });
+    age('cobranza', 'Cobranza', cobranzaRecords, function* () {
+      for (const r of cobranzaRecords) { yield r.fechaFactura; yield r.fechaCobro; }
+    });
+    age('compras', 'Compras (OCs)', comprasRecords, function* () {
+      // `fechaPedido` (F_Orden) es la que prueba alta nueva; `fechaRecepcion`
+      // viene vacía en toda OC aún sin entrada.
+      for (const r of comprasRecords) { yield r.fechaPedido; yield r.fechaRecepcion; }
+    });
+    age('pagos', 'Pagos a proveedores', pagoProveedorRecords, function* () {
+      for (const r of pagoProveedorRecords) yield r.fechaPago;
+    });
+    age('auxiliar', 'Auxiliar contable', auxiliarContableRecords, function* () {
+      for (const r of auxiliarContableRecords) yield r.fechaContable;
+    });
+    age('nomina', 'Nómina (TRESS)', nominaRecords, function* () {
+      for (const r of nominaRecords) yield r.paymentDate;
+    });
+    age('rol', 'ROL (CITI)', rolRecords, function* () {
+      for (const r of rolRecords) yield r.fechaViaje;
+    });
+    // Clave propia: `rol` ya la ocupa el ROL de CITI y son fuentes distintas.
+    if (viajesEspecialesRecords.length > 0) {
+      push('rol', 'viajes-data-age', 'Viajes Especiales · dato más reciente en la fuente',
+        (function* () {
+          for (const r of viajesEspecialesRecords) { yield r.fSalidaPrimera; yield r.fechaFactura; }
+        })());
     }
-    if (cobranzaRecords.length > 0) {
-      push('cobranza-data-age', 'Cobranza · dato más reciente en la fuente',
-        cobranzaRecords.flatMap((r) => [r.fechaFactura, r.fechaCobro]));
-    }
-    return rows;
-  }, [cxpRecords, cobranzaRecords]);
+    return byDataset;
+  }, [
+    cxpRecords, cobranzaRecords, comprasRecords, pagoProveedorRecords,
+    auxiliarContableRecords, nominaRecords, rolRecords, viajesEspecialesRecords,
+  ]);
 
   const dataHealthRows = useMemo<DataHealthDatasetRow[]>(() => {
     const maxTs = (...maps: Record<string, string>[]): string | undefined => {
@@ -1793,22 +1856,32 @@ export default function App() {
       }
       return max;
     };
+    // Cada fila de antigüedad-del-dato va JUNTO a su dataset, no todas
+    // apiladas tras CXP: el usuario lee la fuente rezagada al lado del módulo
+    // al que le pega.
+    const aged = (dataset: string) => staleSourceRowsByDataset.get(dataset) ?? [];
     return [
       { key: 'banks', label: 'Bancos', status: datasetStatus.banks, lastSync: banksLastSync ?? undefined },
       ...manualBankHealthRows,
       ...companyBankHealthRows,
       { key: 'cxp', label: 'CXP · Antigüedad de saldos', status: datasetStatus.cxp, lastSync: maxTs(cxpLoadedCias) },
-      ...staleSourceHealthRows,
+      ...aged('cxp'),
       { key: 'cobranza', label: 'Cobranza', status: datasetStatus.cobranza, lastSync: maxTs(cobranzaLoadedCias, cobranzaPaymentsLoadedCias) },
+      ...aged('cobranza'),
       { key: 'compras', label: 'Compras (OCs)', status: datasetStatus.compras, lastSync: maxTs(comprasLoadedCias) },
+      ...aged('compras'),
       { key: 'pagos', label: 'Pagos a proveedores', status: datasetStatus.pagos, lastSync: maxTs(pagoProveedorLoadedCias) },
+      ...aged('pagos'),
       { key: 'auxiliar', label: 'Auxiliar contable', status: datasetStatus.auxiliar, lastSync: maxTs(auxiliarContableLoadedCias) },
+      ...aged('auxiliar'),
       { key: 'nomina', label: 'Nómina (TRESS)', status: datasetStatus.nomina, lastSync: maxTs(nominaLoadedKeys) },
+      ...aged('nomina'),
       { key: 'rol', label: 'ROL · Viajes', status: datasetStatus.rol, lastSync: maxTs(rolLoadedKeys) },
+      ...aged('rol'),
     ];
   }, [
     datasetStatus, banksLastSync, manualBankHealthRows, companyBankHealthRows,
-    staleSourceHealthRows, cxpLoadedCias, cobranzaLoadedCias,
+    staleSourceRowsByDataset, cxpLoadedCias, cobranzaLoadedCias,
     cobranzaPaymentsLoadedCias, comprasLoadedCias, pagoProveedorLoadedCias,
     auxiliarContableLoadedCias, nominaLoadedKeys, rolLoadedKeys,
   ]);
