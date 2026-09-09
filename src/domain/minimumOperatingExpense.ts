@@ -152,9 +152,11 @@ export function computeMinimumOperatingExpense(
     .sort((a, b) => b.gastoMinimoMensual - a.gastoMinimoMensual);
 
   const providersMonthly = byProvider.reduce((acc, p) => acc + p.gastoMinimoMensual, 0);
-  // Prioridad: TRESS (cash neto real) > presupuesto CSV. TRESS refleja el
-  // pago que efectivamente sale del banco; el budget es solo plantilla.
-  const payrollMonthly = typeof payrollMonthlyOverride === 'number' && payrollMonthlyOverride > 0
+  // Prioridad: TRESS (efectivo real) > presupuesto CSV. TRESS refleja el pago
+  // que efectivamente sale del banco —percepciones MÁS aportaciones patronales,
+  // ver `payrollOperatingFloor.ts`—; el budget es solo plantilla.
+  const usesTressFloor = typeof payrollMonthlyOverride === 'number' && payrollMonthlyOverride > 0;
+  const payrollMonthly = usesTressFloor
     ? payrollMonthlyOverride
     : computePayrollMonthlyFromBudget(budget);
   const totalMonthly = providersMonthly + payrollMonthly;
@@ -174,7 +176,14 @@ export function computeMinimumOperatingExpense(
   // Si hay nómina, agregamos una fila ficticia al inicio para que sea visible
   // en breakdowns. NO se agrega a `byProvider` porque no es un proveedor.
   if (payrollMonthly > 0) {
-    byCategory.unshift({ categoria: 'NÓMINA + FINIQUITOS', total: payrollMonthly, count: 1 });
+    // El piso de TRESS es percepciones + aportaciones patronales; el del
+    // presupuesto CSV son las filas de nómina/finiquitos. Etiquetas distintas
+    // porque son cosas distintas.
+    byCategory.unshift({
+      categoria: usesTressFloor ? 'NÓMINA + APORTACIONES' : 'NÓMINA + FINIQUITOS',
+      total: payrollMonthly,
+      count: 1,
+    });
     byCategory.sort((a, b) => b.total - a.total);
   }
 

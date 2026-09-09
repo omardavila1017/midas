@@ -127,6 +127,11 @@ export function lastNMonths(anio: number, mes: number, n: number): Array<{ anio:
  */
 const WITHHOLDING_PATTERNS = [
   /\bisr\b/i,
+  // ISPT (Impuesto Sobre Productos del Trabajo) es el nombre viejo del ISR;
+  // TRESS todavía lo emite como `ISPT ART. 86 (EMPRESA)` bajo Obligación
+  // Empresa. Sin este patrón contaba como aportación patronal, cuando ya vive
+  // dentro del bruto como retención al empleado (medido ago-2026: $9,985.20).
+  /\bispt\b/i,
   /imss\s+(emp|trab|obrero)/i,
   /\briv\b/i, // RIVA — retención IVA
   /retencion/i,
@@ -147,6 +152,11 @@ const NON_CASH_PATTERNS = [
  *  - PROVISION/PROVISIÓN: provisión contable (ej. ISN), no es el pago real
  *    al fisco. El pago real se proyecta vía taxModule.
  *  - DESPENSA GRAVADA: la porción gravada de los vales, informativo.
+ *  - SALARIO DIARIO / SALARIO DIARIO INTEGRADO: el SDI es la BASE de cotización
+ *    con la que se calculan IMSS/INFONAVIT, no un monto a pagar. Se emite bajo
+ *    Obligación Empresa y contaba como aportación patronal (medido ago-2026:
+ *    $76,689.60). Sumarlo al piso operativo sería contar una base como si fuera
+ *    efectivo.
  */
 const EMPLOYER_INFORMATIVO_PATTERNS = [
   /\bexento\b/i,
@@ -154,6 +164,7 @@ const EMPLOYER_INFORMATIVO_PATTERNS = [
   /\bgravad[oa]\b/i,
   /provisi(ó|o)n/i,
   /hrs?\s+extras?\s+gravad/i,
+  /^salario\s+diario/i,
 ];
 
 /**

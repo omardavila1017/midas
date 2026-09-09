@@ -1,132 +1,223 @@
 import { describe, expect, it } from 'vitest';
 import {
   computePayrollMonthlyFloor,
-  payrollWeekKey,
-  PAYROLL_WEEKS_PER_MONTH,
+  isAccruedNotDisbursed,
+  payrollMonthKey,
   type PayrollFloorRecordLike,
 } from './payrollOperatingFloor';
 
 /**
- * Cifras REALES de `tress.Nomina` (db_Artefactos, carga 2026-08-04), deduplicadas
- * por `IDAnio, IDMes, IDEmpresa, IDConcepto, IDTipoNomina, Periodo` y agrupadas
- * por lunes de `FechaPago`. Σ percepciones (`TipoConcepto = 'Percepción'` →
- * `cashTreatment CASH_OUT`).
+ * Cifras REALES de `tress.Nomina` (db_Artefactos, carga 2026-09-09), medidas con
+ * la MISMA clasificación que aplica `refineCashTreatment`:
  *
- * Nótese la alternancia semana-normal / semana-con-quincena: ~$9-11M vs ~$15M.
- * Ese es el patrón que hacía inservible tomar UNA sola semana.
+ *   bruto        = Percepción (menos vales/provisión/informativo) + las
+ *                  Prestaciones promovidas (indemnización, gratificación por
+ *                  separación, prima de antigüedad).
+ *   aportaciones = Obligación Empresa menos retenciones (ISR/ISPT/IMSS obrero),
+ *                  menos informativo (exento/gravado/provisión/salario diario)
+ *                  y menos `FONDO AHORRO EMPRESA` (se devenga aquí y se paga
+ *                  como `LIQ TOTAL FA` en Percepción — doble conteo).
+ *
+ * Las cifras EXCLUYEN la cía 33 (MULTICARGA), que Midas no jala: no está en
+ * `NOMINA_FANOUT_EMPRESAS` y `dropExcludedByCia` la corta en `fetchNomina`.
+ * Son, por tanto, lo que el store debe sostener — no el total de la tabla.
+ *
+ * Septiembre está EN CURSO al 2026-09-09: 9 días. Es la razón por la que el mes
+ * en curso no puede ser el piso.
  */
-const REAL_WEEKLY_GROSS: Array<{ monday: string; gross: number; percep: number; deduc: number }> = [
-  { monday: '2026-07-06', gross: 9_417_958.26, percep: 248, deduc: 225 },
-  { monday: '2026-07-13', gross: 11_542_498.56, percep: 283, deduc: 310 },
-  { monday: '2026-07-20', gross: 10_260_986.09, percep: 248, deduc: 200 },
-  { monday: '2026-07-27', gross: 15_029_463.39, percep: 279, deduc: 293 },
+const REAL_MONTHLY: Array<{ month: string; bruto: number; aportaciones: number; fondoAhorro: number }> = [
+  { month: '2026-06', bruto: 44_819_033.10, aportaciones: 26_180_086.35, fondoAhorro: 1_477_412.35 },
+  { month: '2026-07', bruto: 53_640_419.91, aportaciones: 34_651_886.27, fondoAhorro: 1_591_563.89 },
+  { month: '2026-08', bruto: 54_214_007.89, aportaciones: 32_589_567.36, fondoAhorro: 1_480_600.88 },
+  { month: '2026-09', bruto: 17_530_645.44, aportaciones: 9_757_409.91, fondoAhorro: 296_232.72 },
 ];
 
-/** Nómina real promedio de los meses CERRADOS de 2026 (ene–jul), de la BD. */
-const REAL_MONTHLY_AVERAGE = 49_693_983.02;
+/** Piso = bruto + aportaciones. Ago-2026 (último mes cerrado) = $86,803,575.25. */
+const AGO_FLOOR = 54_214_007.89 + 32_589_567.36;
+const JUL_FLOOR = 53_640_419.91 + 34_651_886.27;
 
-function recordsForWeek(week: { monday: string; gross: number; percep: number; deduc: number }): PayrollFloorRecordLike[] {
+function recordsForMonth(m: typeof REAL_MONTHLY[number]): PayrollFloorRecordLike[] {
   const out: PayrollFloorRecordLike[] = [];
-  const year = Number(week.monday.slice(0, 4));
-  const month = Number(week.monday.slice(5, 7));
-  const per = week.gross / week.percep;
-  for (let i = 0; i < week.percep; i++) {
-    out.push({ paymentDate: week.monday, year, month, amount: per, cashTreatment: 'CASH_OUT' });
-  }
-  for (let i = 0; i < week.deduc; i++) {
-    out.push({ paymentDate: week.monday, year, month, amount: 1_000, cashTreatment: 'DEDUCTION' });
-  }
+  const year = Number(m.month.slice(0, 4));
+  const month = Number(m.month.slice(5, 7));
+  const push = (amount: number, cashTreatment: string, conceptName: string, n: number) => {
+    for (let i = 0; i < n; i++) {
+      out.push({
+        paymentDate: `${m.month}-${String((i % 28) + 1).padStart(2, '0')}`,
+        year, month, amount: amount / n, cashTreatment, conceptName,
+      });
+    }
+  };
+  push(m.bruto, 'CASH_OUT', 'SUELDO ORDINARIO', 250);
+  push(m.aportaciones, 'EMPLOYER_TAX', 'IMSS PATRONAL', 80);
+  // Devengado que se paga como LIQ TOTAL FA en Percepción: NO es piso.
+  push(m.fondoAhorro, 'EMPLOYER_TAX', 'FONDO AHORRO EMPRESA', 15);
+  // Ya viven DENTRO del bruto: sumarlas sería doble conteo.
+  out.push({ paymentDate: `${m.month}-15`, year, month, amount: 30_000_000, cashTreatment: 'DEDUCTION', conceptName: 'PRESTAMO' });
+  out.push({ paymentDate: `${m.month}-15`, year, month, amount: 9_000_000, cashTreatment: 'WITHHOLDING_PAYABLE', conceptName: 'ISR' });
+  out.push({ paymentDate: `${m.month}-15`, year, month, amount: 8_000_000, cashTreatment: 'NON_CASH', conceptName: 'EXENTO DE AGUINALDO' });
   return out;
 }
 
-const REAL_RECORDS = REAL_WEEKLY_GROSS.flatMap(recordsForWeek);
+const REAL_RECORDS = REAL_MONTHLY.flatMap(recordsForMonth);
 
-describe('payrollWeekKey', () => {
-  it('ancla al lunes UTC de la semana', () => {
-    expect(payrollWeekKey('2026-08-04')).toBe('2026-08-03'); // martes → lunes
-    expect(payrollWeekKey('2026-08-03')).toBe('2026-08-03'); // lunes → sí mismo
-    expect(payrollWeekKey('2026-08-09')).toBe('2026-08-03'); // domingo → lunes previo
+describe('payrollMonthKey', () => {
+  it('usa la fecha de pago, que es cuando sale el dinero', () => {
+    expect(payrollMonthKey({
+      paymentDate: '2026-08-31', periodEndDate: '2026-07-31', year: 2026, month: 7,
+      amount: 1, cashTreatment: 'CASH_OUT',
+    })).toBe('2026-08');
   });
 
-  it('regresa null ante fecha inválida o vacía', () => {
-    expect(payrollWeekKey('')).toBeNull();
-    expect(payrollWeekKey('no-es-fecha')).toBeNull();
+  it('cae a fin de periodo, luego a year/month, luego al periodo solicitado', () => {
+    const base = { amount: 1, cashTreatment: 'CASH_OUT' };
+    expect(payrollMonthKey({ ...base, periodEndDate: '2026-08-31', year: 0, month: 0 })).toBe('2026-08');
+    expect(payrollMonthKey({ ...base, year: 2026, month: 3 })).toBe('2026-03');
+    expect(payrollMonthKey({ ...base, year: 0, month: 0, sourcePeriod: '2026-05' })).toBe('2026-05');
+    expect(payrollMonthKey({ ...base, year: 0, month: 0 })).toBeNull();
   });
 });
 
 describe('computePayrollMonthlyFloor', () => {
-  it('promedia las últimas 4 semanas cerradas y cae dentro del 1% de la nómina real', () => {
-    const result = computePayrollMonthlyFloor(REAL_RECORDS, { todayIso: '2026-08-04' });
-    // (9,417,958.26 + 11,542,498.56 + 10,260,986.09 + 15,029,463.39)/4 × 4.33
-    expect(result.monthly).toBeCloseTo(50_066_606.07, 1);
-    expect(result.weeksUsed).toEqual(['2026-07-27', '2026-07-20', '2026-07-13', '2026-07-06']);
-    // El piso queda a menos del 1% del gasto real de nómina medido en la BD.
-    const desvio = Math.abs((result.monthly ?? 0) - REAL_MONTHLY_AVERAGE) / REAL_MONTHLY_AVERAGE;
-    expect(desvio).toBeLessThan(0.01);
+  it('devuelve el efectivo REAL del último mes completo: bruto + aportaciones', () => {
+    const r = computePayrollMonthlyFloor(REAL_RECORDS, { todayIso: '2026-09-09' });
+    expect(r.monthUsed).toBe('2026-08');
+    expect(r.monthly).toBeCloseTo(AGO_FLOOR, 2); // $90,141,699.14
   });
 
-  it('REGRESIÓN: una sola semana sobreestima el piso >30% (el defecto corregido)', () => {
-    // Comportamiento previo: `closedWeeks[0]` × 4.33. La semana más reciente
-    // cerrada (2026-07-27) trae quincena, así que infla el piso.
-    const unaSemana = computePayrollMonthlyFloor(REAL_RECORDS, { todayIso: '2026-08-04', weeks: 1 });
-    expect(unaSemana.monthly).toBeCloseTo(65_077_576.48, 1);
-    const sesgo = ((unaSemana.monthly ?? 0) - REAL_MONTHLY_AVERAGE) / REAL_MONTHLY_AVERAGE;
-    expect(sesgo).toBeGreaterThan(0.3);
-
-    // …y pararse en una semana normal lo subestima ~18%: por eso el piso
-    // oscilaba según el día en que se abría la app.
-    const soloNormal = computePayrollMonthlyFloor(
-      recordsForWeek(REAL_WEEKLY_GROSS[0]),
-      { todayIso: '2026-07-14', weeks: 1 },
-    );
-    expect(soloNormal.monthly).toBeCloseTo(9_417_958.26 * PAYROLL_WEEKS_PER_MONTH, 1);
-    expect((soloNormal.monthly ?? 0) / REAL_MONTHLY_AVERAGE).toBeLessThan(0.85);
+  it('las aportaciones patronales SON piso: el bruto solo subreportaba 37%', () => {
+    const r = computePayrollMonthlyFloor(REAL_RECORDS, { todayIso: '2026-09-09' });
+    expect(r.monthly!).toBeGreaterThan(54_214_007.89); // el bruto de ago
+    expect(r.monthly! - 54_214_007.89).toBeCloseTo(32_589_567.36, 2);
   });
 
-  it('excluye la semana en curso (nómina posiblemente parcial)', () => {
-    const conParcial = [
+  it('NO suma deducciones ni retenciones: ya viven dentro del bruto', () => {
+    // Cada mes lleva $39M de ruido DEDUCTION + WITHHOLDING_PAYABLE.
+    const r = computePayrollMonthlyFloor(REAL_RECORDS, { todayIso: '2026-09-09' });
+    expect(r.monthly).toBeCloseTo(AGO_FLOOR, 2);
+  });
+
+  it('NO suma el fondo de ahorro devengado: se paga como LIQ TOTAL FA', () => {
+    // $1.48M/mes bajo Obligación Empresa cuyo desembolso ya está en Percepción.
+    const r = computePayrollMonthlyFloor(REAL_RECORDS, { todayIso: '2026-09-09' });
+    expect(r.monthly).toBeCloseTo(AGO_FLOOR, 2);
+    expect(r.monthly).not.toBeCloseTo(AGO_FLOOR + 1_480_600.88, 2);
+  });
+
+  it('no toma el mes EN CURSO: septiembre lleva 9 días', () => {
+    const r = computePayrollMonthlyFloor(REAL_RECORDS, { todayIso: '2026-09-09' });
+    expect(r.monthUsed).not.toBe('2026-09');
+    expect(r.byMonth[0]!.month).toBe('2026-09');
+    expect(r.byMonth[0]!.amount).toBeCloseTo(17_530_645.44 + 9_757_409.91, 2);
+    expect(r.byMonth[0]!.gross).toBeCloseTo(17_530_645.44, 2);
+    expect(r.byMonth[0]!.employerTax).toBeCloseTo(9_757_409.91, 2);
+  });
+
+  it('REGRESIÓN: dos filas futuras de $18k ya no pueden mover el piso', () => {
+    // El 2026-09-09 TRESS cargó 2 percepciones con FechaPago 2026-09-24. Con la
+    // ventana de 4 semanas eso desplazaba una semana real y tiraba el piso 27%.
+    const conFuturo: PayrollFloorRecordLike[] = [
       ...REAL_RECORDS,
-      ...recordsForWeek({ monday: '2026-08-03', gross: 1_081_364.92, percep: 96, deduc: 71 }),
+      { paymentDate: '2026-09-24', year: 2026, month: 9, amount: 18_003.98, cashTreatment: 'CASH_OUT', conceptName: 'SUELDO ORDINARIO' },
     ];
-    const result = computePayrollMonthlyFloor(conParcial, { todayIso: '2026-08-04' });
-    expect(result.weeksUsed).not.toContain('2026-08-03');
-    expect(result.monthly).toBeCloseTo(50_066_606.07, 1);
+    const r = computePayrollMonthlyFloor(conFuturo, { todayIso: '2026-09-09' });
+    expect(r.monthUsed).toBe('2026-08');
+    expect(r.monthly).toBeCloseTo(AGO_FLOOR, 2);
   });
 
-  it('excluye una semana futura sin deducciones (carga incompleta)', () => {
-    // Real: FechaPago 2026-08-15 existe con 17 percepciones y CERO deducciones.
-    const conFutura = [
-      ...REAL_RECORDS,
-      ...recordsForWeek({ monday: '2026-08-10', gross: 867_387.32, percep: 17, deduc: 0 }),
-    ];
-    const result = computePayrollMonthlyFloor(conFutura, { todayIso: '2026-08-04' });
-    expect(result.weeksUsed).not.toContain('2026-08-10');
-    expect(result.monthly).toBeCloseTo(50_066_606.07, 1);
+  it('REGRESIÓN: un evento anual no distorsiona los meses vecinos', () => {
+    // $10.7M de liquidación de fondo de ahorro cayeron el 2026-08-03. Con la
+    // ventana móvil inflaban el piso 4 semanas seguidas; ahora viven en su mes.
+    const r = computePayrollMonthlyFloor(REAL_RECORDS, { todayIso: '2026-08-20' });
+    expect(r.monthUsed).toBe('2026-07');
+    expect(r.monthly).toBeCloseTo(JUL_FLOOR, 2);
   });
 
-  it('con menos de 4 semanas cerradas promedia las que hay', () => {
-    const dos = [...recordsForWeek(REAL_WEEKLY_GROSS[2]), ...recordsForWeek(REAL_WEEKLY_GROSS[3])];
-    const result = computePayrollMonthlyFloor(dos, { todayIso: '2026-08-04' });
-    expect(result.weeksUsed).toEqual(['2026-07-27', '2026-07-20']);
-    expect(result.monthly).toBeCloseTo(
-      ((10_260_986.09 + 15_029_463.39) / 2) * PAYROLL_WEEKS_PER_MONTH,
-      1,
-    );
+  it('expone el desglose por mes, más reciente primero', () => {
+    const r = computePayrollMonthlyFloor(REAL_RECORDS, { todayIso: '2026-09-09' });
+    expect(r.byMonth.map(m => m.month)).toEqual(['2026-09', '2026-08', '2026-07', '2026-06']);
   });
 
-  it('sin semanas cerradas devuelve undefined, nunca 0', () => {
-    // Un piso 0 significaría "nunca hay déficit": es peor que no tener dato.
-    expect(computePayrollMonthlyFloor([], { todayIso: '2026-08-04' }).monthly).toBeUndefined();
-    const soloSemanaActual = recordsForWeek({ monday: '2026-08-03', gross: 1_000, percep: 2, deduc: 2 });
-    expect(computePayrollMonthlyFloor(soloSemanaActual, { todayIso: '2026-08-04' }).monthly).toBeUndefined();
+  it('sin mes completo devuelve undefined, nunca 0', () => {
+    const soloEnCurso = recordsForMonth(REAL_MONTHLY[3]!);
+    const r = computePayrollMonthlyFloor(soloEnCurso, { todayIso: '2026-09-09' });
+    expect(r.monthly).toBeUndefined();
+    expect(r.byMonth).toHaveLength(1);
+  });
+
+  it('sin registros devuelve undefined', () => {
+    expect(computePayrollMonthlyFloor([], { todayIso: '2026-09-09' }).monthly).toBeUndefined();
   });
 
   it('respeta el filtro por cía', () => {
-    const mezcla = [
-      ...recordsForWeek(REAL_WEEKLY_GROSS[3]).map((r) => ({ ...r, cia: '00011' })),
-      ...recordsForWeek(REAL_WEEKLY_GROSS[0]).map((r) => ({ ...r, cia: '00033' })),
+    const recs: PayrollFloorRecordLike[] = [
+      { cia: '00001', paymentDate: '2026-08-10', year: 2026, month: 8, amount: 800_000, cashTreatment: 'CASH_OUT' },
+      { cia: '00001', paymentDate: '2026-08-10', year: 2026, month: 8, amount: 200_000, cashTreatment: 'EMPLOYER_TAX' },
+      { cia: '00011', paymentDate: '2026-08-10', year: 2026, month: 8, amount: 6_000_000, cashTreatment: 'CASH_OUT' },
+      { cia: '00011', paymentDate: '2026-08-10', year: 2026, month: 8, amount: 3_000_000, cashTreatment: 'EMPLOYER_TAX' },
     ];
-    const soloCia11 = computePayrollMonthlyFloor(mezcla, { todayIso: '2026-08-04', ciaFilter: '00011' });
-    expect(soloCia11.weeklyAverage).toBeCloseTo(15_029_463.39, 1);
+    expect(computePayrollMonthlyFloor(recs, { todayIso: '2026-09-09', ciaFilter: '00001' }).monthly)
+      .toBeCloseTo(1_000_000, 2);
+    expect(computePayrollMonthlyFloor(recs, { todayIso: '2026-09-09' }).monthly)
+      .toBeCloseTo(10_000_000, 2);
+  });
+});
+
+describe('mes truncado por el gateway (>1MB corta las aportaciones)', () => {
+  /** Ago-2026 tal cual, pero SIN el bloque de Obligación Empresa. */
+  const agoTruncado = () => [
+    ...recordsForMonth(REAL_MONTHLY[0]!), // jun completo
+    ...recordsForMonth(REAL_MONTHLY[1]!), // jul completo
+    ...recordsForMonth({ ...REAL_MONTHLY[2]!, aportaciones: 0, fondoAhorro: 0 }),
+  ];
+
+  it('NO reporta el mes truncado: caería 37% sin decirlo', () => {
+    const r = computePayrollMonthlyFloor(agoTruncado(), { todayIso: '2026-09-09' });
+    expect(r.monthUsed).toBe('2026-07');
+    expect(r.monthly).toBeCloseTo(JUL_FLOOR, 2);
+    expect(r.monthly).not.toBeCloseTo(54_214_007.89, 2); // el bruto solo de ago
+  });
+
+  it('lo confiesa en skippedTruncated y lo deja visible en byMonth', () => {
+    const r = computePayrollMonthlyFloor(agoTruncado(), { todayIso: '2026-09-09' });
+    expect(r.skippedTruncated).toEqual(['2026-08']);
+    expect(r.byMonth.find(m => m.month === '2026-08')).toMatchObject({
+      truncated: true, employerTax: 0,
+    });
+  });
+
+  it('un mes completo NUNCA se marca truncado', () => {
+    const r = computePayrollMonthlyFloor(REAL_RECORDS, { todayIso: '2026-09-09' });
+    expect(r.skippedTruncated).toEqual([]);
+    expect(r.byMonth.every(m => !m.truncated)).toBe(true);
+  });
+
+  it('si TODOS los meses cerrados están truncados devuelve undefined, no un piso corto', () => {
+    const todosTruncados = REAL_MONTHLY.map(m => ({ ...m, aportaciones: 0, fondoAhorro: 0 }))
+      .flatMap(recordsForMonth);
+    const r = computePayrollMonthlyFloor(todosTruncados, { todayIso: '2026-09-09' });
+    expect(r.monthly).toBeUndefined();
+    expect(r.skippedTruncated).toEqual(['2026-08', '2026-07', '2026-06']);
+  });
+});
+
+describe('isAccruedNotDisbursed', () => {
+  it('marca el fondo de ahorro de la EMPRESA, en sus dos grafías', () => {
+    for (const conceptName of ['FONDO AHORRO EMPRESA', 'FONDO DE AHORRO EMPRESA']) {
+      expect(isAccruedNotDisbursed({ conceptName, amount: 1, cashTreatment: 'EMPLOYER_TAX', year: 2026, month: 8 })).toBe(true);
+    }
+  });
+
+  it('NO marca el fondo de ahorro del EMPLEADO ni otras aportaciones', () => {
+    const cases = ['FONDO DE AHORRO', 'IMSS PATRONAL', 'INFONAVIT 5%', 'RETIRO, CESANTIA Y VEJEZ'];
+    for (const conceptName of cases) {
+      expect(isAccruedNotDisbursed({ conceptName, amount: 1, cashTreatment: 'EMPLOYER_TAX', year: 2026, month: 8 })).toBe(false);
+    }
+  });
+
+  it('sólo aplica a EMPLOYER_TAX: la LIQUIDACIÓN en Percepción SÍ es piso', () => {
+    expect(isAccruedNotDisbursed({
+      conceptName: 'LIQ TOTAL FA EMP', amount: 1, cashTreatment: 'CASH_OUT', year: 2026, month: 8,
+    })).toBe(false);
   });
 });

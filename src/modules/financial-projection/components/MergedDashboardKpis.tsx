@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { ShieldAlert } from 'lucide-react';
-import { fmtCompact, fmtCurrency } from '../../../formatters';
+import { fmtCompact, fmtCurrency, fmtYearMonthShort } from '../../../formatters';
 import type { AuxiliarMatchTier, AuxiliarReconResult } from '../../../domain/auxiliarReconciliationEngine';
 import type { FinancialMovement, ForecastRun } from '../../shared-finance/types';
 import { effectiveAmount } from '../../shared-finance/calculation-engine/financialProjectionEngine';
@@ -125,7 +125,9 @@ export const MinimumExpenseKpi: React.FC<{
   providersMonthly: number;
   payrollMonthly: number;
   criticalCount: number;
-}> = ({ monthly, annual, providersMonthly, payrollMonthly, criticalCount }) => (
+  /** Mes cerrado de TRESS del que sale la nómina (`YYYY-MM`). */
+  payrollFloorMonth?: string;
+}> = ({ monthly, annual, providersMonthly, payrollMonthly, criticalCount, payrollFloorMonth }) => (
   <div
     className="relative overflow-hidden rounded-[var(--radius)] p-4 floor-kpi"
     title="Piso operativo: proveedores de Operación + nómina/finiquitos. Es el monto que necesitas cubrir cada mes para no afectar operación."
@@ -190,8 +192,10 @@ export const MinimumExpenseKpi: React.FC<{
       {payrollMonthly > 0 && (
         <div className="flex items-center justify-between text-[11px]">
           <span style={{ color: 'var(--gray-700)' }}>
-            Nómina + finiquitos
-            <span className="ml-1" style={{ color: 'var(--gray-500)' }}>· TRESS últ. semana × 4.33</span>
+            Nómina + aportaciones
+            <span className="ml-1" style={{ color: 'var(--gray-500)' }}>
+              · TRESS {payrollFloorMonth ? fmtYearMonthShort(payrollFloorMonth) : 'últ. mes cerrado'}
+            </span>
           </span>
           <span
             className="font-medium tabular-nums"

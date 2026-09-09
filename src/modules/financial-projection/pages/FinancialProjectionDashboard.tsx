@@ -158,6 +158,8 @@ interface Props {
    * del antiguo Dashboard al fusionarse en Proyección.
    */
   payrollMonthlyActualJDE?: number;
+  /** Mes cerrado de TRESS del que sale el piso de nómina (`YYYY-MM`). */
+  payrollFloorMonth?: string;
 }
 
 const GRANULARITY_OPTIONS: Array<{ id: ProjectionGranularity; label: string }> = [
@@ -1370,6 +1372,7 @@ const commitQuickAdjustment = useCallback((movement: FinancialMovement, kind: 'S
           providersMonthly={minimumExpense.providersMonthly}
           payrollMonthly={minimumExpense.payrollMonthly}
           criticalCount={minimumExpense.criticalCount}
+          payrollFloorMonth={props.payrollFloorMonth}
         />
       </div>
 

@@ -1680,33 +1680,45 @@ export default function App() {
     [isBooted, nonInternalPagoProveedorRecords],
   );
 
-  // Piso operativo de nómina = promedio mensual real sobre los últimos 3 meses
-  // cerrados. Excluye el mes en curso (datos parciales). Filtra por cia si está
-  // activa.
-  // Fórmula: Σ_3m CASH_OUT / 3 (= Σ Percepciones, "Nómina Bruta" del KPI).
+  // Piso operativo de nómina = el gasto REAL del último mes CERRADO de TRESS
+  // (Σ CASH_OUT = Σ Percepciones, la "Nómina Bruta" que el usuario lee en el
+  // módulo de Nómina). Se usa bruto y no neto porque el piso es el costo de
+  // nómina contratado.
   //
-  // Usamos gross y no neto porque éste es el "piso operativo" en términos de
-  // costo de nómina contratado; coincide con el KPI "Nómina Bruta" que el
-  // usuario lee en el módulo de Nómina mes a mes.
-  //
-  // Filtra meses con carga parcial usando `reducCount / cashCount`. Una
-  // nómina real tiene ~1 deducción por cada percepción (ISR + IMSS empleado
-  // + préstamos); ratio < 0.3 indica que el response solo trajo una quincena
-  // o llegó truncado. Sin este filtro los parciales tiraban el promedio.
-  const payrollMonthlyActualJDE = useMemo(() => {
+  // No se extrapola ni se descarta ninguna fila: `tress.Nomina` ya entrega el
+  // gasto fechado por `FechaPago`, así que el dato mensual es una suma de la
+  // fuente. Las dos versiones previas lo inferían desde semanas × 4.33 y por eso
+  // el piso se movía solo — la última cayó de $49.92M a $36.38M el 2026-09-09
+  // porque TRESS cargó 2 filas con fecha futura. Detalle y cifras medidas en
+  // `payrollOperatingFloor.ts`.
+  const payrollFloor = useMemo(() => {
     if (!isBooted) return undefined;
     if (nominaRecordsDeferred.length === 0) return undefined;
-    // Piso de nómina = promedio de las últimas 4 semanas CERRADAS × 4.33.
-    // Antes era UNA sola semana, pero la nómina alterna semana normal / semana
-    // con quincena, así que el piso oscilaba ~$41M–$65M según el día en que se
-    // abría la app contra un gasto real de ~$49.7M/mes. El detalle (con las
-    // cifras medidas en BD) vive en `payrollOperatingFloor.ts`.
     // Company filter removed → never scope payroll by cia (all companies).
     return computePayrollMonthlyFloor(nominaRecordsDeferred, {
       todayIso: todayISO(),
       ciaFilter: '',
-    }).monthly;
+    });
   }, [isBooted, nominaRecordsDeferred, selectedCia]);
+  const payrollMonthlyActualJDE = payrollFloor?.monthly;
+  const payrollFloorMonth = payrollFloor?.monthUsed;
+
+  // Un mes de nómina con percepciones y CERO aportaciones patronales es la firma
+  // del corte >1MB del gateway de TRESS (`nominaLacksEmployerTax` en `jde.ts` ya
+  // trocea el fetch por esto, pero devuelve best-effort). Desde que el piso
+  // incluye las aportaciones —~37% del efectivo de nómina— un mes así se SALTA
+  // en vez de reportarse corto, y aquí se confiesa: sin esta fila el usuario
+  // vería un piso plausible fechado en un mes más viejo, sin saber por qué.
+  const payrollTruncatedHealthRows = useMemo<DataHealthDatasetRow[]>(() => {
+    const skipped = payrollFloor?.skippedTruncated ?? [];
+    if (skipped.length === 0) return [];
+    return [{
+      key: 'nomina-truncada',
+      label: `Nómina · ${skipped.length === 1 ? 'mes' : 'meses'} sin aportaciones patronales (${skipped.join(', ')})`,
+      status: 'error' as const,
+      lastSync: undefined,
+    }];
+  }, [payrollFloor]);
 
   const confirmPayment = (p: ConfirmedPayment) => setConfirmedPayments(prev => [...prev, p]);
   const unconfirmPayment = (key: string) => setConfirmedPayments(prev => prev.filter(x => x.key !== key));
@@ -1875,6 +1887,7 @@ export default function App() {
       { key: 'auxiliar', label: 'Auxiliar contable', status: datasetStatus.auxiliar, lastSync: maxTs(auxiliarContableLoadedCias) },
       ...aged('auxiliar'),
       { key: 'nomina', label: 'Nómina (TRESS)', status: datasetStatus.nomina, lastSync: maxTs(nominaLoadedKeys) },
+      ...payrollTruncatedHealthRows,
       ...aged('nomina'),
       { key: 'rol', label: 'ROL · Viajes', status: datasetStatus.rol, lastSync: maxTs(rolLoadedKeys) },
       ...aged('rol'),
@@ -1884,6 +1897,7 @@ export default function App() {
     staleSourceRowsByDataset, cxpLoadedCias, cobranzaLoadedCias,
     cobranzaPaymentsLoadedCias, comprasLoadedCias, pagoProveedorLoadedCias,
     auxiliarContableLoadedCias, nominaLoadedKeys, rolLoadedKeys,
+    payrollTruncatedHealthRows,
   ]);
 
   // Punto ámbar del header: huecos de carga de esta sesión. Lee el arreglo de
@@ -5589,6 +5603,7 @@ export default function App() {
     startingBalance: undefined,
     onNavigateToTax: navigateToTax,
     payrollMonthlyActualJDE,
+    payrollFloorMonth,
   }), [
     selectedCia,
     bankStatements,
@@ -5607,6 +5622,7 @@ export default function App() {
     assumptions,
     navigateToTax,
     payrollMonthlyActualJDE,
+    payrollFloorMonth,
   ]);
   const planningProps = useMemo(() => ({
     companyCode: selectedCia,

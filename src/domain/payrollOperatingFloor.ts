@@ -1,56 +1,67 @@
 /**
- * payrollOperatingFloor — piso operativo mensual de nómina derivado de TRESS.
+ * payrollOperatingFloor — piso operativo mensual de nómina, tomado de TRESS.
  *
- * Vivía inline en `AppCore.tsx` (`payrollMonthlyActualJDE`), donde no había
- * forma de testearlo. Se extrajo tal cual (mismo agrupado por semana ISO, mismo
- * guard de semana parcial) con UN cambio de método, documentado abajo.
+ * ── El dato es el mes, no una extrapolación ──────────────────────────────────
+ * `tress.Nomina` ya entrega el gasto de nómina fechado por `FechaPago`, así que
+ * el gasto mensual es una SUMA de la fuente: Σ `CASH_OUT` del mes. No hay que
+ * inferirlo.
  *
- * ── Por qué NO se usa una sola semana ────────────────────────────────────────
- * La versión previa tomaba la ÚLTIMA semana cerrada × 4.33. La nómina de Senda
- * alterna semana "normal" y semana con quincena, así que una sola semana no
- * representa un mes: medido contra la BD real (2026, meses cerrados ene–jul,
- * nómina real promedio $49.69M/mes) el piso oscilaba según el día en que se
- * abría la app —
+ * Las dos versiones previas sí lo inferían, y las dos se equivocaban:
  *
- *   semana 2026-07-27 (con quincena) → $15.03M × 4.33 = $65.08M  (+31%)
- *   semana 2026-07-06 (normal)       →  $9.42M × 4.33 = $40.78M  (−18%)
+ *   v1  última semana CERRADA × 4.33. La nómina de Senda alterna semana normal
+ *       y semana con quincena, así que el piso oscilaba $40.78M–$65.08M según
+ *       el día en que se abría la app.
+ *   v2  promedio de las últimas 4 semanas cerradas × 4.33. Quitó el sesgo de la
+ *       semana, pero heredó tres defectos de la ventana móvil:
+ *         · un evento ANUAL dentro de la ventana la distorsiona un mes entero
+ *           (la semana del 2026-08-03 valía $20.0M por $10.6M de liquidación de
+ *           fondo de ahorro: el piso subió a $59.2M y volvió a $49.9M solo al
+ *           salir de la ventana);
+ *         · el guard de semana parcial (`dedCount/cashCount`) DESCARTABA semanas
+ *           reales cuando el ratio no le gustaba;
+ *         · sólo excluía la semana EN CURSO, no las futuras — el 2026-09-09
+ *           TRESS cargó 2 filas con `FechaPago` 2026-09-24 por $18,004 y esa
+ *           "semana" desplazó a una real del promedio: el piso cayó de $49.92M
+ *           a $36.38M sin que cambiara un peso de nómina.
  *
- * Promediar las últimas `PAYROLL_FLOOR_WEEKS` (4 = un ciclo completo de nómina)
- * cubre exactamente una vez cada tipo de semana y cae a 0.8% del real:
+ * Esta versión no descarta ninguna fila ni extrapola: agrupa por el mes que el
+ * propio registro trae y devuelve el total del ÚLTIMO MES COMPLETO. El mes en
+ * curso no es elegible porque no es un total mensual (al 2026-09-09 septiembre
+ * llevaba $18.1M de 9 días contra $57.2M del mes cerrado) — es el único
+ * requisito, y `monthUsed` lo deja a la vista para que nada quede implícito.
  *
- *   (15.03 + 10.26 + 11.54 + 9.42)/4 × 4.33 = $50.07M  vs real $49.69M
+ * Verificado contra `tress.Nomina` el 2026-09-09, excluyendo la cía 33
+ * (MULTICARGA, fuera de `NOMINA_FANOUT_EMPRESAS` y cortada por
+ * `dropExcludedByCia`): piso de nómina jun $71.00M · jul $88.29M · ago $86.80M.
  *
- * Se conserva el run-rate reciente (la intención del cambio anterior: no volver
- * al promedio de 3 meses, que quedaba obsoleto) sin heredar el sesgo de la
- * semana en la que uno se para. Con menos de 4 semanas cerradas se promedian
- * las que haya — nunca se inventa una.
+ * ── Qué se suma: TODO el efectivo de nómina ─────────────────────────────────
+ * `CASH_OUT` (percepciones) **+ `EMPLOYER_TAX`** (aportaciones patronales). Las
+ * dos son dinero que sale del banco y que la empresa tiene que cubrir para
+ * seguir operando; el piso las necesita completas.
  *
- * El monto es BRUTO (Σ percepciones = `CASH_OUT`), igual que el KPI "Nómina
- * Bruta" del módulo de Nómina: es el costo de nómina contratado, que es lo que
- * significa "piso operativo".
+ * Antes el piso era sólo el bruto, documentado como "el costo de nómina
+ * contratado". Eso deja fuera IMSS patronal, RCV, cesantía, INFONAVIT y retiro
+ * — que NO viven dentro del bruto (el bruto ya contiene las retenciones AL
+ * empleado, no las aportaciones DE la empresa). Medido ago-2026 (sin la cía 33,
+ * que Midas excluye): bruto $54.21M contra $32.59M de aportaciones, o sea el
+ * piso subreportaba 38% del efectivo de nómina.
+ *
+ * ── Qué NO se suma, y por qué ───────────────────────────────────────────────
+ * `DEDUCTION` y `WITHHOLDING_PAYABLE` ya viven DENTRO del bruto (salen de lo
+ * que se le paga al empleado); sumarlas sería doble conteo. `NON_CASH` es
+ * informativo por definición.
+ *
+ * Además se descarta `FONDO AHORRO EMPRESA` (ver `isAccruedNotDisbursed`), que
+ * es `EMPLOYER_TAX` pero se PAGA por otro lado — detalle abajo.
  */
-
-/** Semanas por mes. Constante de negocio; no la cambies sin recalcular el piso. */
-export const PAYROLL_WEEKS_PER_MONTH = 4.33;
-
-/**
- * Semanas cerradas que se promedian. 4 = un ciclo completo de la nómina de
- * Senda (cubre las semanas con quincena y las normales exactamente una vez).
- */
-export const PAYROLL_FLOOR_WEEKS = 4;
-
-/**
- * Una nómina real tiene ~1 deducción por percepción (ISR + IMSS empleado +
- * préstamos). Un ratio por debajo de esto delata un response truncado o una
- * sola quincena cargada: esa semana no se promedia.
- */
-const PARTIAL_RATIO_THRESHOLD = 0.3;
 
 /** Subset de `NominaRecord` que necesita el cálculo. */
 export interface PayrollFloorRecordLike {
   cia?: string;
+  conceptName?: string;
   paymentDate?: string;
   periodEndDate?: string;
+  sourcePeriod?: string;
   year: number;
   month: number;
   amount: number;
@@ -58,86 +69,123 @@ export interface PayrollFloorRecordLike {
 }
 
 /**
- * Lunes (UTC) de la semana de una fecha ISO. UTC en los dos lados para que el
- * agrupado no se corra un día en CST.
+ * Mes (`YYYY-MM`) al que pertenece el gasto. Misma precedencia que usaba el
+ * agrupado por semana: la fecha de pago manda, porque es cuando el dinero sale.
  */
-export function payrollWeekKey(iso: string): string | null {
-  if (!iso || iso.length < 10) return null;
-  const d = new Date(`${iso.slice(0, 10)}T00:00:00Z`);
-  if (Number.isNaN(d.getTime())) return null;
-  // getUTCDay: 0=domingo … 6=sábado → 0=lunes … 6=domingo.
-  const dow = (d.getUTCDay() + 6) % 7;
-  d.setUTCDate(d.getUTCDate() - dow);
-  return d.toISOString().slice(0, 10);
-}
-
-export interface PayrollFloorResult {
-  /** Piso mensual (promedio semanal × 4.33). `undefined` si no hay semana cerrada. */
-  monthly: number | undefined;
-  /** Semanas efectivamente promediadas (lunes ISO, más reciente primero). */
-  weeksUsed: string[];
-  /** Promedio semanal bruto usado. */
-  weeklyAverage: number;
+export function payrollMonthKey(r: PayrollFloorRecordLike): string | null {
+  const fromDate = r.paymentDate || r.periodEndDate;
+  if (fromDate && fromDate.length >= 7) return fromDate.slice(0, 7);
+  if (r.year > 0 && r.month > 0) return `${r.year}-${String(r.month).padStart(2, '0')}`;
+  if (r.sourcePeriod && r.sourcePeriod.length >= 7) return r.sourcePeriod.slice(0, 7);
+  return null;
 }
 
 /**
- * Piso operativo mensual de nómina. Devuelve `undefined` cuando no hay ninguna
- * semana cerrada usable — el caller lo trata como "sin dato", nunca como 0
- * (un piso 0 significaría que nunca hay déficit).
+ * Aportación patronal que se DEVENGA cada mes pero se DESEMBOLSA por otra vía,
+ * así que contarla aquí sería doble conteo.
+ *
+ * `FONDO AHORRO EMPRESA` (la aportación de la empresa al fondo de ahorro) se
+ * acumula mensual bajo Obligación Empresa —medido sep-2025…ago-2026: ~$1.48–1.68M
+ * cada mes, ~$18.2M al año— y su desembolso aparece como `LIQ TOTAL FA EMP` /
+ * `LIQ TOTAL FA SOCIO` en PERCEPCIÓN cuando el fondo se liquida ($10.71M en
+ * ago-2026, el mismo pago que inflaba la ventana móvil del piso anterior).
+ * Sumar las dos cuenta la aportación dos veces.
+ *
+ * Se descarta la acumulación y se conserva el desembolso, porque el desembolso
+ * es el que TRESS fecha en el mes en que el dinero sale. Consecuencia asumida:
+ * el piso del mes de liquidación es más alto que el de los demás — eso es lo
+ * que de verdad pasó ese mes.
+ *
+ * NO se corrigió en `refineCashTreatment` a propósito: para el módulo de Nómina
+ * la acumulación SÍ es una obligación patronal del mes y pertenece a su KPI de
+ * Aportaciones. Es el piso —que mide EFECTIVO— el que no la puede contar.
+ */
+export function isAccruedNotDisbursed(r: PayrollFloorRecordLike): boolean {
+  return r.cashTreatment === 'EMPLOYER_TAX'
+    && /fondo\s+(de\s+)?ahorro\s+empresa/i.test(r.conceptName ?? '');
+}
+
+export interface PayrollFloorMonth {
+  month: string;
+  /** Σ efectivo (percepciones + aportaciones) del mes. */
+  amount: number;
+  /** Σ percepciones. */
+  gross: number;
+  /** Σ aportaciones patronales. `0` con `gross > 0` = payload truncado. */
+  employerTax: number;
+  /** Firma de truncamiento del gateway: hay percepciones y CERO aportaciones. */
+  truncated: boolean;
+}
+
+export interface PayrollFloorResult {
+  /** Efectivo del último mes completo y USABLE. `undefined` si no hay ninguno. */
+  monthly: number | undefined;
+  /** Mes usado (`YYYY-MM`). */
+  monthUsed: string | undefined;
+  /** Por mes, más reciente primero. Incluye el mes en curso y los truncados. */
+  byMonth: PayrollFloorMonth[];
+  /** Meses cerrados descartados por truncamiento, más reciente primero. */
+  skippedTruncated: string[];
+}
+
+/**
+ * Piso operativo mensual de nómina. Devuelve `undefined` cuando no hay ningún
+ * mes completo — el caller lo trata como "sin dato", nunca como 0 (un piso 0
+ * significaría que nunca hay déficit).
  */
 export function computePayrollMonthlyFloor(
   records: PayrollFloorRecordLike[],
-  options: { todayIso: string; ciaFilter?: string; weeks?: number },
+  options: { todayIso: string; ciaFilter?: string },
 ): PayrollFloorResult {
-  const empty: PayrollFloorResult = { monthly: undefined, weeksUsed: [], weeklyAverage: 0 };
+  const empty: PayrollFloorResult = {
+    monthly: undefined, monthUsed: undefined, byMonth: [], skippedTruncated: [],
+  };
   if (records.length === 0) return empty;
 
   const ciaFilter = options.ciaFilter ?? '';
-  const grossByWeek = new Map<string, number>();
-  const cashCountByWeek = new Map<string, number>();
-  const reducCountByWeek = new Map<string, number>();
+  const acc = new Map<string, { gross: number; employerTax: number }>();
 
   for (const r of records) {
     if (ciaFilter && r.cia !== ciaFilter) continue;
-    const dateIso = r.paymentDate
-      || r.periodEndDate
-      || `${r.year}-${String(r.month).padStart(2, '0')}-01`;
-    const wk = payrollWeekKey(dateIso);
-    if (!wk) continue;
-    if (r.cashTreatment === 'CASH_OUT') {
-      grossByWeek.set(wk, (grossByWeek.get(wk) ?? 0) + r.amount);
-      cashCountByWeek.set(wk, (cashCountByWeek.get(wk) ?? 0) + 1);
-    } else if (r.cashTreatment === 'DEDUCTION' || r.cashTreatment === 'WITHHOLDING_PAYABLE') {
-      reducCountByWeek.set(wk, (reducCountByWeek.get(wk) ?? 0) + 1);
-    }
+    const isGross = r.cashTreatment === 'CASH_OUT';
+    const isEmployer = r.cashTreatment === 'EMPLOYER_TAX' && !isAccruedNotDisbursed(r);
+    if (!isGross && !isEmployer) continue;
+    const key = payrollMonthKey(r);
+    if (!key) continue;
+    const e = acc.get(key) ?? { gross: 0, employerTax: 0 };
+    if (isGross) e.gross += r.amount;
+    else e.employerTax += r.amount;
+    acc.set(key, e);
   }
 
-  // La semana en curso puede traer nómina parcial → fuera. El guard sólo puede
-  // llevarnos a semanas MÁS antiguas (seguras), nunca a una parcial.
-  const currentWeek = payrollWeekKey(options.todayIso);
-  const closedWeeks = Array.from(grossByWeek.keys())
-    .filter((wk) => {
-      if (wk === currentWeek) return false;
-      if ((grossByWeek.get(wk) ?? 0) <= 0) return false;
-      const cashCnt = cashCountByWeek.get(wk) ?? 0;
-      if (cashCnt === 0) return false;
-      const reducCnt = reducCountByWeek.get(wk) ?? 0;
-      return reducCnt / cashCnt >= PARTIAL_RATIO_THRESHOLD;
-    })
-    .sort()
-    .reverse();
+  const byMonth: PayrollFloorMonth[] = Array.from(acc.entries())
+    .map(([month, e]) => ({
+      month,
+      amount: e.gross + e.employerTax,
+      gross: e.gross,
+      employerTax: e.employerTax,
+      // El gateway de TRESS corta payloads >1MB y el corte cae justo en el
+      // bloque "Obligación Empresa" (`nominaLacksEmployerTax` en `jde.ts` ya
+      // trocea el fetch por esta firma, pero devuelve best-effort). Un mes
+      // cerrado con percepciones y CERO aportaciones no es un mes sin
+      // aportaciones: es un payload incompleto.
+      truncated: e.gross > 0 && e.employerTax === 0,
+    }))
+    .sort((a, b) => (a.month < b.month ? 1 : a.month > b.month ? -1 : 0));
 
-  if (closedWeeks.length === 0) return empty;
+  // Único requisito de elegibilidad: el mes tiene que estar COMPLETO. Un mes en
+  // curso (o uno futuro, que TRESS sí carga por adelantado) no es un total
+  // mensual.
+  const currentMonth = options.todayIso.slice(0, 7);
+  const closed = byMonth.filter((m) => m.month < currentMonth && m.amount > 0);
 
-  const wanted = Math.max(1, options.weeks ?? PAYROLL_FLOOR_WEEKS);
-  const weeksUsed = closedWeeks.slice(0, wanted);
-  const sum = weeksUsed.reduce((acc, wk) => acc + (grossByWeek.get(wk) ?? 0), 0);
-  const weeklyAverage = sum / weeksUsed.length;
-  const monthly = weeklyAverage * PAYROLL_WEEKS_PER_MONTH;
+  // Un mes truncado se SALTA, no se reporta bajo. Desde que el piso incluye las
+  // aportaciones (~37% del efectivo de nómina), servir un mes sin ellas daría un
+  // piso plausible y 37% corto — el modo de falla caro. Se prefiere el mes
+  // anterior completo, y los saltados se confiesan en `skippedTruncated`.
+  const usable = closed.find((m) => !m.truncated);
+  const skippedTruncated = closed.filter((m) => m.truncated).map((m) => m.month);
 
-  return {
-    monthly: monthly > 0 ? monthly : undefined,
-    weeksUsed,
-    weeklyAverage,
-  };
+  if (!usable) return { ...empty, byMonth, skippedTruncated };
+  return { monthly: usable.amount, monthUsed: usable.month, byMonth, skippedTruncated };
 }
