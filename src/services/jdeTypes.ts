@@ -44,6 +44,16 @@ export interface AgedBalanceRecord {
   noProveedor: string;
   nombre: string;
   noFactura: string;
+  /**
+   * Número de DOCUMENTO de JDE (`nd`). No es el folio de la factura: un mismo
+   * `noFactura` puede llegar en varios documentos (factura + nota de cargo),
+   * así que es lo único que los distingue. Participa en la llave de dedup de
+   * `fetchAgedBalances` — sin él, 31 grupos por $24.46M (medido 2026-09-14) se
+   * colapsarían en uno y el pasivo DESAPARECERÍA, la dirección peor.
+   *
+   * Cadena vacía si el SP no lo expone; el dedup degrada a la llave sin él.
+   */
+  noDocumento?: string;
   fechaFactura: string;
   fechaVence: string;
   fechaProgramacionPago: string;

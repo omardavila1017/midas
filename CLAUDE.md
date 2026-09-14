@@ -613,6 +613,24 @@ Tests: 5 nuevos en `sourceDataFreshness.test.ts` (con las dos fechas REALES medi
 
 Baseline tras la corrida: **3083 passed / 12 skipped / 228 files** en `TZ=UTC` **y** en `TZ=America/Mexico_City` · typecheck limpio · build OK (`AppCoreWithProviders` 832.32 kB vs 830.33 kB).
 
+## Corrida 2026-09-14b (Midas no abría: la fuente de CXP se cargó 23 veces sin truncar)
+
+Diego reportó que Midas **se queda cargando** — entra y el splash nunca suelta. No era Midas: era `jde.Antiguedad_Saldos`, la fuente de CXP, reventada en el ORIGEN ese mismo día.
+
+- **Qué pasó (medido).** A las 10:13 la tabla traía el snapshot sano de siempre: **2,721 filas / $82.08M**. Entre las **11:37 y las 12:07 corrió 23 veces seguidas ACUMULANDO, sin truncar** → **134,047 filas**, factor de duplicación **2.57×** (una factura hasta **22** veces, tantas como corridas), y el pendiente crudo en **$3,057.3M** contra **$1,524.1M** dedupeado: **$1,533.2M de pasivo fantasma**. La tabla es un SNAPSHOT de saldos abiertos (se trunca y recarga — semántica que cambió el 2026-09-14 en la mañana); un job que reintenta sin truncar la convierte en un acumulado.
+- **Por qué el splash no soltaba.** `fetchAgedBalances` pide **por cía y sin rango de fechas**, así que la cía **00011 sola devuelve 87,824 filas en UN request** (00001: 31,735). El slot `cxp` es gating (`GATING_BOOT_IDS`, "espera al 100% o no carga"), y cada cía que se atora cuesta hasta `120 s × 3 intentos`. **El slot sólo marca `'error'` si fallan TODAS las cías**, así que esto no se manifiesta como boot bloqueado con panel de retry — se manifiesta como splash que no avanza.
+- **El fix de Midas: dedup LAST-WINS en `fetchAgedBalances`** (`jde.ts`), mismo idioma que `fetchRolRange` / `fetchComprasRange` / `fetchPagoProveedorRange` — **CXP era el ÚNICO fetcher sin esta defensa** (`unwrapList(raw).map(mapAgedBalance)` directo, sin `Map`). Es **DEFENSA, no el arreglo**: no acorta el request, y sin duplicados el resultado es **byte-idéntico** al previo (degrada solo). Lo que sí garantiza es que una carga sucia no entre 2.57× a egresos `cxp:` proyectados, pasivo, "A pagar este mes" y días en déficit — no se vería vacío, se vería completo y mal.
+  - **`nd` (número de documento) es LOAD-BEARING en la llave** (`cia::noProveedor::noFactura::nd`, campo nuevo opcional `AgedBalanceRecord.noDocumento`, cinco alias en el mapper). Un mismo `noFactura` llega en documentos distintos (factura + nota de cargo): medido, **31 grupos por $24.46M** que una llave sin `nd` colapsaría — haría DESAPARECER pasivo real, la dirección peor y el error natural al escribir este dedup. Pineado con su propio test.
+  - **LAST-WINS y no first:** cuando una llave trae varias versiones (**633 con importe pendiente distinto**, 57 con vencimiento distinto) son snapshots de momentos distintos y el consumidor quiere el más reciente — la fila más tardía del payload. Misma razón que ROL.
+- Tests: 5 nuevos en `jde.fetchers.test.ts`. **Verificados 2 en rojo**: uno al revertir el dedup, otro al quitarle `nd` a la llave (el error natural). Los otros 3 pasan en ambas direcciones a propósito — pinean que NO colapse de más y que degrade solo.
+
+**Pendiente que NO es de Midas (escalar, es lo único que destraba la carga):** que la carga de `jde.Antiguedad_Saldos` **trunque antes de insertar** y deje UNA corrida. Mientras no lo haga, el request de la cía 00011 sigue pesando 88k filas y el boot se arrastra aunque los números ya salgan bien.
+
+**Estado del resto de las fuentes al 2026-09-14b:** las 10 tablas cargaron hoy · `db_Artefactos` ONLINE pero sigue en `recovery_model FULL` con `log_reuse_wait = LOG_BACKUP` y sin job de `BACKUP LOG` (el mismo riesgo que el 2026-08-05 tumbó el login) · el resto de los latentes previos sin cambio de estado.
+
+Baseline tras la corrida: **3088 passed / 12 skipped / 228 files** · typecheck limpio.
+
+
 ## Stack
 
 - React 18 + Vite 5 + TypeScript 5.5 + Tailwind 3.4 (with `darkMode: 'class'`)

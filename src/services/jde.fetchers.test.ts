@@ -216,6 +216,88 @@ describe('fetchAgedBalances — mapAgedBalance', () => {
   });
 });
 
+// `jde.Antiguedad_Saldos` es un SNAPSHOT (se trunca y recarga). Una carga que
+// corra varias veces sin truncar acumula el mismo documento N veces: medido el
+// 2026-09-14, 23 corridas entre 11:37 y 12:07 dejaron 134,047 filas donde el
+// snapshot sano eran 2,721 (factor 2.57x, una factura hasta 22 veces) y el
+// pendiente crudo en $3,057.3M contra $1,524.1M dedupeado. CXP era el ÚNICO
+// fetcher sin la defensa que compras/pagos/ROL ya tenían.
+describe('fetchAgedBalances — dedup last-wins (defensa contra carga acumulada)', () => {
+  const doc = (over: Record<string, unknown> = {}) => ({
+    Cia: '00011',
+    No_Proveedor: 'P-1',
+    No_Factura: 'F-100',
+    ND: 900001,
+    Fecha_Factura: '31-08-2026',
+    Importe_Pendiente_Pesos: 1000,
+    ...over,
+  });
+
+  it('colapsa el mismo documento repetido y conserva la versión MÁS RECIENTE', async () => {
+    // Tres corridas del mismo documento; la última trae el pendiente ya abonado.
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse([
+      doc({ Importe_Pendiente_Pesos: 1000 }),
+      doc({ Importe_Pendiente_Pesos: 1000 }),
+      doc({ Importe_Pendiente_Pesos: 250 }),
+    ])));
+
+    const records = await fetchAgedBalances({ cia: '00011' });
+    expect(records).toHaveLength(1);
+    // Last-wins: first-wins serviría el snapshot viejo, el opuesto de lo que
+    // asume el consumidor (mismo criterio que fetchRolRange).
+    expect(records[0].importePendientePesos).toBe(250);
+  });
+
+  it('NO colapsa dos documentos distintos que comparten folio de factura', async () => {
+    // El caso que hace load-bearing a `nd`: factura + nota de cargo bajo el
+    // mismo `No_Factura`. Colapsarlos haría DESAPARECER pasivo real — la
+    // dirección peor. Medido: 31 grupos por $24.46M.
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse([
+      doc({ ND: 900001, Importe_Pendiente_Pesos: 1000 }),
+      doc({ ND: 900002, Importe_Pendiente_Pesos: 400 }),
+    ])));
+
+    const records = await fetchAgedBalances({ cia: '00011' });
+    expect(records).toHaveLength(2);
+    expect(records.map(r => r.noDocumento).sort()).toEqual(['900001', '900002']);
+    expect(records.reduce((a, r) => a + r.importePendientePesos, 0)).toBe(1400);
+  });
+
+  it('tampoco colapsa por proveedor ni por compañía distintos', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse([
+      doc(),
+      doc({ No_Proveedor: 'P-2' }),
+      doc({ Cia: '00001' }),
+    ])));
+
+    expect(await fetchAgedBalances({ cia: '00011' })).toHaveLength(3);
+  });
+
+  it('sin duplicados degrada solo: mismo conteo y mismo orden que antes', async () => {
+    // Pinea la invariante — el día que el origen esté sano el dedup no se nota.
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse([
+      doc({ No_Factura: 'F-1', ND: 1 }),
+      doc({ No_Factura: 'F-2', ND: 2 }),
+      doc({ No_Factura: 'F-3', ND: 3 }),
+    ])));
+
+    const records = await fetchAgedBalances({ cia: '00011' });
+    expect(records.map(r => r.noFactura)).toEqual(['F-1', 'F-2', 'F-3']);
+  });
+
+  it('mapea `nd` y, si el SP no lo expone, degrada a cadena vacía', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse([
+      doc({ ND: 900007 }),
+    ])));
+    expect((await fetchAgedBalances({ cia: '00011' }))[0].noDocumento).toBe('900007');
+
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse([
+      { Cia: '00011', No_Proveedor: 'P-1', No_Factura: 'F-100', Importe_Pendiente_Pesos: 1000 },
+    ])));
+    expect((await fetchAgedBalances({ cia: '00011' }))[0].noDocumento).toBe('');
+  });
+});
+
 // ───────────────────────────────────────────────────────────────
 // 2. Empresas — fetchCompanies + mapCompany
 // ───────────────────────────────────────────────────────────────

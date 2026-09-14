@@ -322,6 +322,7 @@ function mapAgedBalance(raw: RawRecord): AgedBalanceRecord {
     noProveedor:             toStr(pick(raw, ['noProveedor', 'no_prov', 'no_proveedor', 'proveedor'])),
     nombre:                  toStr(pick(raw, ['nombre', 'nombreProveedor', 'razonSocial'])),
     noFactura:               toStr(pick(raw, ['noFactura', 'no_factura', 'factura'])),
+    noDocumento:             toStr(pick(raw, ['noDocumento', 'nd', 'no_documento', 'numeroDocumento', 'no_doc'])),
     // normalizeJdeDate: los consumidores fechan con cleanDate (regex estricto
     // ^\d{4}-\d{2}-\d{2}$). Si el API sirviera ISO+hora (como ya pasó en
     // /cobranza), las 3 fechas fallarían el regex y TODO el CXP abierto se
@@ -359,15 +360,52 @@ function mapAgedBalance(raw: RawRecord): AgedBalanceRecord {
 }
 
 /**
+ * Llave de identidad de un documento de CXP: `cia::noProveedor::noFactura::nd`.
+ *
+ * `nd` (número de documento) es load-bearing: un mismo `noFactura` puede llegar
+ * en documentos distintos (factura + nota de cargo) y sólo `nd` los separa —
+ * medido 2026-09-14, 31 grupos por $24.46M. Si el SP no lo expone queda vacío y
+ * la llave degrada a la forma sin él (colapsaría esos 31); se prefiere eso a no
+ * dedupear nada, y el mapper acepta cinco alias para que no pase.
+ */
+function agedBalanceKey(r: AgedBalanceRecord): string {
+  return `${r.cia}::${r.noProveedor}::${r.noFactura}::${r.noDocumento ?? ''}`;
+}
+
+/**
  * POST /JDEdwards/antiguedadsaldos
  * Retorna todos los saldos abiertos por proveedor para la compañía indicada.
+ *
+ * **Dedup LAST-WINS**, mismo idioma que `fetchRolRange` / `fetchComprasRange` /
+ * `fetchPagoProveedorRange` — CXP era el ÚNICO fetcher sin esta defensa.
+ *
+ * Por qué hace falta: `jde.Antiguedad_Saldos` es un SNAPSHOT de saldos abiertos
+ * (se trunca y recarga), pero una carga que corra varias veces sin truncar
+ * acumula el mismo documento N veces. Pasó el 2026-09-14: 23 corridas entre
+ * 11:37 y 12:07 dejaron 134,047 filas donde el snapshot sano eran 2,721 — factor
+ * 2.57x, una factura hasta 22 veces, y el pendiente crudo en $3,057.3M contra
+ * $1,524.1M dedupeado. Sin este corte esos $1,533.2M fantasma entran como egreso
+ * `cxp:` proyectado, pasivo, "A pagar este mes" y días en déficit: no se ve
+ * vacío, se ve completo y mal, que es el modo de falla caro.
+ *
+ * LAST-WINS y no first: cuando una llave trae varias versiones (633 con importe
+ * pendiente distinto ese día) son snapshots de momentos distintos y el consumidor
+ * quiere el más reciente — la fila más tardía del payload. Misma razón que ROL.
+ *
+ * Esto es DEFENSA, no el arreglo: la corrección vive en el origen (que la carga
+ * trunque antes de insertar). Sin duplicados el resultado es byte-idéntico al
+ * previo, así que no cambia nada el día que el origen esté sano.
  */
 export async function fetchAgedBalances(
   req: AgedBalanceRequest,
   config: JdeClientConfig = {},
 ): Promise<AgedBalanceRecord[]> {
   const raw = await jdeClient.post<unknown>('/antiguedadsaldos', req, config);
-  return dropExcludedByCia(unwrapList(raw).map(mapAgedBalance));
+  const byKey = new Map<string, AgedBalanceRecord>();
+  for (const rec of unwrapList(raw).map(mapAgedBalance)) {
+    byKey.set(agedBalanceKey(rec), rec);
+  }
+  return dropExcludedByCia(Array.from(byKey.values()));
 }
 
 // ───────────────────────────────────────────────────────────────
