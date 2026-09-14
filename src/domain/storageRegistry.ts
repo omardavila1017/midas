@@ -51,6 +51,7 @@ export const MIDAS_STORAGE_REGISTRY: StorageEntry[] = [
   { key: 'midas.banks.emptyDayHeal.v1', scope: 'localStorage', owner: 'AppCore.tsx', description: 'Marker del saneo one-time (ventana 60d) de días de banco cacheados vacíos por carga tardía en JDE. Reemplazado por v2.', legacy: true },
   { key: 'midas.banks.emptyDayHeal.v2', scope: 'localStorage', owner: 'AppCore.tsx', description: 'Marker del saneo one-time (ventana 120d) de días de banco cacheados vacíos por carga manual tardía (Bajío/Santander). Presente → la revalidación usa la ventana steady-state de 45d.' },
   { key: 'midas.navFocus', scope: 'localStorage', owner: 'App.tsx', description: 'Foco de navegación entre tabs.' },
+  { key: 'midas.sources.advance.v1', scope: 'localStorage', owner: 'domain/sourceAdvanceWatermark.ts', description: 'Marca por fuente del dato más reciente observado + cuándo se vio por primera vez. Detecta que una fuente dejó de AVANZAR (no sólo que va atrasada). Diagnóstico: borrarla sólo pierde la historia de avance de este navegador.' },
   { key: 'midas.bankStatements.v2', scope: 'localStorage', owner: 'App.tsx', description: 'Cache de estados de cuenta JDE.', legacy: true },
   { key: 'midas.bankSupplementalStatements.v1', scope: 'localStorage', owner: 'App.tsx', description: 'Cache de estados de cuenta subidos manualmente.', legacy: true },
 

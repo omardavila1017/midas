@@ -331,6 +331,9 @@ function mapAgedBalance(raw: RawRecord): AgedBalanceRecord {
     fechaFactura:            normalizeJdeDate(pick(raw, ['fechaFactura', 'fecha_factura'])),
     fechaVence:              normalizeJdeDate(pick(raw, ['fechaVence', 'fecha_vence', 'fechaVencimiento'])),
     fechaProgramacionPago:   normalizeJdeDate(pick(raw, ['fechaProgramacionPago', 'fecha_programacion_pago', 'fechaProgPago'])),
+    // No fecha dinero: es la prueba de vida de la fuente (ver el docblock del
+    // campo). Si el SP no la manda queda '' y la frescura cae a `fechaFactura`.
+    fechaContable:           normalizeJdeDate(pick(raw, ['fechaContable', 'fecha_contable'])),
     diasVencida:             toNum(pick(raw, ['diasVencida', 'dias_vencida', 'diasVencido'])),
     importeBrutoPesos:       toNum(pick(raw, ['importeBrutoPesos', 'importe_bruto_pesos'])),
     importePendientePesos:   toNum(pick(raw, ['importePendientePesos', 'importe_pendiente_pesos'])),

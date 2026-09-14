@@ -95,6 +95,13 @@ export interface CXPRecord {
   fechaFactura: string;
   fechaVence: string;
   fechaProgramacionPago: string;
+  /**
+   * Fecha CONTABLE del documento. NO fecha dinero: es la única fecha del CXP
+   * que JDE no post-fecha, así que es la que prueba que `jde.Antiguedad_Saldos`
+   * sigue insertando (ver `sourceDataFreshness`). Opcional porque el SP puede
+   * no exponerla — los consumidores degradan a `fechaFactura`.
+   */
+  fechaContable?: string;
   diasVencida: number;
   importeBrutoPesos: number;
   importePendientePesos: number;

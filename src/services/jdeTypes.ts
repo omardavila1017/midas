@@ -47,6 +47,18 @@ export interface AgedBalanceRecord {
   fechaFactura: string;
   fechaVence: string;
   fechaProgramacionPago: string;
+  /**
+   * Fecha CONTABLE del documento (cuándo JDE lo asentó).
+   *
+   * Existe para medir si la FUENTE sigue viva, no para fechar dinero: a
+   * diferencia de `fechaFactura`, no se puede post-fechar, así que es la única
+   * de las fechas del CXP que prueba que `jde.Antiguedad_Saldos` sigue
+   * insertando. Ver `sourceDataFreshness`.
+   *
+   * Cadena vacía si el SP no la expone — los consumidores deben degradar, no
+   * asumir que viene.
+   */
+  fechaContable?: string;
   diasVencida: number;
   importeBrutoPesos: number;
   importePendientePesos: number;

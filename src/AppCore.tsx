@@ -143,7 +143,16 @@ import {
   type BankQueryState,
 } from './domain/bankStatements';
 import { summarizeBankFreshnessByCompany, summarizeManualBankFreshness } from './domain/bankSourceFreshness';
-import { summarizeSourceDataFreshness } from './domain/sourceDataFreshness';
+import {
+  summarizeSourceDataFreshnessPreferred,
+  type SourceDataFreshness,
+} from './domain/sourceDataFreshness';
+import {
+  assessSourceAdvanceAll,
+  isSourceStalled,
+  loadSourceAdvanceMarks,
+  saveSourceAdvanceMarks,
+} from './domain/sourceAdvanceWatermark';
 import { SANTANDER_FILE_FORMAT } from './domain/santanderCsv';
 import {
   type AbonoEnrichment,
@@ -768,6 +777,17 @@ function scheduleIdleTask(callback: () => void, timeout = 2000): () => void {
     cancelled = true;
     window.clearTimeout(id);
   };
+}
+
+/** Antigüedad del dato de UNA fuente, ya reducida (sin las filas crudas). */
+interface SourceAgeEntry {
+  /** Dataset del panel bajo el que se pinta la fila. */
+  dataset: string;
+  /** Clave estable de la FUENTE — también la llave de su marca de avance. */
+  rowKey: string;
+  /** Nombre es-MX de la fuente. */
+  source: string;
+  freshness: SourceDataFreshness;
 }
 
 export default function App() {
@@ -1780,63 +1800,118 @@ export default function App() {
   // Los iterables son generadores, no `.map()`: estos datasets llegan a
   // cientos de miles de filas y alocar un arreglo de fechas por cada uno en
   // cada ola del boot no compra nada.
-  const staleSourceRowsByDataset = useMemo<Map<string, DataHealthDatasetRow[]>>(() => {
+  // Antigüedad del DATO por FUENTE. La iteración pesada (compras y auxiliar
+  // rondan las 334k filas cada uno) vive aquí y sólo aquí: la marca de avance
+  // y las filas del panel consumen este resultado ya reducido.
+  const sourceDataAges = useMemo<SourceAgeEntry[]>(() => {
     const today = todayISO();
-    const byDataset = new Map<string, DataHealthDatasetRow[]>();
-    const push = (dataset: string, key: string, label: string, dates: Iterable<string | undefined>) => {
-      const f = summarizeSourceDataFreshness(dates, today);
-      // `no-data` sin registros = el dataset simplemente no se ha cargado; eso
-      // ya lo dice su propia fila de estado. Sólo hablamos de fuente rezagada.
-      if (f.status === 'fresh' || (f.status === 'no-data' && !f.lastDataDate)) return;
-      const row: DataHealthDatasetRow = {
-        key,
-        label,
-        status: f.status === 'aging' ? 'stale' : 'error',
-        lastSync: f.lastDataDate ?? undefined,
-      };
-      const list = byDataset.get(dataset);
-      if (list) list.push(row); else byDataset.set(dataset, [row]);
-    };
-    const age = (dataset: string, source: string, records: { length: number }, dates: () => Iterable<string | undefined>) => {
+    const out: SourceAgeEntry[] = [];
+    const age = (
+      dataset: string,
+      rowKey: string,
+      source: string,
+      records: { length: number },
+      candidates: Array<() => Iterable<string | undefined>>,
+    ) => {
       if (records.length === 0) return;
-      push(dataset, `${dataset}-data-age`, `${source} · dato más reciente en la fuente`, dates());
+      out.push({
+        dataset,
+        rowKey,
+        source,
+        freshness: summarizeSourceDataFreshnessPreferred(candidates, today),
+      });
     };
 
-    age('cxp', 'CXP', cxpRecords, function* () {
-      for (const r of cxpRecords) yield r.fechaFactura;
-    });
-    age('cobranza', 'Cobranza', cobranzaRecords, function* () {
-      for (const r of cobranzaRecords) { yield r.fechaFactura; yield r.fechaCobro; }
-    });
-    age('compras', 'Compras (OCs)', comprasRecords, function* () {
+    // CXP mide por fecha CONTABLE, no por fecha de factura: es la única de sus
+    // fechas que JDE no post-fecha, y por tanto la única que prueba que la
+    // fuente sigue insertando. Con `fechaFactura` la fuente MUERTA desde el
+    // 01-sep se reportaba VERDE el 14-sep (el lote del 01-sep traía facturas
+    // post-fechadas al 10 y 11-sep, futuras entonces y pasadas después). Si el
+    // SP no expone la columna, `fechaContable` llega vacía y cae a la anterior
+    // — comportamiento byte-idéntico al previo.
+    age('cxp', 'cxp-data-age', 'CXP', cxpRecords, [
+      function* () { for (const r of cxpRecords) yield r.fechaContable; },
+      function* () { for (const r of cxpRecords) yield r.fechaFactura; },
+    ]);
+    age('cobranza', 'cobranza-data-age', 'Cobranza', cobranzaRecords, [
+      function* () { for (const r of cobranzaRecords) { yield r.fechaFactura; yield r.fechaCobro; } },
+    ]);
+    age('compras', 'compras-data-age', 'Compras (OCs)', comprasRecords, [
       // `fechaPedido` (F_Orden) es la que prueba alta nueva; `fechaRecepcion`
       // viene vacía en toda OC aún sin entrada.
-      for (const r of comprasRecords) { yield r.fechaPedido; yield r.fechaRecepcion; }
-    });
-    age('pagos', 'Pagos a proveedores', pagoProveedorRecords, function* () {
-      for (const r of pagoProveedorRecords) yield r.fechaPago;
-    });
-    age('auxiliar', 'Auxiliar contable', auxiliarContableRecords, function* () {
-      for (const r of auxiliarContableRecords) yield r.fechaContable;
-    });
-    age('nomina', 'Nómina (TRESS)', nominaRecords, function* () {
-      for (const r of nominaRecords) yield r.paymentDate;
-    });
-    age('rol', 'ROL (CITI)', rolRecords, function* () {
-      for (const r of rolRecords) yield r.fechaViaje;
-    });
-    // Clave propia: `rol` ya la ocupa el ROL de CITI y son fuentes distintas.
-    if (viajesEspecialesRecords.length > 0) {
-      push('rol', 'viajes-data-age', 'Viajes Especiales · dato más reciente en la fuente',
-        (function* () {
-          for (const r of viajesEspecialesRecords) { yield r.fSalidaPrimera; yield r.fechaFactura; }
-        })());
-    }
-    return byDataset;
+      function* () { for (const r of comprasRecords) { yield r.fechaPedido; yield r.fechaRecepcion; } },
+    ]);
+    age('pagos', 'pagos-data-age', 'Pagos a proveedores', pagoProveedorRecords, [
+      function* () { for (const r of pagoProveedorRecords) yield r.fechaPago; },
+    ]);
+    age('auxiliar', 'auxiliar-data-age', 'Auxiliar contable', auxiliarContableRecords, [
+      function* () { for (const r of auxiliarContableRecords) yield r.fechaContable; },
+    ]);
+    age('nomina', 'nomina-data-age', 'Nómina (TRESS)', nominaRecords, [
+      function* () { for (const r of nominaRecords) yield r.paymentDate; },
+    ]);
+    age('rol', 'rol-data-age', 'ROL (CITI)', rolRecords, [
+      function* () { for (const r of rolRecords) yield r.fechaViaje; },
+    ]);
+    // Fila propia: `rol` ya la ocupa el ROL de CITI y son fuentes distintas
+    // (`citi.Flujo_Efectivo_Rol_Diario` vs `sentur.Viajes_Especiales`); tomar
+    // el máximo de ambas escondería a la que murió.
+    age('rol', 'viajes-data-age', 'Viajes Especiales', viajesEspecialesRecords, [
+      function* () { for (const r of viajesEspecialesRecords) { yield r.fSalidaPrimera; yield r.fechaFactura; } },
+    ]);
+    return out;
   }, [
     cxpRecords, cobranzaRecords, comprasRecords, pagoProveedorRecords,
     auxiliarContableRecords, nominaRecords, rolRecords, viajesEspecialesRecords,
   ]);
+
+  // Marca de avance: ¿el máximo de cada fuente SUBIÓ desde la última vez que
+  // este navegador lo vio? Es el respaldo de la antigüedad-del-dato para la
+  // clase entera del defecto — una fuente que se queda quieta se delata aunque
+  // el campo que medimos se pueda post-fechar. Vive en un efecto (escribe
+  // `localStorage`) y no en el memo, para que el render siga siendo puro.
+  const [sourceStallByKey, setSourceStallByKey] = useState<Record<string, number>>({});
+  useEffect(() => {
+    const maxByKey: Record<string, string | null> = {};
+    for (const entry of sourceDataAges) maxByKey[entry.rowKey] = entry.freshness.lastDataDate;
+    if (Object.keys(maxByKey).length === 0) return;
+    const { next, stalledByKey } = assessSourceAdvanceAll(loadSourceAdvanceMarks(), maxByKey, todayISO());
+    saveSourceAdvanceMarks(next);
+    setSourceStallByKey((prev) => {
+      const sameSize = Object.keys(prev).length === Object.keys(stalledByKey).length;
+      if (sameSize && Object.entries(stalledByKey).every(([k, v]) => prev[k] === v)) return prev;
+      return stalledByKey;
+    });
+  }, [sourceDataAges]);
+
+  // Filas del panel, indexadas por el dataset al que pertenecen para poder
+  // pintar cada una JUNTO a la suya.
+  //
+  // Sólo se emite fila cuando la fuente está REZAGADA o DEJÓ DE AVANZAR: una
+  // por dataset al día sería ruido que entrena al usuario a ignorar el panel.
+  const staleSourceRowsByDataset = useMemo<Map<string, DataHealthDatasetRow[]>>(() => {
+    const byDataset = new Map<string, DataHealthDatasetRow[]>();
+    for (const { dataset, rowKey, source, freshness } of sourceDataAges) {
+      const stalled = sourceStallByKey[rowKey];
+      const dead = isSourceStalled(stalled);
+      // `no-data` sin fecha usable = el dataset simplemente no se ha cargado;
+      // eso ya lo dice su propia fila de estado.
+      if (!dead && (freshness.status === 'fresh' || (freshness.status === 'no-data' && !freshness.lastDataDate))) continue;
+      const row: DataHealthDatasetRow = {
+        key: rowKey,
+        // Una fuente que dejó de avanzar no es lo mismo que una atrasada: la
+        // primera no va a alcanzarse sola, y el usuario necesita leer eso.
+        label: dead
+          ? `${source} · la fuente DEJÓ DE AVANZAR (${stalled} días hábiles sin dato nuevo)`
+          : `${source} · dato más reciente en la fuente`,
+        status: !dead && freshness.status === 'aging' ? 'stale' : 'error',
+        lastSync: freshness.lastDataDate ?? undefined,
+      };
+      const list = byDataset.get(dataset);
+      if (list) list.push(row); else byDataset.set(dataset, [row]);
+    }
+    return byDataset;
+  }, [sourceDataAges, sourceStallByKey]);
 
   const dataHealthRows = useMemo<DataHealthDatasetRow[]>(() => {
     const maxTs = (...maps: Record<string, string>[]): string | undefined => {

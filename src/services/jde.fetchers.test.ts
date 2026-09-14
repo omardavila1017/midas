@@ -183,6 +183,37 @@ describe('fetchAgedBalances — mapAgedBalance', () => {
     expect(r.fechaVence).toBe('2026/09/30');
     expect(r.fechaProgramacionPago).toBe('');
   });
+
+  // `fecha_contable` NO fecha dinero: es la prueba de vida de la fuente. Es la
+  // única fecha del CXP que JDE no post-fecha, así que `sourceDataFreshness` la
+  // prefiere sobre `fechaFactura` — sin este mapeo esa preferencia queda
+  // INERTE y una fuente muerta se sigue viendo verde (medido 2026-09-14:
+  // 13 días sin cargar y el panel en verde por 10 facturas post-fechadas).
+  it('mapea la fecha CONTABLE, con la misma normalización DD-MM-YYYY', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse([
+      {
+        Cia: '00011',
+        No_Proveedor: 'P-9',
+        Fecha_Factura: '11-09-2026',
+        Fecha_Contable: '31-08-2026',
+        Importe_Pendiente_Pesos: 100,
+      },
+    ])));
+
+    const [r] = await fetchAgedBalances({ cia: '00011' });
+    expect(r.fechaContable).toBe('2026-08-31');
+  });
+
+  it('sin la columna contable degrada a cadena vacía, no rompe el registro', async () => {
+    // El SP puede no exponerla; los consumidores caen a `fechaFactura`.
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse([
+      { Cia: '00011', No_Proveedor: 'P-9', Fecha_Factura: '11-09-2026', Importe_Pendiente_Pesos: 100 },
+    ])));
+
+    const [r] = await fetchAgedBalances({ cia: '00011' });
+    expect(r.fechaContable).toBe('');
+    expect(r.fechaFactura).toBe('2026-09-11');
+  });
 });
 
 // ───────────────────────────────────────────────────────────────

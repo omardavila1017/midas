@@ -75,3 +75,37 @@ export function summarizeSourceDataFreshness(
   const businessDaysElapsed = countBusinessDaysBetween(lastDataDate, todayISO);
   return { lastDataDate, businessDaysElapsed, status: freshnessStatusFor(businessDaysElapsed, thresholds) };
 }
+
+/**
+ * Frescura sobre la PRIMERA lista de fechas que produzca una fecha usable.
+ *
+ * POR QUÉ NO BASTA UNIR LAS LISTAS
+ * --------------------------------
+ * `latestUsableDataDate` toma el MÁXIMO, así que agregar un campo más
+ * conservador a la misma bolsa no sirve de nada: el campo post-fechable gana
+ * igual. La elección tiene que ser por PRECEDENCIA, no por unión.
+ *
+ * El defecto que cierra (medido 2026-09-14): `jde.Antiguedad_Saldos` llevaba
+ * 13 días sin insertar una fila, pero el lote del 01-sep traía 10 facturas
+ * post-fechadas al 10 y 11-sep. Eran futuras cuando se cargaron —y el filtro
+ * de `latestUsableDataDate` las descartaba— pero con el paso de los días se
+ * volvieron pasadas, y el panel pasó de `aging` (6 días hábiles, avisaba) a
+ * `fresh` (1 día hábil, callaba) **sin que el dato cambiara**. El aviso se
+ * apagó solo. Con `fecha_contable`, que JDE no post-fecha, la misma fuente
+ * reporta 31-ago → rojo.
+ *
+ * Degrada sola: si el candidato preferido no produce ninguna fecha usable
+ * (p.ej. el SP no expone la columna), cae al siguiente y el resultado es
+ * byte-idéntico al comportamiento previo.
+ */
+export function summarizeSourceDataFreshnessPreferred(
+  candidates: Array<() => Iterable<string | null | undefined>>,
+  todayISO: string,
+  thresholds: BankFreshnessThresholds = MANUAL_BANK_FRESHNESS_THRESHOLDS,
+): SourceDataFreshness {
+  for (const candidate of candidates) {
+    const result = summarizeSourceDataFreshness(candidate(), todayISO, thresholds);
+    if (result.lastDataDate) return result;
+  }
+  return { lastDataDate: null, businessDaysElapsed: null, status: 'no-data' };
+}

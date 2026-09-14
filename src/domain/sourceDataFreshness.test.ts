@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { latestUsableDataDate, summarizeSourceDataFreshness } from './sourceDataFreshness';
+import {
+  latestUsableDataDate,
+  summarizeSourceDataFreshness,
+  summarizeSourceDataFreshnessPreferred,
+} from './sourceDataFreshness';
 
 // Ancla REAL de la auditoría 2026-09-07: `jde.Antiguedad_Saldos` dejó de cargar
 // el 01-sep, así que la factura más reciente del CXP era del 31-ago mientras el
@@ -67,5 +71,55 @@ describe('summarizeSourceDataFreshness', () => {
       expect(latestUsableDataDate([...values].reverse(), '2026-09-07')).toBe(expected);
       expect(latestUsableDataDate([...values].sort(), '2026-09-07')).toBe(expected);
     });
+  });
+});
+
+// Ancla REAL de la auditoría 2026-09-14. `jde.Antiguedad_Saldos` seguía sin
+// cargar desde el 01-sep (13 días), pero su último lote traía 10 facturas
+// POST-FECHADAS al 10 y 11-sep. Medido en la BD:
+//   - fecha_factura  → max no futuro 2026-09-11  (post-fechadas del lote viejo)
+//   - fecha_contable → max           2026-08-31  (JDE no post-fecha la contable)
+// El 09-sep el panel decía `aging` (avisaba) y el 14-sep decía `fresh` (callaba)
+// con el MISMO dato congelado: el aviso se apagó solo con el paso del tiempo.
+describe('summarizeSourceDataFreshnessPreferred — la fuente muerta no puede verse verde', () => {
+  const CONTABLES = ['2026-08-26', '2026-08-28', '2026-08-31'];
+  const FACTURAS = ['2026-08-31', '2026-09-10', '2026-09-11'];
+
+  it('la fecha post-fechable sola pinta de VERDE una fuente congelada (el defecto)', () => {
+    const porFactura = summarizeSourceDataFreshness(FACTURAS, '2026-09-14');
+    expect(porFactura.lastDataDate).toBe('2026-09-11');
+    expect(porFactura.status).toBe('fresh');
+  });
+
+  it('prefiere la fecha que JDE no post-fecha y delata la fuente congelada', () => {
+    const result = summarizeSourceDataFreshnessPreferred(
+      [() => CONTABLES, () => FACTURAS],
+      '2026-09-14',
+    );
+    expect(result.lastDataDate).toBe('2026-08-31');
+    expect(result.businessDaysElapsed).toBe(10);
+    expect(result.status).not.toBe('fresh');
+  });
+
+  it('UNIR las listas NO sirve: el máximo se lo lleva la post-fechada', () => {
+    // Por esto la elección es por precedencia y no por unión — es el error
+    // natural al "agregar un campo más" y deja el fix inerte.
+    const unidas = summarizeSourceDataFreshness([...CONTABLES, ...FACTURAS], '2026-09-14');
+    expect(unidas.status).toBe('fresh');
+  });
+
+  it('degrada sola: sin el campo preferido cae al siguiente, byte-idéntico al previo', () => {
+    // El SP puede no exponer `fecha_contable`; entonces llega vacía.
+    const vacias = ['', undefined, ''];
+    const result = summarizeSourceDataFreshnessPreferred(
+      [() => vacias, () => FACTURAS],
+      '2026-09-14',
+    );
+    expect(result).toEqual(summarizeSourceDataFreshness(FACTURAS, '2026-09-14'));
+  });
+
+  it('sin ningún candidato usable reporta no-data, no una fecha inventada', () => {
+    const result = summarizeSourceDataFreshnessPreferred([() => [], () => ['']], '2026-09-14');
+    expect(result).toEqual({ lastDataDate: null, businessDaysElapsed: null, status: 'no-data' });
   });
 });
