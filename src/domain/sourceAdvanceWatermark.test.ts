@@ -52,14 +52,51 @@ describe('assessSourceAdvance', () => {
     expect(v.next).toEqual({ maxDataDate: '2026-08-31', firstSeenAt: '2026-09-01' });
   });
 
-  it('un máximo que RETROCEDE no emite veredicto y conserva la marca', () => {
-    // Durante el boot los datasets se comprometen por olas: ver un máximo menor
-    // por unos segundos no prueba que la fuente murió. Acusar aquí sería el
-    // falso positivo que entrena al usuario a ignorar el panel.
-    const prev = { maxDataDate: '2026-09-14', firstSeenAt: '2026-09-02' };
-    const v = assessSourceAdvance(prev, '2026-08-01', '2026-09-14');
-    expect(v.stalledBusinessDays).toBeNull();
+  it('un máximo que RETROCEDE conserva la marca y sigue contando desde firstSeenAt', () => {
+    // Antes devolvía `null` para tolerar el transitorio del boot, pero eso dejaba
+    // inmune PARA SIEMPRE a la fuente cuyo máximo baja de forma permanente (una
+    // ventana que se acorta, una cía que deja de cargarse): cada evaluación
+    // posterior seguía por esa rama y la fuente no podía acusarse nunca.
+    const prev = { maxDataDate: '2026-09-14', firstSeenAt: '2026-09-01' };
+    const v = assessSourceAdvance(prev, '2026-08-01', '2026-09-17');
     expect(v.next).toBe(prev);
+    expect(v.stalledBusinessDays).toBe(11);
+    // Lo que importa: ahora SÍ puede acusarse. Antes era `null` y esa fuente
+    // quedaba fuera del panel para siempre.
+    expect(isSourceStalled(v.stalledBusinessDays ?? undefined)).toBe(true);
+  });
+
+  it('el retroceso del boot NO produce falso positivo en una fuente sana', () => {
+    // La razón por la que contar desde `firstSeenAt` es seguro: una fuente que
+    // acaba de avanzar tiene `firstSeenAt` reciente, así que el conteo queda muy
+    // por debajo del umbral aunque una ola del boot muestre un máximo menor.
+    const prev = { maxDataDate: '2026-09-16', firstSeenAt: '2026-09-16' };
+    const v = assessSourceAdvance(prev, '2026-09-10', '2026-09-17');
+    expect(isSourceStalled(v.stalledBusinessDays ?? undefined)).toBe(false);
+  });
+
+  it('el parpadeo del boot es el precio ACEPTADO, y no corrompe la marca', () => {
+    // Trade-off explícito: una fuente que YA llevaba días sin avanzar puede
+    // acusarse unos segundos mientras la ola del boot se completa (el máximo se
+    // ve menor de lo ya conocido). Se acepta porque un falso positivo
+    // transitorio, visible y auto-corregible es mejor que el silencio
+    // permanente que producía el `null`. Lo que NO se acepta es corromper la
+    // marca: el retroceso conserva `prev` intacto, así que en cuanto la ola
+    // sube el máximo el reloj vuelve a 0.
+    const prev = { maxDataDate: '2026-09-16', firstSeenAt: '2026-09-01' };
+    const transitorio = assessSourceAdvance(prev, '2026-08-20', '2026-09-17');
+    expect(transitorio.next).toBe(prev);
+
+    const olaCompleta = assessSourceAdvance(transitorio.next, '2026-09-17', '2026-09-17');
+    expect(olaCompleta.stalledBusinessDays).toBe(0);
+    expect(olaCompleta.next).toEqual({ maxDataDate: '2026-09-17', firstSeenAt: '2026-09-17' });
+  });
+
+  it('la fecha con hora se normaliza a 10 chars y la marca sobrevive la recarga', () => {
+    // Sin el recorte, `isMark` descartaría la marca al releerla y la historia se
+    // resetearía en cada arranque: la fuente nunca acumularía días ni acusaría.
+    const v = assessSourceAdvance(undefined, '2026-09-17T02:00:44', '2026-09-17');
+    expect(v.next?.maxDataDate).toBe('2026-09-17');
   });
 
   it('sin fecha usable no hay veredicto ni marca nueva', () => {

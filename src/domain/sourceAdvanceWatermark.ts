@@ -63,8 +63,8 @@ export interface SourceAdvanceVerdict {
   next: SourceAdvanceMark | undefined;
   /**
    * Días hábiles que el máximo lleva sin subir, o `null` cuando no hay
-   * veredicto posible (primera observación, sin fecha usable, o máximo que
-   * RETROCEDIÓ — ver abajo).
+   * veredicto posible: primera observación (no hay contra qué comparar) o sin
+   * fecha usable. Un máximo que RETROCEDE **sí** emite veredicto — ver abajo.
    */
   stalledBusinessDays: number | null;
 }
@@ -72,11 +72,25 @@ export interface SourceAdvanceVerdict {
 /**
  * Regla de avance para UNA fuente.
  *
- * El caso que obliga a devolver `null` en vez de acusar: durante el boot los
- * datasets se comprometen por olas, así que el máximo puede verse MENOR que
- * el ya conocido por unos segundos (y lo mismo si el usuario acota la ventana
- * de datos). Un retroceso no prueba que la fuente murió, así que se conserva
- * la marca previa y no se emite veredicto. Conservador a propósito.
+ * **El retroceso se trata igual que "no se movió"** (conserva la marca, cuenta
+ * desde `firstSeenAt`). Antes devolvía `null` para tolerar el transitorio del
+ * boot —los datasets se comprometen por olas y el máximo puede verse menor unos
+ * segundos—, pero eso dejaba inmune PARA SIEMPRE a la fuente cuyo máximo baja de
+ * forma permanente: cada evaluación posterior seguía por esa rama y esa fuente
+ * no podía acusarse jamás.
+ *
+ * **Trade-off explícito**, y se eligió a conciencia: el precio es un parpadeo
+ * durante el boot —una fuente que YA llevaba días sin avanzar puede acusarse
+ * unos segundos mientras la ola se completa, hasta que el máximo sube y el
+ * reloj se resetea a 0—. Un falso positivo transitorio, visible y que se
+ * auto-corrige es estrictamente mejor que un silencio permanente, que es el
+ * defecto que esta marca existe para cerrar. La marca NO se corrompe en el
+ * transitorio: el retroceso conserva `prev` tal cual.
+ *
+ * Re-basificar en el retroceso (`firstSeenAt = hoy`) parece la alternativa
+ * limpia y NO lo es: el transitorio del boot la dispararía en cada arranque,
+ * `firstSeenAt` sería siempre hoy y la fuente nunca acumularía días — la misma
+ * inmunidad, por otra puerta.
  */
 export function assessSourceAdvance(
   prev: SourceAdvanceMark | undefined,
@@ -84,12 +98,30 @@ export function assessSourceAdvance(
   todayISO: string,
 ): SourceAdvanceVerdict {
   const today = todayISO.slice(0, 10);
-  if (!maxDataDate) return { next: prev, stalledBusinessDays: null };
-  if (!prev) return { next: { maxDataDate, firstSeenAt: today }, stalledBusinessDays: null };
-  if (maxDataDate > prev.maxDataDate) {
-    return { next: { maxDataDate, firstSeenAt: today }, stalledBusinessDays: 0 };
+  // Se normaliza igual que `today`: si un caller entregara la fecha con hora,
+  // `isMark` la descartaría al recargar y la marca se resetearía en cada arranque
+  // — la fuente nunca acumularía días y jamás podría acusarse. Passthrough con
+  // una fecha ya ISO de 10 chars, que es lo que hoy entrega `latestUsableDataDate`.
+  const maxDate = maxDataDate ? maxDataDate.slice(0, 10) : maxDataDate;
+  if (!maxDate) return { next: prev, stalledBusinessDays: null };
+  if (!prev) return { next: { maxDataDate: maxDate, firstSeenAt: today }, stalledBusinessDays: null };
+  if (maxDate > prev.maxDataDate) {
+    return { next: { maxDataDate: maxDate, firstSeenAt: today }, stalledBusinessDays: 0 };
   }
-  if (maxDataDate < prev.maxDataDate) return { next: prev, stalledBusinessDays: null };
+  // Un máximo que RETROCEDE se trata igual que uno que no se movió: la marca se
+  // conserva y se sigue contando desde `firstSeenAt`.
+  //
+  // Antes devolvía `null` (sin veredicto) para tolerar el transitorio del boot,
+  // donde los datasets se comprometen por olas y el máximo puede verse menor unos
+  // segundos. Pero un retroceso PERMANENTE —una ventana que se acorta, una cía
+  // que deja de cargarse— dejaba esa fuente inmune al aviso PARA SIEMPRE: cada
+  // evaluación posterior seguía por esta rama. Una capa de confesión que deja de
+  // confesar sola es justo el defecto que esta marca existe para cerrar.
+  //
+  // Contar desde `firstSeenAt` no reintroduce el falso positivo del boot: una
+  // fuente sana acaba de avanzar, así que su `firstSeenAt` es reciente y el
+  // conteo queda muy por debajo del umbral. Sólo acusa a la que ya llevaba
+  // tiempo quieta — y un retroceso es, como mínimo, tan malo como no avanzar.
   return { next: prev, stalledBusinessDays: countBusinessDaysBetween(prev.firstSeenAt, today) };
 }
 

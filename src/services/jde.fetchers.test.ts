@@ -34,6 +34,7 @@ import {
   fetchViajesEspeciales,
   fetchViajesEspecialesRange,
 } from './jde';
+import { __resetDataGapsForTests, getDataGaps } from './dataHealth';
 
 function jsonResponse(rows: unknown): Response {
   return new Response(JSON.stringify(rows), {
@@ -301,6 +302,109 @@ describe('fetchAgedBalances — dedup last-wins (defensa contra carga acumulada)
 // ───────────────────────────────────────────────────────────────
 // 2. Empresas — fetchCompanies + mapCompany
 // ───────────────────────────────────────────────────────────────
+
+describe('fetchAgedBalances — el documento PAGADO no es pasivo', () => {
+  const doc = (over: Record<string, unknown> = {}) => ({
+    Cia: '00011',
+    No_Proveedor: 'P-1',
+    No_Factura: 'F-100',
+    ND: 900001,
+    Fecha_Factura: '31-08-2026',
+    Importe_Pendiente_Pesos: 1000,
+    Edo_Pago: 'A',
+    ...over,
+  });
+
+  it('descarta el documento marcado PAGADO aunque declare saldo pendiente', async () => {
+    // El defecto medido 2026-09-17: una recarga histórica de 2025 dejó 126,292
+    // documentos `edo_pago='P'` con su pendiente congelado, por $3,056.1M,
+    // conviviendo con el snapshot vivo de $137.5M. El dedup por llave NO los
+    // toca (son llaves distintas, no duplicados) y entran enteros al pasivo.
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse([
+      doc({ No_Factura: 'VIVA', Edo_Pago: 'A', Importe_Pendiente_Pesos: 137.5 }),
+      doc({ No_Factura: 'PAGADA-1', ND: 1, Edo_Pago: 'P', Importe_Pendiente_Pesos: 3056.1 }),
+      doc({ No_Factura: 'PAGADA-2', ND: 2, Edo_Pago: 'PAGADO', Importe_Pendiente_Pesos: 999 }),
+    ])));
+
+    const records = await fetchAgedBalances({ cia: '00011' });
+    expect(records.map((r) => r.noFactura)).toEqual(['VIVA']);
+    expect(records.reduce((a, r) => a + r.importePendientePesos, 0)).toBe(137.5);
+  });
+
+  it('conserva ÍNTEGRO el pay-item abierto cuando su hermano pagado comparte llave', async () => {
+    // El par real de la BD (factura 061936, nd 1251518): la retención ya pagada
+    // ($742.40, 'P') y el neto abierto ($30,150.21, 'A') comparten
+    // `cia::prov::factura::nd` — `nd` NO los separa. Sin el corte de pagados el
+    // dedup last-wins se queda con UNO y borra pasivo real. Medido: el corte
+    // deja CERO grupos colapsables entre filas vivas, y eso es lo que vuelve
+    // seguro al dedup.
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse([
+      doc({ Edo_Pago: 'A', Fecha_Vence: '28-03-2025', Importe_Pendiente_Pesos: 30150.21 }),
+      doc({ Edo_Pago: 'P', Fecha_Vence: '08-03-2025', Importe_Pendiente_Pesos: 742.4 }),
+    ])));
+
+    const records = await fetchAgedBalances({ cia: '00011' });
+    expect(records).toHaveLength(1);
+    expect(records[0].importePendientePesos).toBe(30150.21);
+  });
+
+  it('match EXACTO, nunca substring: "POR PAGAR" NO es un documento pagado', async () => {
+    // La trampa que en este repo ya costó $37.45M ('PAGADO' dentro de
+    // 'NO PAGADO'). Aquí el error equivalente borraría pasivo real.
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse([
+      doc({ No_Factura: 'A', ND: 1, Edo_Pago: 'POR PAGAR', Importe_Pendiente_Pesos: 500 }),
+      doc({ No_Factura: 'B', ND: 2, Edo_Pago: 'NO PAGADO', Importe_Pendiente_Pesos: 700 }),
+      doc({ No_Factura: 'C', ND: 3, Edo_Pago: 'H', Importe_Pendiente_Pesos: 300 }),
+    ])));
+
+    const records = await fetchAgedBalances({ cia: '00011' });
+    expect(records.reduce((a, r) => a + r.importePendientePesos, 0)).toBe(1500);
+  });
+
+  it('degrada solo: sobre una fuente sana el resultado es byte-idéntico', async () => {
+    // El snapshot completo del 17-sep no trae ni una 'P' (sus estados son
+    // A/H/O/#), así que sobre él el corte es byte-idéntico. Este caso pasa en
+    // ambas direcciones a propósito: pinea la invariante de no-regresión.
+    const sano = [
+      doc({ No_Factura: 'F-1', ND: 1, Importe_Pendiente_Pesos: 100 }),
+      doc({ No_Factura: 'F-2', ND: 2, Importe_Pendiente_Pesos: 200 }),
+      doc({ No_Factura: 'F-3', ND: 3, Edo_Pago: '', Importe_Pendiente_Pesos: 300 }),
+    ];
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(sano)));
+
+    const records = await fetchAgedBalances({ cia: '00011' });
+    expect(records).toHaveLength(3);
+    expect(records.reduce((a, r) => a + r.importePendientePesos, 0)).toBe(600);
+  });
+
+  it('el pagado en saldo CERO se descarta sin ensuciar Salud de datos', async () => {
+    // Las cargas NORMALES del 15 y 16-sep sí emitieron pagados (32 cada una),
+    // pero todas con pendiente 0: inocuas, y descartarlas no mueve dinero.
+    // Reportarlas sería ruido que entrena al usuario a ignorar el panel.
+    __resetDataGapsForTests();
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse([
+      doc({ No_Factura: 'F-1', ND: 1, Edo_Pago: 'A', Importe_Pendiente_Pesos: 100 }),
+      doc({ No_Factura: 'F-2', ND: 2, Edo_Pago: 'P', Importe_Pendiente_Pesos: 0 }),
+    ])));
+
+    const records = await fetchAgedBalances({ cia: '00011' });
+    expect(records).toHaveLength(1);
+    expect(getDataGaps()).toHaveLength(0);
+  });
+
+  it('confiesa en Salud de datos el pagado que SÍ traía saldo', async () => {
+    __resetDataGapsForTests();
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse([
+      doc({ No_Factura: 'F-1', ND: 1, Edo_Pago: 'P', Importe_Pendiente_Pesos: 3056.1 }),
+    ])));
+
+    await fetchAgedBalances({ cia: '00011' });
+    const gaps = getDataGaps();
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0].kind).toBe('source-contradiction');
+    expect(gaps[0].dataset).toBe('cxp');
+  });
+});
 
 describe('fetchCompanies — mapCompany', () => {
   it('GET /empresas, normaliza cia, mapea activa S/N y filtra filas sin cia', async () => {

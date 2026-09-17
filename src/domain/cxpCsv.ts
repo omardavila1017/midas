@@ -1,5 +1,6 @@
 import { normalizeCia } from './cia';
 import type { CXPRecord } from './persistence';
+import { isSettledAgedBalance } from './agedBalanceSettled';
 
 /**
  * CSV parser del import manual de CXP (Antigüedad de Saldos exportada a CSV).
@@ -99,6 +100,20 @@ export function parseCXP(text: string): CXPRecord[] {
     });
   }
 
-  if (records.length === 0) throw new Error(`No se encontraron registros válidos (${skipped} filas omitidas)`);
-  return records;
+  // Misma regla que el fetcher de JDE, por la misma razón: un documento marcado
+  // PAGADO no es pasivo. Un CSV exportado de la tabla envenenada reintroduciría
+  // por esta puerta el mismo pasivo fantasma que `fetchAgedBalances` descarta —
+  // y el MISMO registro se comportaría distinto según por dónde entró, que es
+  // exactamente cómo se desincronizan dos puertas de entrada.
+  const settled = records.filter(isSettledAgedBalance).length;
+  const open = records.filter((r) => !isSettledAgedBalance(r));
+
+  if (open.length === 0) {
+    throw new Error(
+      records.length === 0
+        ? `No se encontraron registros válidos (${skipped} filas omitidas)`
+        : `El archivo sólo trae documentos ya PAGADOS (${settled}): no hay saldo abierto que importar.`,
+    );
+  }
+  return open;
 }

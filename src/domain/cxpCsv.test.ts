@@ -87,3 +87,44 @@ describe('parseCXP', () => {
     expect(parseCXP(upper)[0].cia).toBe('00150');
   });
 });
+
+describe('parseCXP — el documento PAGADO no es pasivo (misma regla que el fetcher)', () => {
+  const H = `${HEADERS},edo_pago`;
+  // cia,no_prov,nombre,no_factura,fecha_factura,fecha_vence,pend,bruto,por_vencer,v_1_30,moneda,edo_pago
+  const doc = (...rows: string[]) => [H, ...rows].join('\n');
+
+  it('descarta las filas PAGADAS de un CSV exportado de la tabla envenenada', () => {
+    // Sin esto, el mismo documento se comporta distinto según la puerta por la
+    // que entró: el fetcher lo descarta y el import manual lo reintroduce.
+    const records = parseCXP(doc(
+      '11,P1,ACME,F-VIVA,2026-01-01,2026-02-01,137.5,200,0,0,MXP,A',
+      '11,P2,BETA,F-PAGADA,2025-01-01,2025-02-01,3056.1,3056.1,0,0,MXP,P',
+      '11,P3,GAMA,F-PAGADA2,2025-01-01,2025-02-01,999,999,0,0,MXP,PAGADO',
+    ));
+    expect(records.map((r) => r.noFactura)).toEqual(['F-VIVA']);
+  });
+
+  it('match EXACTO: "POR PAGAR" y "NO PAGADO" sobreviven', () => {
+    const records = parseCXP(doc(
+      '11,P1,A,F-1,2026-01-01,2026-02-01,500,500,0,0,MXP,POR PAGAR',
+      '11,P2,B,F-2,2026-01-01,2026-02-01,700,700,0,0,MXP,NO PAGADO',
+      '11,P3,C,F-3,2026-01-01,2026-02-01,300,300,0,0,MXP,H',
+    ));
+    expect(records.reduce((a, r) => a + r.importePendientePesos, 0)).toBe(1500);
+  });
+
+  it('un CSV sólo de pagados falla con un mensaje que dice POR QUÉ', () => {
+    // Silenciar esto dejaría al usuario con un import "exitoso" de 0 registros
+    // que además REEMPLAZA las cías del archivo (replaceCxpForCias).
+    expect(() => parseCXP(doc('11,P1,A,F-1,2025-01-01,2025-02-01,100,100,0,0,MXP,P')))
+      .toThrow(/sólo trae documentos ya PAGADOS/);
+  });
+
+  it('degrada solo: un CSV sin columna edo_pago pasa intacto', () => {
+    const records = parseCXP(csv(
+      '11,P1,A,F-1,2026-01-01,2026-02-01,100,100,0,0,MXP',
+      '11,P2,B,F-2,2026-01-01,2026-02-01,200,200,0,0,MXP',
+    ));
+    expect(records).toHaveLength(2);
+  });
+});

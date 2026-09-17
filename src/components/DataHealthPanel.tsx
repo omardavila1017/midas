@@ -60,6 +60,7 @@ const GAP_KIND_LABEL: Record<DataGap['kind'], string> = {
   'chunk-failed': 'Rango sin cargar',
   'window-failed': 'Ventana sin cargar',
   'cia-failed': 'Compañía sin cargar',
+  'source-contradiction': 'Dato incoherente descartado',
 };
 
 /** Relativo con granularidad de minutos/horas (fmtRelative solo da días). */

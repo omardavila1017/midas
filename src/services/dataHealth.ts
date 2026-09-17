@@ -31,7 +31,15 @@ export type DataGapKind =
   | 'month-failed'
   | 'chunk-failed'
   | 'window-failed'
-  | 'cia-failed';
+  | 'cia-failed'
+  /**
+   * La fuente se contradice a sí misma y Midas descartó el dato incoherente.
+   * NO es un fallo de transporte (nada falló al traerlo): es dato que llegó mal.
+   * Merece kind propio porque el usuario necesita distinguir "no se pudo traer"
+   * de "vino mal y lo descarté" — sin esa distinción el panel miente sobre qué
+   * pasó, y el destinatario de la corrección es otro (el origen, no la red).
+   */
+  | 'source-contradiction';
 
 export interface DataGap {
   dataset: string;

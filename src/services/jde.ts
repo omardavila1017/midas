@@ -28,6 +28,7 @@ import {
   type ChunkFetchResult,
 } from './dailyApiCache';
 import { reportDataGap } from './dataHealth';
+import { isSettledAgedBalance } from '../domain/agedBalanceSettled';
 import { apiConfig } from '../config/api.config';
 import { findBankAccountByCuenta } from '../domain/bankAccountsCatalog';
 import { canonicalBankAccountNumber, canonicalBankName } from '../domain/bankStatements';
@@ -395,6 +396,12 @@ function agedBalanceKey(r: AgedBalanceRecord): string {
  * Esto es DEFENSA, no el arreglo: la corrección vive en el origen (que la carga
  * trunque antes de insertar). Sin duplicados el resultado es byte-idéntico al
  * previo, así que no cambia nada el día que el origen esté sano.
+ *
+ * **Segunda defensa, de otra clase: se descartan los documentos PAGADOS**
+ * (`isSettledAgedBalance`). El dedup sólo colapsa la MISMA llave repetida; los
+ * documentos que el origen dejó atrás tras una recarga histórica son llaves
+ * DISTINTAS y lo atraviesan enteros. Ver el docblock del helper: medido
+ * 2026-09-17, $3,056.1M de pasivo ya pagado contra $137.5M vivo.
  */
 export async function fetchAgedBalances(
   req: AgedBalanceRequest,
@@ -402,8 +409,56 @@ export async function fetchAgedBalances(
 ): Promise<AgedBalanceRecord[]> {
   const raw = await jdeClient.post<unknown>('/antiguedadsaldos', req, config);
   const byKey = new Map<string, AgedBalanceRecord>();
+  const collapsedLive: string[] = [];
+  let settledCount = 0;
+  let settledAmount = 0;
   for (const rec of unwrapList(raw).map(mapAgedBalance)) {
+    // El corte va ANTES del Map: un documento pagado no debe ni ocupar llave —
+    // si lo hiciera, podría desplazar por last-wins a la versión viva del mismo
+    // documento cuando el payload trae las dos.
+    if (isSettledAgedBalance(rec)) {
+      if (rec.importePendientePesos !== 0) {
+        settledCount += 1;
+        settledAmount += rec.importePendientePesos;
+      }
+      continue;
+    }
+    // Un colapso entre dos filas VIVAS con importe distinto es pasivo que
+    // desaparece, y es la dirección peor. Hoy no ocurre: la llave no lleva
+    // discriminador de pay-item, pero el par de pay-items de una misma factura
+    // es siempre (retención PAGADA + neto ABIERTO), así que el corte de arriba
+    // ya se llevó a la primera — medido 2026-09-17, CERO grupos colapsables
+    // entre filas vivas. Eso es una propiedad de los datos, no una garantía
+    // estructural: si el origen emite dos pay-items abiertos bajo la misma
+    // llave, esto lo delata en vez de dejarlo derivar en silencio.
+    const prev = byKey.get(agedBalanceKey(rec));
+    if (prev && prev.importePendientePesos !== rec.importePendientePesos) {
+      collapsedLive.push(
+        `${rec.noFactura || '(sin folio)'} nd=${rec.noDocumento || '?'} `
+          + `(${prev.importePendientePesos} vs ${rec.importePendientePesos})`,
+      );
+    }
     byKey.set(agedBalanceKey(rec), rec);
+  }
+  // Sólo se confiesa el caso CONTRADICTORIO (pagado con saldo declarado). Un
+  // pagado en 0 es inocuo y reportarlo sería ruido que entrena a ignorar el panel.
+  if (settledCount > 0) {
+    reportDataGap(
+      'cxp',
+      'source-contradiction',
+      `cía ${req.cia}: ${settledCount} documentos marcados PAGADOS traían saldo pendiente `
+        + `(${settledAmount.toLocaleString('es-MX', { style: 'currency', currency: 'MXN' })}). `
+        + 'Descartados: un documento pagado no es pasivo. Corregir en el origen.',
+    );
+  }
+  if (collapsedLive.length > 0) {
+    reportDataGap(
+      'cxp',
+      'source-contradiction',
+      `cía ${req.cia}: ${collapsedLive.length} documentos vivos comparten llave con importes `
+        + `distintos y el dedup se quedó con uno solo — posible pay-item sin discriminador. `
+        + `Ejemplos: ${collapsedLive.slice(0, 3).join(' · ')}`,
+    );
   }
   return dropExcludedByCia(Array.from(byKey.values()));
 }
