@@ -159,6 +159,46 @@ describe('buildHistoricalReconciledMovements (MOTOR 1)', () => {
     expect(movement!.subcategory).toBe('CHASIS');
   });
 
+  it('el CARGO en lote se nombra por el proveedor DOMINANTE, no por el orden del arreglo', () => {
+    // El tier `batch` del motor de pagos dispersa N pagos a proveedores
+    // distintos como un solo SPEI. Con `payments[0]` el nombre y el bucket del
+    // egreso dependían del orden del arreglo: el mismo CARGO podía quedar a
+    // nombre de un proveedor o de otro entre corridas.
+    const cargo = bankMovement({
+      cia: '00001',
+      cuenta: 'CTA-PAGO',
+      tipoMovimiento: 'CARGO',
+      importe: 10_000,
+      fechaOperacion: '2026-04-15',
+      concepto: 'DISPERSION LOTE',
+      referencia: 'R-LOTE',
+    });
+    const chico = { claveProveedor: '111', nombreProveedor: 'PROVEEDOR CHICO', clasificacionProveedor: 'PAPELERIA', importe: 2_000 };
+    const grande = { claveProveedor: '999', nombreProveedor: 'PROVEEDOR GRANDE', clasificacionProveedor: 'CHASIS', importe: 8_000 };
+
+    for (const payments of [[chico, grande], [grande, chico]]) {
+      const inputs = {
+        companyCode: 'all',
+        bankStatements: [bankStatement({ cia: '00001', cuenta: 'CTA-PAGO', movimientos: [cargo] })],
+        clients: [],
+        providers: [],
+        cxpRecords: [],
+        cargoEnrichments: new Map([
+          [bankMovementKey(cargo), { status: 'MATCHED' as const, payments }],
+        ]),
+        assumptions,
+        budget: null,
+        startingBalance: 0,
+        asOfDate: '2026-05-01',
+      };
+      const monthly = buildCanonicalProjection(inputs).monthly;
+      const mv = buildHistoricalReconciledMovements({ monthly, inputs });
+      const movement = mv.find((m) => m.sourceObjectId === 'R-LOTE');
+      expect(movement!.counterpartyName).toBe('PROVEEDOR GRANDE');
+      expect(movement!.subcategory).toBe('CHASIS');
+    }
+  });
+
   it('precedencia: tipo_docto T1 (PAYROLL) gana sobre el rol de cuenta pagadora (AP_PAYMENT)', () => {
     // Cuenta real del catálogo con role pagadora / subRole proveedores.
     const cuenta = '7014 1027881';

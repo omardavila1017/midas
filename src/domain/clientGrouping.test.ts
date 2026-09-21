@@ -125,6 +125,30 @@ describe('clientGrouping', () => {
     expect(groups[0].name).toBe('Grupo Jde Y');
   });
 
+  it('el padre y los días de crédito salen de la factura MÁS RECIENTE, no de la primera del arreglo', () => {
+    // `cobranzaRecords` no llega en orden cronológico (fetch incremental,
+    // backfill hacia atrás, revalidación de días sueltos). Con "gana el
+    // primero", un cliente que cambió de padre comercial o renegoció su plazo
+    // quedaba agrupado y proyectado con el dato VIEJO según el orden del
+    // arreglo — y dos navegadores podían diferir.
+    const viejo = cob({
+      cia: '00011', noCliente: '100', fechaFactura: '2026-01-10',
+      noClientePadre: '11101', nombreClientePadre: 'GRUPO VIEJO', diasCredito: 30,
+    });
+    const nuevo = cob({
+      cia: '00011', noCliente: '100', fechaFactura: '2026-08-10',
+      noClientePadre: '22202', nombreClientePadre: 'GRUPO NUEVO', diasCredito: 45,
+    });
+    const clients = [client('Planta A', { id: 'a', jdeAccounts: [link('00011', '100', 'Planta A')] })];
+
+    for (const orden of [[viejo, nuevo], [nuevo, viejo]]) {
+      const groups = buildClientHierarchy(clients, { today: '2026-09-18', cobranzaRecords: orden });
+      expect(groups).toHaveLength(1);
+      expect(groups[0].source).toBe('jde-padre');
+      expect(groups[0].name).toBe('Grupo Nuevo');
+    }
+  });
+
   it('can separate an account by assigning a unique manual group', () => {
     const separated = client('Carrier Planta B', {
       commercialGroupName: 'Carrier Planta B',

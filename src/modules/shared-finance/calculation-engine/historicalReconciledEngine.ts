@@ -60,6 +60,40 @@ import { payClassPairFrom } from './providerPayClassOverlay';
  * movimientos a nivel línea. NO corre el prorrateo Citi — eso lo hace el
  * orquestador sobre la lista compuesta.
  */
+interface CargoPayment {
+  claveProveedor?: string;
+  nombreProveedor: string;
+  clasificacionProveedor?: string;
+  clasificacionProveedorFinanciera?: string;
+  importe: number;
+}
+
+/**
+ * Proveedor que NOMBRA y clasifica un CARGO cruzado a pagos.
+ *
+ * El tier `batch` del motor de pagos dispersa N pagos a proveedores DISTINTOS
+ * como un solo SPEI, así que un CARGO agregado puede traer varios. Tomar
+ * `payments[0]` hacía que el nombre y el bucket del egreso dependieran del
+ * ORDEN del arreglo — el mismo CARGO podía quedar a nombre de un proveedor o de
+ * otro entre corridas. Se elige el de MAYOR importe (el que explica la mayor
+ * parte del cargo) y, en empate, el menor `claveProveedor`/nombre, para que la
+ * elección sea estable y no dependa del orden.
+ *
+ * Sigue siendo una atribución a UN proveedor de un cargo que es de varios: el
+ * monto y la fecha no se tocan, pero el bucket del lote entero cuelga de él.
+ * Partir el movimiento es una decisión de negocio, no de mantenimiento.
+ */
+function dominantPayment(payments: CargoPayment[] | undefined): CargoPayment | undefined {
+  if (!payments || payments.length === 0) return undefined;
+  if (payments.length === 1) return payments[0];
+  return payments.reduce((best, p) => {
+    if (p.importe !== best.importe) return p.importe > best.importe ? p : best;
+    const pk = `${p.claveProveedor ?? ''}::${p.nombreProveedor}`;
+    const bk = `${best.claveProveedor ?? ''}::${best.nombreProveedor}`;
+    return pk < bk ? p : best;
+  });
+}
+
 export function buildHistoricalReconciledMovements({ monthly, inputs }: BuildArgs): FinancialMovement[] {
   const out: FinancialMovement[] = [];
   const monthlyByYm = new Map(monthly.map((m) => [m.yearMonth, m]));
@@ -221,7 +255,7 @@ export function buildHistoricalReconciledMovements({ monthly, inputs }: BuildArg
       // drill-down por banco/concepto.
       const cargoEnrich = !isInflow ? cargoEnrichmentByKey.get(movementKey) : undefined;
       const matchedPayment = cargoEnrich?.status === 'MATCHED'
-        ? cargoEnrich.payments?.[0]
+        ? dominantPayment(cargoEnrich.payments)
         : undefined;
       const isMatchedAp = !!matchedPayment;
       const matchedPaymentProviderCategory = matchedPayment

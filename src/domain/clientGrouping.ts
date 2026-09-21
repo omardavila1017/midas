@@ -98,22 +98,51 @@ interface CobranzaAccountInfo {
   lagSamples: number[];
 }
 
+/**
+ * Acumulador interno: además del valor, recuerda la fecha de la factura que lo
+ * aportó, para quedarse con la MÁS RECIENTE en vez de con la primera del
+ * arreglo (ver `buildCobranzaAccountInfo`).
+ */
+interface CobranzaAccountAccumulator extends CobranzaAccountInfo {
+  srcDate: { padre: string; nombrePadre: string; credito: string; diaPago: string };
+}
+
 function buildCobranzaAccountInfo(records: CobranzaRecord[]): Map<string, CobranzaAccountInfo> {
-  const map = new Map<string, CobranzaAccountInfo>();
+  const map = new Map<string, CobranzaAccountAccumulator>();
   for (const rec of records) {
     if (!rec.cia || !rec.noCliente) continue;
     const key = `${rec.cia}::${rec.noCliente}`;
     let entry = map.get(key);
     if (!entry) {
-      entry = { lagSamples: [] };
+      entry = { lagSamples: [], srcDate: { padre: '', nombrePadre: '', credito: '', diaPago: '' } };
       map.set(key, entry);
     }
-    // Tomar el más reciente que esté poblado — los registros se procesan en
-    // orden cronológico arbitrario; el último gana cuando hay conflicto.
-    if (rec.noClientePadre && !entry.noClientePadre) entry.noClientePadre = rec.noClientePadre;
-    if (rec.nombreClientePadre && !entry.nombreClientePadre) entry.nombreClientePadre = rec.nombreClientePadre;
-    if (rec.diasCredito && !entry.diasCredito) entry.diasCredito = rec.diasCredito;
-    if (rec.diaPagoNombre && !entry.diaPagoNombre) entry.diaPagoNombre = rec.diaPagoNombre;
+    // Gana el valor de la factura MÁS RECIENTE, no el de la primera que aparezca
+    // en el arreglo. El guard anterior (`&& !entry.campo`) congelaba el campo en
+    // cuanto se poblaba, y `cobranzaRecords` NO llega en orden cronológico: el
+    // fetch es incremental, el backfill de años históricos appendea hacia atrás
+    // y la revalidación reescribe días sueltos. O sea que el padre comercial y
+    // los días de crédito de un cliente que renegoció dependían del orden del
+    // arreglo — dos navegadores podían agrupar distinto y proyectar la cobranza
+    // con plazos distintos. Empate (misma fecha, o ambas sin fecha): gana el
+    // primero, que es lo único que queda cuando la fuente no desempata.
+    const fecha = rec.fechaFactura ?? '';
+    if (rec.noClientePadre && (!entry.noClientePadre || fecha > entry.srcDate.padre)) {
+      entry.noClientePadre = rec.noClientePadre;
+      entry.srcDate.padre = fecha;
+    }
+    if (rec.nombreClientePadre && (!entry.nombreClientePadre || fecha > entry.srcDate.nombrePadre)) {
+      entry.nombreClientePadre = rec.nombreClientePadre;
+      entry.srcDate.nombrePadre = fecha;
+    }
+    if (rec.diasCredito && (!entry.diasCredito || fecha > entry.srcDate.credito)) {
+      entry.diasCredito = rec.diasCredito;
+      entry.srcDate.credito = fecha;
+    }
+    if (rec.diaPagoNombre && (!entry.diaPagoNombre || fecha > entry.srcDate.diaPago)) {
+      entry.diaPagoNombre = rec.diaPagoNombre;
+      entry.srcDate.diaPago = fecha;
+    }
     // Lag sample: factura cobrada con ambas fechas válidas.
     if (rec.fechaFactura && rec.fechaCobro && rec.importePendientePesos === 0) {
       const facturaMs = Date.parse(rec.fechaFactura);

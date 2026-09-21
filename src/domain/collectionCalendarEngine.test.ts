@@ -395,6 +395,29 @@ describe('buildCollectionCalendar', () => {
       expect(calendar.events.some(e => e.source === 'JDE_PAID_UNMATCHED')).toBe(false);
     });
 
+    it('lo liquidado por recibo se ACUMULA por folio, no se pisa entre líneas', () => {
+      // `receiptSettledByFactura` es lo que el export usa para que una factura
+      // liquidada por recibo no salga muda. La llave es del FOLIO y una factura
+      // llega en varias líneas: con `set` el mapa se quedaba con lo que absorbió
+      // la ÚLTIMA línea, así que un folio de $100k liquidado en dos líneas de
+      // $30k y $70k se exportaba como $70k.
+      const lineas = [
+        makeFactura({ ...ABIERTA, importeBrutoPesos: 30000 }),
+        makeFactura({ ...ABIERTA, importeBrutoPesos: 70000 }),
+      ];
+      const calendar = buildCollectionCalendar({
+        clients: [makeClient()],
+        assumptions: ASSUMPTIONS,
+        cobranzaRecords: lineas,
+        reconciliation: reconcileRealCollections(lineas, []),
+        cobranzaPayments: [makePayment('RI - 310198', 100000)],
+      });
+      expect(calendar.events.some(e => e.source === 'JDE_OPEN_PROJECTED')).toBe(false);
+      const settled = Array.from(calendar.receiptSettledByFactura.values());
+      expect(settled).toHaveLength(1);
+      expect(settled[0]).toBe(100000);
+    });
+
     it('no descuenta de una línea más de lo que el recibo alcanza a cubrir', () => {
       // El excedente del recibo se consume línea por línea: la primera absorbe
       // lo que puede y la segunda conserva su saldo íntegro.

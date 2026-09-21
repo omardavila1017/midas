@@ -56,8 +56,6 @@ describe('buildPredictiveForecast', () => {
       expect(p.expected).toBe(0);
       expect(p.stdDev).toBe(0);
     }
-    expect(out.overlays.futureOCs).toHaveLength(0);
-    expect(out.overlays.openCXC).toHaveLength(0);
   });
 
   it('elige naive-mean con menos de 6 meses', () => {

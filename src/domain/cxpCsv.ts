@@ -1,6 +1,8 @@
 import { normalizeCia } from './cia';
 import type { CXPRecord } from './persistence';
 import { isSettledAgedBalance } from './agedBalanceSettled';
+import { keepLatestAgedBalanceSnapshot } from './agedBalanceSnapshot';
+import { normalizeJdeDate } from './jdeDate';
 
 /**
  * CSV parser del import manual de CXP (Antigüedad de Saldos exportada a CSV).
@@ -52,6 +54,10 @@ export function parseCXP(text: string): CXPRecord[] {
   if (missing.length) throw new Error(`Columnas faltantes: ${missing.join(', ')}`);
 
   const records: CXPRecord[] = [];
+  // Llave de dedup en paralelo: `nd` (número de documento) NO se persiste en
+  // `CXPRecord`, pero sin él la llave no separa pay-items — es el mismo
+  // discriminador que usa el fetcher.
+  const keys: string[] = [];
   let skipped = 0;
 
   for (let i = 1; i < lines.length; i++) {
@@ -73,9 +79,14 @@ export function parseCXP(text: string): CXPRecord[] {
       noProveedor: g('no_prov'),
       nombre: g('nombre'),
       noFactura: g('no_factura'),
-      fechaFactura: g('fecha_factura'),
-      fechaVence: g('fecha_vence'),
-      fechaProgramacionPago: g('fecha_programacion_pago'),
+      // Mismo normalizador que el fetcher, por la misma razón: esta tabla
+      // guarda sus fechas como `DD-MM-YYYY` y los consumidores exigen ISO. Sin
+      // esto un CSV exportado del espejo entra con TODA factura sin
+      // vencimiento — "Vencido / Por vencer / A pagar este mes" en $0 y los
+      // egresos `cxp:` re-fechados al `asOfDate`. Passthrough si ya viene ISO.
+      fechaFactura: normalizeJdeDate(g('fecha_factura')),
+      fechaVence: normalizeJdeDate(g('fecha_vence')),
+      fechaProgramacionPago: normalizeJdeDate(g('fecha_programacion_pago')),
       diasVencida: n('dias_vencida'),
       importeBrutoPesos: n('importe_bruto_pesos'),
       importePendientePesos: n('importe_pendiente_pesos'),
@@ -98,6 +109,7 @@ export function parseCXP(text: string): CXPRecord[] {
       v151_180: n('v_151_180'),
       mas180: n('mas_180'),
     });
+    keys.push(`${normalizeCia(g('cia'))}::${g('no_prov')}::${g('no_factura')}::${g('nd')}`);
   }
 
   // Misma regla que el fetcher de JDE, por la misma razón: un documento marcado
@@ -106,14 +118,29 @@ export function parseCXP(text: string): CXPRecord[] {
   // y el MISMO registro se comportaría distinto según por dónde entró, que es
   // exactamente cómo se desincronizan dos puertas de entrada.
   const settled = records.filter(isSettledAgedBalance).length;
-  const open = records.filter((r) => !isSettledAgedBalance(r));
+  const openIdx = records
+    .map((r, i) => (isSettledAgedBalance(r) ? -1 : i))
+    .filter((i) => i >= 0);
 
-  if (open.length === 0) {
+  if (openIdx.length === 0) {
     throw new Error(
       records.length === 0
         ? `No se encontraron registros válidos (${skipped} filas omitidas)`
         : `El archivo sólo trae documentos ya PAGADOS (${settled}): no hay saldo abierto que importar.`,
     );
   }
-  return open;
+
+  // Las MISMAS dos defensas que el fetcher, y por la misma razón: un CSV
+  // exportado de la tabla envenenada (23 cargas sin truncar, 2.57× filas)
+  // reintroduciría por esta puerta el pasivo fantasma que `fetchAgedBalances`
+  // descarta, y `replaceCxpForCias` trata este archivo como igual de
+  // autoritativo que el API. Con el origen sano ambas son no-op.
+  const snapshot = keepLatestAgedBalanceSnapshot(openIdx.map((i) => records[i]));
+  const keptIdx = new Set(snapshot.kept);
+  const byKey = new Map<string, CXPRecord>();
+  for (const i of openIdx) {
+    if (!keptIdx.has(records[i])) continue;
+    byKey.set(keys[i], records[i]);
+  }
+  return Array.from(byKey.values());
 }

@@ -101,21 +101,3 @@ export interface PredictiveForecastResult {
   };
 }
 
-/**
- * Datos para una serie de overlays (OC, CXC) — no se suman al forecast,
- * sólo se exponen como decomposición/tooltip.
- */
-export interface OverlayPoint {
-  /** Bucket date (YYYY-MM-DD inicio del bucket). */
-  date: string;
-  bucket: BucketGranularity;
-  /** Importe agregado al bucket. */
-  amount: number;
-}
-
-export interface PredictiveOverlays {
-  /** Compras (OC) futuras programadas. Tooltip sobre egresos. */
-  futureOCs: OverlayPoint[];
-  /** CXC abierta esperada por cobrar. Tooltip sobre ingresos. */
-  openCXC: OverlayPoint[];
-}

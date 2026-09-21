@@ -7,11 +7,6 @@
 // Output:
 //   - PredictiveForecastResult con buckets daily/weekly/monthly/annual,
 //     cada uno con expected + stdDev + CI 80% + CI 95%.
-//   - PredictiveOverlays separadas (OCs futuras, CXC abierta) que se
-//     muestran como tooltip/desglose pero NO se suman a `expected`
-//     porque el modelo ya las cubre implícitamente (entrenado sobre
-//     todos los pagos bancarios, que incluyen OCs históricas).
-//
 // Estrategia de modelo (tiered, según meses cerrados disponibles):
 //   - ≥24 mo: Holt-Winters aditivo con estacionalidad m=12
 //   - 12–23 mo: Holt (sin estacionalidad)
@@ -24,8 +19,6 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 import type { BankAccountStatement } from '../../services/jde';
-import type { CobranzaRecord } from '../../services/jdeTypes';
-import type { PurchaseReceiptRecord } from '../../modules/shared-finance/types';
 import { toYearMonth, addMonths, compareYearMonth, lastDayOfMonth } from '../cashFlowEngine';
 import {
   holtLinear,
@@ -42,10 +35,8 @@ import {
 } from './seriesPrep';
 import type {
   ModelKind,
-  OverlayPoint,
   PredictionPoint,
   PredictiveForecastResult,
-  PredictiveOverlays,
   PredictiveSeries,
   PredictiveSeriesMeta,
 } from './types';
@@ -59,15 +50,9 @@ export interface BuildPredictiveInput {
   asOfDate: string;
   /** Número de meses futuros a proyectar (default 12). */
   horizonMonths?: number;
-  /** OCs (compras programadas) para overlay informativo. */
-  purchaseReceipts?: PurchaseReceiptRecord[];
-  /** CXC abierta (facturas por cobrar) para overlay informativo. */
-  cobranzaRecords?: CobranzaRecord[];
 }
 
-export interface BuildPredictiveResult extends PredictiveForecastResult {
-  overlays: PredictiveOverlays;
-}
+export type BuildPredictiveResult = PredictiveForecastResult;
 
 export function buildPredictiveForecast(
   input: BuildPredictiveInput,
@@ -115,11 +100,6 @@ export function buildPredictiveForecast(
 
   const net = subtractSeries(income, expense);
 
-  const overlays: PredictiveOverlays = {
-    futureOCs: buildOcOverlay(input.purchaseReceipts ?? [], input.companyCode, asOfDate, horizonMonths),
-    openCXC: buildCxcOverlay(input.cobranzaRecords ?? [], input.companyCode, asOfDate, horizonMonths),
-  };
-
   return {
     income,
     expense,
@@ -130,7 +110,6 @@ export function buildPredictiveForecast(
       income: buildMeta(incomeMonthly, incomeForecast),
       expense: buildMeta(expenseMonthly, expenseForecast),
     },
-    overlays,
   };
 }
 
@@ -543,71 +522,6 @@ function subtractPoints(a: PredictionPoint[], b: PredictionPoint[]): PredictionP
     }));
   }
   return out;
-}
-
-// ── Overlays (OC / CXC) ──────────────────────────────────────────────────
-
-function buildOcOverlay(
-  receipts: PurchaseReceiptRecord[],
-  companyCode: string,
-  asOfDate: string,
-  horizonMonths: number,
-): OverlayPoint[] {
-  const filtered = !companyCode || companyCode === 'all'
-    ? receipts
-    : receipts.filter((r) => r.cia === companyCode);
-  const horizonEnd = addMonths(toYearMonth(asOfDate), horizonMonths - 1);
-  const out: OverlayPoint[] = [];
-  for (const r of filtered) {
-    if (r.isCancelled) continue;
-    const date = r.estimatedDueDate ?? r.receiptDate ?? r.orderDate;
-    if (!date || date < asOfDate) continue;
-    if (toYearMonth(date) > horizonEnd) continue;
-    const amount = r.amountMxn > 0 ? r.amountMxn : r.totalAmount;
-    if (amount <= 0) continue;
-    out.push({
-      date: `${toYearMonth(date)}-01`,
-      bucket: 'monthly',
-      amount,
-    });
-  }
-  return aggregateOverlay(out);
-}
-
-function buildCxcOverlay(
-  records: CobranzaRecord[],
-  companyCode: string,
-  asOfDate: string,
-  horizonMonths: number,
-): OverlayPoint[] {
-  const filtered = !companyCode || companyCode === 'all'
-    ? records
-    : records.filter((r) => r.cia === companyCode);
-  const horizonEnd = addMonths(toYearMonth(asOfDate), horizonMonths - 1);
-  const out: OverlayPoint[] = [];
-  for (const r of filtered) {
-    if (r.importePendientePesos <= 0) continue;
-    const date = (r.fechaVence && r.fechaVence >= asOfDate)
-      ? r.fechaVence
-      : asOfDate;
-    if (toYearMonth(date) > horizonEnd) continue;
-    out.push({
-      date: `${toYearMonth(date)}-01`,
-      bucket: 'monthly',
-      amount: r.importePendientePesos,
-    });
-  }
-  return aggregateOverlay(out);
-}
-
-function aggregateOverlay(points: OverlayPoint[]): OverlayPoint[] {
-  const byDate = new Map<string, number>();
-  for (const p of points) {
-    byDate.set(p.date, (byDate.get(p.date) ?? 0) + p.amount);
-  }
-  return Array.from(byDate.entries())
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([date, amount]) => ({ date, bucket: 'monthly' as const, amount }));
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────

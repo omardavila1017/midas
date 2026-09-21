@@ -406,6 +406,117 @@ describe('fetchAgedBalances — el documento PAGADO no es pasivo', () => {
   });
 });
 
+describe('fetchAgedBalances — colapso SIN discriminador', () => {
+  it('confiesa el colapso cuando falta `nd`, aunque los importes coincidan', async () => {
+    // El docblock de `noDocumento` dice que el dedup "degrada a la llave sin
+    // él". Degradar en silencio es el problema: sin `nd` la llave no separa
+    // pay-items, y dos documentos distintos con el mismo importe se colapsan
+    // sin dejar rastro — 31 grupos por $24.46M medidos el 2026-09-14. El
+    // colapso con importes DISTINTOS ya se confesaba; éste no.
+    __resetDataGapsForTests();
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse([
+      { Cia: '00011', No_Proveedor: 'P-1', No_Factura: 'F-100', Edo_Pago: 'A', Importe_Pendiente_Pesos: 500 },
+      { Cia: '00011', No_Proveedor: 'P-1', No_Factura: 'F-100', Edo_Pago: 'A', Importe_Pendiente_Pesos: 500 },
+    ])));
+
+    const records = await fetchAgedBalances({ cia: '00011' });
+    expect(records).toHaveLength(1);
+    const gaps = getDataGaps();
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0].detail).toContain('SIN');
+  });
+
+  it('con `nd` presente el colapso de un duplicado real NO ensucia el panel', async () => {
+    __resetDataGapsForTests();
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse([
+      { Cia: '00011', No_Proveedor: 'P-1', No_Factura: 'F-100', ND: 7, Edo_Pago: 'A', Importe_Pendiente_Pesos: 500 },
+      { Cia: '00011', No_Proveedor: 'P-1', No_Factura: 'F-100', ND: 7, Edo_Pago: 'A', Importe_Pendiente_Pesos: 500 },
+    ])));
+
+    await fetchAgedBalances({ cia: '00011' });
+    expect(getDataGaps()).toHaveLength(0);
+  });
+});
+
+describe('fetchAgedBalances — sólo el snapshot MÁS RECIENTE es pasivo', () => {
+  // Cifras reales medidas en `jde.Antiguedad_Saldos` el 2026-09-18, con el
+  // origen todavía sin truncar: de $183.91M abiertos, $95.51M venían de cargas
+  // de días anteriores. Midas publicaba 2.08× el CXP real.
+  const doc = (over: Record<string, unknown> = {}) => ({
+    Cia: '00011',
+    No_Proveedor: 'P-1',
+    No_Factura: 'F-100',
+    ND: 900001,
+    Fecha_Vence: '13-12-2026',
+    Dias_Vencida: '-86', // sello 2026-09-18
+    Edo_Pago: 'A',
+    Importe_Pendiente_Pesos: 1000,
+    ...over,
+  });
+  const stale = (over: Record<string, unknown> = {}) => doc({ Dias_Vencida: '-90', ...over }); // 14-sep
+
+  it('descarta los documentos que la carga de hoy ya no emite', async () => {
+    __resetDataGapsForTests();
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse([
+      stale({ No_Factura: 'VIEJA-1', ND: 1, Importe_Pendiente_Pesos: 92_809_223.54 }),
+      stale({ No_Factura: 'VIEJA-2', ND: 2, Importe_Pendiente_Pesos: 100 }),
+      doc({ No_Factura: 'VIVA-1', ND: 3, Importe_Pendiente_Pesos: 88_399_294.40 }),
+      doc({ No_Factura: 'VIVA-2', ND: 4, Importe_Pendiente_Pesos: 200 }),
+    ])));
+
+    const records = await fetchAgedBalances({ cia: '00011' });
+
+    expect(records.map(r => r.noFactura).sort()).toEqual(['VIVA-1', 'VIVA-2']);
+    // El pasivo publicado es el que declara el snapshot de hoy, no la suma de
+    // todas las cargas que quedaron en la tabla.
+    expect(records.reduce((a, r) => a + r.importePendientePesos, 0)).toBeCloseTo(88_399_494.40, 2);
+  });
+
+  it('lo confiesa en Salud de datos en vez de descartar callando', async () => {
+    __resetDataGapsForTests();
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse([
+      stale({ No_Factura: 'VIEJA', ND: 1 }),
+      stale({ No_Factura: 'VIEJA-2', ND: 2 }),
+      doc({ No_Factura: 'VIVA-1', ND: 3 }),
+      doc({ No_Factura: 'VIVA-2', ND: 4 }),
+    ])));
+
+    await fetchAgedBalances({ cia: '00011' });
+    const gaps = getDataGaps();
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0].kind).toBe('source-contradiction');
+    expect(gaps[0].detail).toContain('cargas anteriores');
+  });
+
+  it('degrada solo: con el origen sano (una sola carga) no descarta nada', async () => {
+    __resetDataGapsForTests();
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse([
+      doc({ No_Factura: 'F-1', ND: 1 }),
+      doc({ No_Factura: 'F-2', ND: 2 }),
+      doc({ No_Factura: 'F-3', ND: 3 }),
+    ])));
+
+    const records = await fetchAgedBalances({ cia: '00011' });
+    expect(records).toHaveLength(3);
+    expect(getDataGaps()).toHaveLength(0);
+  });
+
+  it('el documento sin señal de carga se CONSERVA', async () => {
+    // Nunca se descarta pasivo por falta de dato: sin `Fecha_Vence` no hay
+    // sello, y una fila sin sello no se puede declarar vieja.
+    __resetDataGapsForTests();
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse([
+      doc({ No_Factura: 'SIN-FECHA', ND: 1, Fecha_Vence: '', Dias_Vencida: '' }),
+      stale({ No_Factura: 'VIEJA', ND: 2 }),
+      doc({ No_Factura: 'VIVA-1', ND: 3 }),
+      doc({ No_Factura: 'VIVA-2', ND: 4 }),
+    ])));
+
+    const records = await fetchAgedBalances({ cia: '00011' });
+    expect(records.map(r => r.noFactura).sort()).toEqual(['SIN-FECHA', 'VIVA-1', 'VIVA-2']);
+  });
+});
+
 describe('fetchCompanies — mapCompany', () => {
   it('GET /empresas, normaliza cia, mapea activa S/N y filtra filas sin cia', async () => {
     const fetchMock = vi.fn(async () => jsonResponse([
@@ -548,6 +659,71 @@ function comprasRow(partial: Record<string, unknown>): Record<string, unknown> {
     ...partial,
   };
 }
+
+describe('fetchCobranza — dedup last-wins por folio', () => {
+  // `jde.Cobranza_Citi` REINSERTA la factura en cada carga diaria en vez de
+  // reemplazarla, así que una consulta por rango devuelve la misma factura una
+  // vez por carga. Medido 2026-09-18: de 623 folios con más de una fila, los
+  // 623 traen exactamente UNA fila por carga y NINGUNO la repite dentro de una
+  // misma carga — no son líneas de una factura. En la ventana por defecto eran
+  // $25.40M de facturado y $20.05M de pendiente doble-contados.
+  const fac = (over: Record<string, unknown> = {}) => ({
+    Cia: '00001',
+    No_Cliente: 99999815,
+    Nombre_Cliente: 'CLIENTE X',
+    Factura: 'RI-92059',
+    Fecha_Factura: '2026-07-01',
+    Importe_Factura: 911.97,
+    Importe_Pendiente: 911.97,
+    ...over,
+  });
+
+  it('colapsa la factura reinsertada por cargas sucesivas', async () => {
+    __resetDataGapsForTests();
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse([fac(), fac(), fac()])));
+
+    const records = await fetchCobranza({ cia: '00001', fechaInicial: '2026-01-01', fechaFinal: '2026-12-31' });
+    expect(records).toHaveLength(1);
+    expect(records[0].importeBrutoPesos).toBe(911.97);
+    expect(getDataGaps()).toHaveLength(0);
+  });
+
+  it('conserva la versión MÁS RECIENTE y confiesa que hubo varias', async () => {
+    __resetDataGapsForTests();
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse([
+      fac({ Importe_Pendiente: 911.97 }),
+      fac({ Importe_Pendiente: 0 }),
+    ])));
+
+    const records = await fetchCobranza({ cia: '00001', fechaInicial: '2026-01-01', fechaFinal: '2026-12-31' });
+    expect(records).toHaveLength(1);
+    expect(records[0].importePendientePesos).toBe(0);
+    expect(getDataGaps()).toHaveLength(1);
+    expect(getDataGaps()[0].dataset).toBe('cobranza');
+  });
+
+  it('NO colapsa dos facturas distintas', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse([
+      fac({ Factura: 'RI-1' }),
+      fac({ Factura: 'RI-2' }),
+    ])));
+
+    const records = await fetchCobranza({ cia: '00001', fechaInicial: '2026-01-01', fechaFinal: '2026-12-31' });
+    expect(records.map(r => r.noFactura).sort()).toEqual(['RI-1', 'RI-2']);
+  });
+
+  it('las filas SIN folio se conservan todas: no se pueden llavear', async () => {
+    // Nunca se descarta cobranza por falta de folio.
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse([
+      fac({ Factura: '' }),
+      fac({ Factura: '-' }),
+      fac({ Factura: '0' }),
+    ])));
+
+    const records = await fetchCobranza({ cia: '00001', fechaInicial: '2026-01-01', fechaFinal: '2026-12-31' });
+    expect(records).toHaveLength(3);
+  });
+});
 
 describe('fetchCompras — mapCompras', () => {
   it('requiere cia en el body (contrato 2026-05-19) y mapea la OC recibida', async () => {

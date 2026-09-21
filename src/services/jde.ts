@@ -29,6 +29,8 @@ import {
 } from './dailyApiCache';
 import { reportDataGap } from './dataHealth';
 import { isSettledAgedBalance } from '../domain/agedBalanceSettled';
+import { keepLatestAgedBalanceSnapshot } from '../domain/agedBalanceSnapshot';
+import { normalizeJdeDate, trimIsoDate } from '../domain/jdeDate';
 import { apiConfig } from '../config/api.config';
 import { findBankAccountByCuenta } from '../domain/bankAccountsCatalog';
 import { canonicalBankAccountNumber, canonicalBankName } from '../domain/bankStatements';
@@ -77,6 +79,10 @@ import type {
   PayrollCashTreatment,
   PayrollCostRecord,
 } from '../modules/shared-finance/types';
+
+// Re-export: la regla de fechas vive en el módulo hoja (la comparten el fetcher
+// y el import CSV manual); se re-exporta para no romper imports existentes.
+export { normalizeJdeDate, trimIsoDate };
 
 // ───────────────────────────────────────────────────────────────
 // Helpers de normalización
@@ -164,12 +170,6 @@ function toNum(v: unknown): number {
 function toStr(v: unknown): string {
   if (v === null || v === undefined) return '';
   return String(v).trim();
-}
-
-function trimIsoDate(v: unknown): string {
-  const s = toStr(v);
-  if (!s) return '';
-  return s.length >= 10 ? s.slice(0, 10) : s;
 }
 
 /**
@@ -285,38 +285,6 @@ function splitIntoFixedDayWindows(from: string, to: string, windowDays: number):
 // 1. Antigüedad de Saldos
 // ───────────────────────────────────────────────────────────────
 
-/**
- * Fecha de JDE → ISO `YYYY-MM-DD`, tolerando el formato `DD-MM-YYYY`.
- *
- * POR QUÉ: `jde.Antiguedad_Saldos` es la ÚNICA tabla del espejo que guarda sus
- * fechas como varchar **`DD-MM-YYYY`** (`fecha_factura`, `fecha_vence`,
- * `fecha_Programacion_Pago`); todas las demás guardan ISO. Verificado con la
- * aritmética de la propia tabla (auditoría 2026-09-07): `fecha_factura`
- * `'31-08-2026'` + `fecha_vence` `'30-09-2026'` + `Dias_Vencida = -29` al
- * 01-sep sólo cuadra leyendo DD-MM.
- *
- * Si el SP de `/antiguedadsaldos` convierte a ISO, esta función es un
- * **passthrough** y no cambia un solo registro. Si algún día deja de
- * convertir, sin esto el vencimiento de CXP se cae por completo y en silencio:
- * `cleanDate` (motor) y `parseDateToIso` (tab CXP) exigen `YYYY-MM-DD`, así que
- * TODA factura quedaría sin vencimiento — "Vencido / Por vencer / A pagar este
- * mes" en $0 y los egresos `cxp:` re-fechados al `asOfDate`.
- *
- * SÓLO con guiones: `M/D/YYYY` con diagonales es formato US y sería ambiguo.
- * Un valor no reconocido se devuelve tal cual (mismo comportamiento previo).
- */
-export function normalizeJdeDate(v: unknown): string {
-  const s = trimIsoDate(v);
-  if (!s || /^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-  const dmy = s.match(/^(\d{2})-(\d{2})-(\d{4})$/);
-  if (!dmy) return s;
-  const [, dd, mm, yyyy] = dmy;
-  const day = Number(dd);
-  const month = Number(mm);
-  if (month < 1 || month > 12 || day < 1 || day > 31) return s;
-  return `${yyyy}-${mm}-${dd}`;
-}
-
 function mapAgedBalance(raw: RawRecord): AgedBalanceRecord {
   return {
     cia:                     normalizeCia(pick(raw, ['cia', 'compania', 'company'])),
@@ -408,8 +376,7 @@ export async function fetchAgedBalances(
   config: JdeClientConfig = {},
 ): Promise<AgedBalanceRecord[]> {
   const raw = await jdeClient.post<unknown>('/antiguedadsaldos', req, config);
-  const byKey = new Map<string, AgedBalanceRecord>();
-  const collapsedLive: string[] = [];
+  const open: AgedBalanceRecord[] = [];
   let settledCount = 0;
   let settledAmount = 0;
   for (const rec of unwrapList(raw).map(mapAgedBalance)) {
@@ -423,6 +390,19 @@ export async function fetchAgedBalances(
       }
       continue;
     }
+    open.push(rec);
+  }
+
+  // Corte de snapshot ANTES del dedup: una fila de una carga anterior no debe
+  // ni competir por la llave. Si compitiera, el ganador dependería del orden en
+  // que el SP devolvió las filas — o sea, el saldo publicado sería el de un
+  // corte u otro según el humor del payload.
+  const snapshot = keepLatestAgedBalanceSnapshot(open);
+
+  const byKey = new Map<string, AgedBalanceRecord>();
+  const collapsedLive: string[] = [];
+  const collapsedNoDiscriminator: string[] = [];
+  for (const rec of snapshot.kept) {
     // Un colapso entre dos filas VIVAS con importe distinto es pasivo que
     // desaparece, y es la dirección peor. Hoy no ocurre: la llave no lleva
     // discriminador de pay-item, pero el par de pay-items de una misma factura
@@ -437,6 +417,14 @@ export async function fetchAgedBalances(
         `${rec.noFactura || '(sin folio)'} nd=${rec.noDocumento || '?'} `
           + `(${prev.importePendientePesos} vs ${rec.importePendientePesos})`,
       );
+    } else if (prev && !rec.noDocumento) {
+      // Mismo importe: no se puede distinguir un duplicado (lo normal cuando el
+      // origen recarga sin truncar) de dos documentos distintos, así que
+      // colapsar callando es lo correcto... salvo que falte el discriminador.
+      // Sin `nd` la llave NO separa pay-items: si el SP deja de exponerlo, 31
+      // grupos por $24.46M (medido 2026-09-14) se colapsan y el pasivo
+      // DESAPARECE. Eso sí hay que decirlo.
+      collapsedNoDiscriminator.push(rec.noFactura || '(sin folio)');
     }
     byKey.set(agedBalanceKey(rec), rec);
   }
@@ -449,6 +437,27 @@ export async function fetchAgedBalances(
       `cía ${req.cia}: ${settledCount} documentos marcados PAGADOS traían saldo pendiente `
         + `(${settledAmount.toLocaleString('es-MX', { style: 'currency', currency: 'MXN' })}). `
         + 'Descartados: un documento pagado no es pasivo. Corregir en el origen.',
+    );
+  }
+  if (snapshot.dropped > 0) {
+    reportDataGap(
+      'cxp',
+      'source-contradiction',
+      `cía ${req.cia}: ${snapshot.dropped} documentos venían de cargas anteriores `
+        + `(${snapshot.staleStamps.slice(0, 3).join(', ')}) y no del snapshot del `
+        + `${snapshot.latestStamp}. Descartados: la antigüedad de saldos es un snapshot de `
+        + `saldos ABIERTOS, así que un documento que la carga de hoy ya no emite no es pasivo `
+        + `(${snapshot.droppedAmount.toLocaleString('es-MX', { style: 'currency', currency: 'MXN' })}). `
+        + 'El origen debe truncar antes de insertar.',
+    );
+  }
+  if (collapsedNoDiscriminator.length > 0) {
+    reportDataGap(
+      'cxp',
+      'source-contradiction',
+      `cía ${req.cia}: ${collapsedNoDiscriminator.length} documentos vivos comparten llave SIN `
+        + `número de documento (nd) que los distinga — si son pay-items distintos, el dedup se `
+        + `llevó pasivo real. Ejemplos: ${collapsedNoDiscriminator.slice(0, 3).join(' · ')}`,
     );
   }
   if (collapsedLive.length > 0) {
@@ -1601,7 +1610,68 @@ export async function fetchCobranza(
     }
   }
 
-  return dropExcludedByCia(list.map(mapCobranza));
+  return dropExcludedByCia(dedupeCobranzaByFolio(list.map(mapCobranza), req.cia));
+}
+
+/**
+ * Dedup LAST-WINS por `cia::folio`, mismo idioma que el resto de los fetchers
+ * (`fetchRolRange`, `fetchComprasRange`, `fetchPagoProveedorRange`,
+ * `fetchAgedBalances`). Cobranza era el último sin esta defensa.
+ *
+ * Por qué hace falta: `jde.Cobranza_Citi` también acumula — cada carga diaria
+ * REINSERTA la factura en vez de reemplazarla, así que una consulta por rango
+ * devuelve la MISMA factura una vez por carga que la haya tocado. El merge del
+ * repo no las colapsa (`mergeCobranzaRevalidationWindow` llavea por rango, no
+ * por folio), así que entraban todas y se sumaban.
+ *
+ * **La premisa de "factura multi-línea" que justificaba NO colapsar no la
+ * sostiene la fuente.** Medido 2026-09-18 sobre los 623 folios con más de una
+ * fila: en los 623 hay exactamente UNA fila por carga (`filas ==
+ * F_Carga distintos`) y **CERO folios con la factura repetida dentro de una
+ * misma carga**; 613 de 623 traen filas idénticas entre sí. O sea: no son
+ * líneas de una factura, es la misma factura reinsertada N días seguidos.
+ * En la ventana por defecto (facturas desde 2025-09, sin la cía 33) eso eran
+ * **544 filas fantasma: $25.40M de facturado y $20.05M de pendiente** que se
+ * doble-contaban en Venta, en el calendario de Cobranza, en el desglose por
+ * segmento y en el KPI de cobranza pendiente.
+ *
+ * Un folio vacío o placeholder (`-`, `0`) NO se puede llavear, así que esas
+ * filas se conservan todas — nunca se descarta cobranza por falta de folio.
+ * Y cuando dos filas del mismo folio difieren en importe se confiesa: son
+ * versiones del documento en el tiempo (10 de 623) y el dedup se queda con la
+ * última del payload, que es lo que asumen los consumidores.
+ */
+function dedupeCobranzaByFolio(records: CobranzaRecord[], cia: string): CobranzaRecord[] {
+  const byKey = new Map<string, CobranzaRecord>();
+  const sinFolio: CobranzaRecord[] = [];
+  const versionesDistintas: string[] = [];
+  for (const rec of records) {
+    const folio = (rec.noFactura || '').trim();
+    if (!folio || folio === '-' || folio === '0') {
+      sinFolio.push(rec);
+      continue;
+    }
+    const key = `${rec.cia}::${folio}`;
+    const prev = byKey.get(key);
+    if (prev
+      && (prev.importeBrutoPesos !== rec.importeBrutoPesos
+        || prev.importePendientePesos !== rec.importePendientePesos)) {
+      versionesDistintas.push(
+        `${folio} (${prev.importePendientePesos} vs ${rec.importePendientePesos})`,
+      );
+    }
+    byKey.set(key, rec);
+  }
+  if (versionesDistintas.length > 0) {
+    reportDataGap(
+      'cobranza',
+      'source-contradiction',
+      `cía ${cia}: ${versionesDistintas.length} facturas llegaron con varias versiones del mismo `
+        + `folio (la fuente reinserta en vez de reemplazar); se conservó la última. `
+        + `Ejemplos: ${versionesDistintas.slice(0, 3).join(' · ')}`,
+    );
+  }
+  return [...byKey.values(), ...sinFolio];
 }
 
 // ───────────────────────────────────────────────────────────────

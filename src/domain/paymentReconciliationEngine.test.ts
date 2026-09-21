@@ -452,7 +452,10 @@ describe('reconcilePayments — factura CXP duplicada en JDE', () => {
 
     const cov = res.cxpCoverage.get('00038::DUP-1::3228');
     expect(cov).toBeDefined();
-    expect(cov!.totalPaidPesos).toBe(1_500);
+    // Aporta UNA vez (el dedup) y por LO QUE LA FACTURA VALE, no por el importe
+    // del pago: la factura es de $750, así que acreditarle $1,500 la deja
+    // sobre-cubierta igual que el doble conteo que este dedup vino a cerrar.
+    expect(cov!.totalPaidPesos).toBe(750);
     expect(cov!.payments).toHaveLength(1);
   });
 
@@ -468,8 +471,42 @@ describe('reconcilePayments — factura CXP duplicada en JDE', () => {
       bankStatements: [],
     });
 
-    expect(res.cxpCoverage.get('00038::A-1::3228')?.totalPaidPesos).toBe(1_500);
-    expect(res.cxpCoverage.get('00038::B-2::3228')?.totalPaidPesos).toBe(1_500);
+    // Cada una recibe LO SUYO. Acreditarles $1,500 a las dos dejaría $3,000
+    // acreditados contra un pago de $1,500 — la misma inflación que el dedup
+    // cierra para la factura duplicada, por la otra puerta.
+    expect(res.cxpCoverage.get('00038::A-1::3228')?.totalPaidPesos).toBe(750);
+    expect(res.cxpCoverage.get('00038::B-2::3228')?.totalPaidPesos).toBe(750);
     expect(res.cxpCoverage.size).toBe(2);
+  });
+
+  it('lo acreditado por un pago NUNCA excede su importe', () => {
+    // Invariante: un pago de $1,500 que liquida tres facturas de $500 acredita
+    // $1,500 en total, no $4,500.
+    const res = reconcilePayments({
+      payments: [pago({ importePesos: 1_500, comentarioPago: 'PAGO VARIOS' })],
+      cxpRecords: [
+        cxp({ noFactura: 'A-1', importeBrutoPesos: 500, importePendientePesos: 500 }),
+        cxp({ noFactura: 'B-2', importeBrutoPesos: 500, importePendientePesos: 500 }),
+        cxp({ noFactura: 'C-3', importeBrutoPesos: 500, importePendientePesos: 500 }),
+      ],
+      bankStatements: [],
+    });
+
+    const acreditado = Array.from(res.cxpCoverage.values())
+      .reduce((a, c) => a + c.totalPaidPesos, 0);
+    expect(res.cxpCoverage.size).toBe(3);
+    expect(acreditado).toBe(1_500);
+    for (const cov of res.cxpCoverage.values()) expect(cov.totalPaidPesos).toBe(500);
+  });
+
+  it('el pago PARCIAL contra UNA factura conserva su comportamiento', () => {
+    // Los tiers son excluyentes: un solo hit sigue acreditando el importe del
+    // pago, que es lo correcto cuando se abona a una factura mayor.
+    const res = reconcilePayments({
+      payments: [pago({ importePesos: 4_000 })],
+      cxpRecords: [cxp()],
+      bankStatements: [],
+    });
+    expect(res.cxpCoverage.get('00038::VALE21829::3228')?.totalPaidPesos).toBe(4_000);
   });
 });

@@ -398,13 +398,30 @@ export function reconcilePayments(input: {
     // $750 dejaba `totalPaidPesos = $3,000` y la marcaba `PAID`. Eso infla la
     // cobertura y —peor— `paidCxpKeys` saca del egreso proyectado una factura
     // que en realidad quedó a medias.
+    //
+    // Y cuando el pago cubre VARIAS facturas (tier `subset-sum`), cada una
+    // recibe LO SUYO, no el pago completo: acreditarle $1,500 a cada una de las
+    // tres facturas de $500 que ese pago liquidó deja $4,500 acreditados contra
+    // un pago de $1,500 — la misma inflación, por la otra puerta. El dedup de
+    // arriba no lo cubre: ahí son tres llaves DISTINTAS. Los tiers son
+    // excluyentes (o un solo hit, o el subset), así que el caso de un hit
+    // —incluido el pago PARCIAL contra una sola factura— conserva su
+    // comportamiento exacto.
     const seenCxpKeys = new Set<string>();
+    const splitAcrossInvoices = cxpHits.length > 1;
+    let remainingPayment = payment.importePesos;
     for (const hit of cxpHits) {
       const key = cxpKey(hit.cxp);
       if (seenCxpKeys.has(key)) continue;
       seenCxpKeys.add(key);
       const existing = cxpCoverage.get(key);
-      const paid = payment.importePesos;
+      // Mismo importe con el que `findSubsetMatch` armó el subconjunto, para
+      // que lo acreditado y lo que hizo cuadrar la suma sean la misma cifra.
+      const own = hit.cxp.importePendientePesos > 0
+        ? hit.cxp.importePendientePesos
+        : hit.cxp.importeBrutoPesos;
+      const paid = splitAcrossInvoices ? Math.min(own, Math.max(remainingPayment, 0)) : payment.importePesos;
+      remainingPayment -= paid;
       if (existing) {
         existing.totalPaidPesos += paid;
         existing.payments.push({

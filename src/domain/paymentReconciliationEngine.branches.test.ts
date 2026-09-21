@@ -125,11 +125,14 @@ describe('reconcilePayments — acumulación de cxpCoverage', () => {
       bankStatements: [],
     });
     // El match sigue reportando los dos hits (es lo que el subset tomó): lo que
-    // cambia es la ACUMULACIÓN de cobertura.
+    // cambia es la ACUMULACIÓN de cobertura. Y cuando el pago se reparte entre
+    // varias facturas, cada llave recibe LO QUE VALE (aquí $750), no el importe
+    // del pago: acreditarle $1,500 a una factura de $750 la deja
+    // sobre-cubierta igual que el doble conteo que este dedup vino a cerrar.
     expect(result.paymentMatches[0].cxpMatches).toHaveLength(2);
     const cov = result.cxpCoverage.get('00038::DUPE::3228');
     expect(cov?.payments).toHaveLength(1);
-    expect(cov?.totalPaidPesos).toBe(1500);
+    expect(cov?.totalPaidPesos).toBe(750);
   });
 
   it('marca OPEN cuando la CXP tiene importe bruto 0 (no hay base para el ratio)', () => {

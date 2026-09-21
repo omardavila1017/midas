@@ -50,6 +50,48 @@ const prorate = (app: CobranzaPayment['applications'][number]): number => {
   return original > 0 && iva > 0 ? iva * Math.min(1, cobrado / original) : 0;
 };
 
+describe('assessCausedIvaCoverage — la fecha se deriva como en el motor', () => {
+  // El motor usa `cleanIsoDate(fechaCobro) ?? cleanIsoDate(fechaAplicacion)`:
+  // una `Fecha_Cobro` con formato raro (JDE emite `2508-08-27`, `1958-03-05`)
+  // no tira el cobro, lo fecha por la aplicación. Con `||` este lado se quedaba
+  // con la fecha rara y el periodo salía falsamente subreportado.
+  const conFechaRota: CobranzaPayment = {
+    cia: '00011',
+    idPago: 1,
+    fechaCobro: '05/03/1958',
+    importeRecibo: 10_000_000,
+    applications: [{
+      noFactura: 'F-1',
+      fechaAplicacion: '2026-03-10',
+      importeCobrado: 10_000_000,
+      importeOriginalFactura: 10_000_000,
+      importeIvaFacturaOriginal: 1_600_000,
+    }],
+  } as unknown as CobranzaPayment;
+
+  it('cae a la fecha de aplicación en vez de descartar el cobro', () => {
+    const coverage = assessCausedIvaCoverage({
+      recognizeIva: prorate,
+      payments: [conFechaRota],
+      invoices: [invoice({ fechaCobro: '2026-03-12', iva: 1_700_000 })],
+      currentPeriod: CURRENT,
+    });
+    const marzo = coverage.get('2026-03');
+    expect(marzo?.reportedIva).toBe(1_600_000);
+    expect(marzo?.implausible).toBe(false);
+  });
+
+  it('la factura de referencia con fecha no ISO no crea un periodo fantasma', () => {
+    const coverage = assessCausedIvaCoverage({
+      recognizeIva: prorate,
+      payments: [],
+      invoices: [invoice({ fechaCobro: '27/08/2508', iva: 5_000_000 })],
+      currentPeriod: CURRENT,
+    });
+    expect(coverage.size).toBe(0);
+  });
+});
+
 describe('assessCausedIvaCoverage', () => {
   it('marca implausible el periodo cerrado cuya tabla de aplicaciones viene vacía', () => {
     // Marzo 2026 medido en la BD: la tabla de aplicaciones trae una fracción

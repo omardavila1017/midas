@@ -128,3 +128,51 @@ describe('parseCXP — el documento PAGADO no es pasivo (misma regla que el fetc
     expect(records).toHaveLength(2);
   });
 });
+
+describe('parseCXP — las MISMAS defensas que el fetcher (dos puertas, un comportamiento)', () => {
+  // La tabla origen guarda las fechas como DD-MM-YYYY y trae `nd` y
+  // `dias_vencida`, así que un CSV exportado de ahí las trae igual.
+  const H = 'cia,no_prov,nombre,no_factura,nd,fecha_factura,fecha_vence,dias_vencida,'
+    + 'importe_pendiente_pesos,importe_bruto_pesos,por_vencer,v_1_30,moneda,edo_pago';
+  const file = (...rows: string[]): string => [H, ...rows].join('\n');
+  const row = (
+    { factura = 'F-1', nd = '1', dias = '-86', pendiente = '1000', edo = 'A' } = {},
+  ): string => `00011,P-1,ACME,${factura},${nd},14-09-2026,13-12-2026,${dias},${pendiente},${pendiente},0,0,MXP,${edo}`;
+
+  it('normaliza DD-MM-YYYY a ISO: sin esto el CXP importado se queda sin vencimiento', () => {
+    const [r] = parseCXP(file(row()));
+    expect(r.fechaVence).toBe('2026-12-13');
+    expect(r.fechaFactura).toBe('2026-09-14');
+  });
+
+  it('colapsa el documento repetido (CSV exportado de la tabla sin truncar)', () => {
+    const records = parseCXP(file(row(), row(), row()));
+    expect(records).toHaveLength(1);
+    expect(records[0].importePendientePesos).toBe(1000);
+  });
+
+  it('NO colapsa dos documentos distintos que comparten folio', () => {
+    const records = parseCXP(file(row({ nd: '1' }), row({ nd: '2', pendiente: '400' })));
+    expect(records).toHaveLength(2);
+    expect(records.reduce((a, r) => a + r.importePendientePesos, 0)).toBe(1400);
+  });
+
+  it('descarta las filas de cargas anteriores', () => {
+    const records = parseCXP(file(
+      row({ factura: 'VIEJA-1', nd: '1', dias: '-90' }),
+      row({ factura: 'VIEJA-2', nd: '2', dias: '-90' }),
+      row({ factura: 'VIVA-1', nd: '3' }),
+      row({ factura: 'VIVA-2', nd: '4' }),
+    ));
+    expect(records.map(r => r.noFactura).sort()).toEqual(['VIVA-1', 'VIVA-2']);
+  });
+
+  it('degrada solo: una sola carga entra completa', () => {
+    const records = parseCXP(file(
+      row({ factura: 'F-1', nd: '1' }),
+      row({ factura: 'F-2', nd: '2' }),
+      row({ factura: 'F-3', nd: '3' }),
+    ));
+    expect(records).toHaveLength(3);
+  });
+});

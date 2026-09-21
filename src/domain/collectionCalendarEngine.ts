@@ -324,7 +324,13 @@ export function buildCollectionCalendar(input: BuildCollectionCalendarInput): Bu
     } else if (ajustePorRecibo > 0) {
       // Liquidada según los recibos: no se emite evento (no queda saldo), pero
       // se registra para que el export lo pueda decir en vez de dejarla muda.
-      receiptSettledByFactura.set(key, ajustePorRecibo);
+      //
+      // ACUMULA, no sobreescribe: una factura puede venir en VARIAS líneas de
+      // `/cobranza` (el merge no las colapsa por folio a propósito) y la llave
+      // es del FOLIO, así que cada línea liquidada aporta su parte. Con `set`
+      // el mapa terminaba con lo que absorbió la ÚLTIMA línea — un folio de
+      // $100k liquidado en dos líneas de $30k y $70k se exportaba como $70k.
+      receiptSettledByFactura.set(key, (receiptSettledByFactura.get(key) ?? 0) + ajustePorRecibo);
     }
   }
 

@@ -278,8 +278,6 @@ export function computeBaseCashFlow(inputs: ComputeInputs): ComputeOutput {
         companyCode: companyCode || 'all',
         asOfDate: today,
         horizonMonths: inputs.predictiveHorizonMonths ?? 12,
-        purchaseReceipts: inputs.purchaseReceipts,
-        cobranzaRecords: inputs.cobranzaRecords,
       })
     : null;
   const predIncomeByYm = new Map<string, number>();

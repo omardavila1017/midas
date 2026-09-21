@@ -72,6 +72,18 @@ const isoPeriod = (date: string | undefined): string | undefined => {
   return /^\d{4}-\d{2}$/.test(period) ? period : undefined;
 };
 
+/**
+ * Misma regla de fecha usable que el motor (`cleanIsoDate` + `isIsoDate` en
+ * `taxModuleService`): sólo `YYYY-MM-DD`. Se replica aquí —tres líneas— porque
+ * importarla crearía un ciclo (el motor importa este módulo), y divergir en la
+ * derivación de la fecha es exactamente lo que vuelve mentiroso el veredicto.
+ */
+const isoDay = (value: string | undefined): string | undefined => {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ? trimmed : undefined;
+};
+
 const positive = (value: unknown): number =>
   typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
 
@@ -128,7 +140,12 @@ export function assessCausedIvaCoverage({
   for (const payment of payments) {
     if (!inScope(payment.cia, companyCode)) continue;
     for (const app of payment.applications) {
-      const date = payment.fechaCobro || app.fechaAplicacion;
+      // El motor resuelve `cleanIsoDate(fechaCobro) ?? cleanIsoDate(fechaAplicacion)`:
+      // una `Fecha_Cobro` con formato raro (JDE ya emite `2508-08-27` y
+      // `1958-03-05`) la CUENTA él por la fecha de aplicación, mientras que con
+      // `||` este lado se quedaba con la fecha rara, la descartaba y reportaba
+      // el periodo como subreportado. Un falso positivo en la capa que confiesa.
+      const date = isoDay(payment.fechaCobro) ?? isoDay(app.fechaAplicacion);
       if (!date || !inRange(date, startDate, endDate)) continue;
       const period = isoPeriod(date);
       if (!period) continue;
@@ -140,7 +157,7 @@ export function assessCausedIvaCoverage({
 
   for (const invoice of invoices) {
     if (!inScope(invoice.cia, companyCode)) continue;
-    const date = invoice.fechaCobro;
+    const date = isoDay(invoice.fechaCobro);
     if (!date || !inRange(date, startDate, endDate)) continue;
     const period = isoPeriod(date);
     if (!period) continue;

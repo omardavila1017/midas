@@ -444,6 +444,51 @@ describe('overlay de recibos: /cobranza no aplica los cobros', () => {
     expect(parcial[0].taxAmount).toBeCloseTo(16_000 - 16_000 / 1.16, 2);
   });
 
+  it('dos viajes que comparten folio en meses distintos NO agotan dos veces el mismo recibo', () => {
+    // El pozo se reconstruye en cada mes proyectado. Si el bucle de viajes
+    // recorriera sólo los del mes (como hacía), cada mes le aplicaría el MISMO
+    // excedente a su viaje y el recibo se consumiría dos veces — la dirección
+    // que hace DESAPARECER ingreso real. Hoy la fuente no produce folios
+    // compartidos (10,025 viajes ↔ 10,025 folios), así que esto pinea la
+    // simetría con la capa CXC, no un caso vivo.
+    const base = {
+      cia: CIA_CITI,
+      empresaCodigo: 'SIRS2',
+      kCliente: 77,
+      dCliente: 'CLIENTE ESPECIAL',
+      rfc: 'XAXX010101000',
+      claveJDE: 'C-77',
+      totalNegociado: 100_000,
+      diasCredito: 30,
+      facturaJDE: 'RI-COMPARTIDA',
+    };
+    const inputs = {
+      companyCode: 'all',
+      bankStatements: [],
+      clients: [],
+      providers: [],
+      cxpRecords: [],
+      cobranzaRecords: [],
+      viajesEspecialesRecords: [
+        { ...base, kRenta: 8001, fechaFactura: '2026-09-20' },
+        { ...base, kRenta: 8002, fechaFactura: '2026-10-20' },
+      ],
+      assumptions,
+      budget: null,
+      startingBalance: 0,
+      asOfDate: '2026-09-07',
+      // El recibo alcanza para UNO de los dos (116,000 de 232,000).
+      cobranzaAppliedByFactura: new Map([[`${CIA_CITI}::RI-COMPARTIDA`, 116_000]]),
+    };
+    const monthly = buildCanonicalProjection(inputs).monthly;
+    const emitidos = buildShortTermProjectionMovements({ monthly, inputs })
+      .filter((m) => m.id.startsWith('cxc:especial:viaje:'));
+
+    // Uno se cancela con el recibo; el otro conserva su bruto completo.
+    expect(emitidos).toHaveLength(1);
+    expect(emitidos[0].projectedAmount).toBeCloseTo(116_000, 2);
+  });
+
   it('sin recibos el resultado es byte-idéntico al pendiente reportado', () => {
     // Degrada solo: ene–may 2026 no tiene NI UNA fila en Cobranza_Indicadores,
     // así que esos meses no se pueden mover ni un peso.

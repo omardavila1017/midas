@@ -474,10 +474,17 @@ export function isInternalProviderClassification(
 // Algunos traspasos internos no llevan leyenda ni RFC ni nombre de empresa
 // propia: aparecen como un CARGO en una cuenta y un ABONO simétrico en otra
 // cuenta del MISMO grupo (cia) el MISMO día por EL MISMO importe.
-// Esta heurística los detecta cuando la pareja es 1-a-1 (exactamente un
-// CARGO y un ABONO en cuentas distintas con el mismo monto). Si hay más
-// movimientos del mismo monto/día/cia (ambigüedad), no se marca ninguno —
-// preferimos el falso negativo al falso positivo (perder un ingreso real).
+// La heurística los parea GREEDY y N-a-N: agrupa por importe exacto (al
+// centavo) y, para cada CARGO, toma el ABONO libre más cercano en fecha
+// dentro de `PAIR_MATCH_WINDOW_DAYS`, en otra cuenta. NO exige que la pareja
+// sea 1-a-1: con K CARGOs y K ABONOs del mismo importe marca los min(K,N)
+// —así lo pinea `internalTransfers.test.ts`—, así que dos cobros y dos pagos
+// no relacionados del mismo monto el mismo día se marcan como internos y los
+// BRUTOS de ese día se subreportan. El riesgo está asumido a propósito y
+// acotado: el pareo es simétrico, así que el flujo NETO y la caja no cambian
+// (ver la nota de seguridad en `PAIR_MATCH_WINDOW_DAYS`); sólo se ensucian
+// los brutos. Este comentario decía lo contrario —que ante ambigüedad no se
+// marcaba ninguno— y esa salvaguarda no existe.
 // ─────────────────────────────────────────────────────────────────────────
 
 /**

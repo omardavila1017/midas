@@ -252,6 +252,13 @@ interface InflowContext {
    * para emitir movimientos sintéticos `cxc:especial:` en `collectInflowLines`.
    */
   viajesEspUnmatchedByYm: Map<string, ViajeEspecialRecord[]>;
+  /**
+   * Los MISMOS viajes, en una lista plana y en orden estable. El bucle de
+   * ingresos la recorre COMPLETA en cada mes —igual que la capa CXC— para
+   * consumir el pozo de recibos de forma determinista; `viajesEspUnmatchedByYm`
+   * sigue decidiendo en qué mes se EMITE cada uno.
+   */
+  viajesEspUnmatched: ViajeEspecialRecord[];
 }
 
 function buildInflowContext(inputs: CanonicalProjectionInputs): InflowContext {
@@ -297,9 +304,11 @@ function buildInflowContext(inputs: CanonicalProjectionInputs): InflowContext {
   const viajesCross = buildViajesEspecialesCobranzaCross(viajesRecords, cxcRecords);
   const viajesEspFacturaKeys = buildViajesEspecialesFacturaKeys(viajesRecords);
   const viajesEspUnmatchedByYm = new Map<string, ViajeEspecialRecord[]>();
+  const viajesEspUnmatched: ViajeEspecialRecord[] = [];
   for (const v of [...viajesCross.unmatched, ...viajesCross.withoutInvoice]) {
     const projectedDate = projectViajeEspecialDate(v, inputs.asOfDate);
     if (!projectedDate) continue;
+    viajesEspUnmatched.push(v);
     const ym = projectedDate.slice(0, 7);
     const arr = viajesEspUnmatchedByYm.get(ym);
     if (arr) arr.push(v);
@@ -337,6 +346,7 @@ function buildInflowContext(inputs: CanonicalProjectionInputs): InflowContext {
     rolCoverageByClientMonth: rol.coverageByClientMonth,
     viajesEspFacturaKeys,
     viajesEspUnmatchedByYm,
+    viajesEspUnmatched,
   };
 }
 
@@ -439,9 +449,17 @@ function collectInflowLines(
   // Si una factura aparece después en cobranza, el cruce en el siguiente
   // boot moverá ese viaje a `matched` y aquí dejará de emitirse — el cxc:
   // de cobranza lo cubrirá (reetiquetado como Viajes Especiales).
-  for (const viaje of context.viajesEspUnmatchedByYm.get(month.yearMonth) ?? []) {
+  // Se recorre la lista COMPLETA, no la del mes, por simetría con la capa CXC:
+  // el pozo se reconstruye en cada mes, así que consumirlo sólo con los viajes
+  // de ESE mes haría que dos viajes que comparten folio en meses distintos
+  // agotaran el mismo excedente dos veces — y esa dirección hace DESAPARECER
+  // ingreso real. El corte por mes va DESPUÉS del consumo (igual que en CXC),
+  // así que el ajuste de cada viaje sale idéntico en todos los meses. Hoy la
+  // fuente no produce el caso (10,025 viajes facturados ↔ 10,025 folios
+  // distintos), pero la simetría cuesta un recorrido que la capa CXC ya paga.
+  for (const viaje of context.viajesEspUnmatched) {
     const projectedDate = projectViajeEspecialDate(viaje, inputs.asOfDate);
-    if (!projectedDate || projectedDate.slice(0, 7) !== month.yearMonth) continue;
+    if (!projectedDate) continue;
     const subTotal = viaje.totalNegociado;
     const brutoViaje = subTotal * 1.16;
     // MISMA regla que el CXC de /cobranza: si `/cobranzaindicadores` ya reporta
@@ -456,6 +474,8 @@ function collectInflowLines(
     );
     const grossAmount = brutoViaje - ajusteViaje;
     if (grossAmount <= 0) continue;
+    // Corte por mes DESPUÉS del consumo (ver el comentario del bucle).
+    if (projectedDate.slice(0, 7) !== month.yearMonth) continue;
     const facturaLabel = viaje.facturaJDE || `K_Renta ${viaje.kRenta}`;
     lines.push({
       id: `cxc:especial:viaje:${viaje.cia}:${viaje.kRenta}`,
