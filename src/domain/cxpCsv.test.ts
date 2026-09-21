@@ -175,4 +175,58 @@ describe('parseCXP — las MISMAS defensas que el fetcher (dos puertas, un compo
     ));
     expect(records).toHaveLength(3);
   });
+
+  // ── El corte de snapshot va POR CÍA ──────────────────────────────────────
+  //
+  // El fetcher es inmune por construcción (`/antiguedadsaldos` = una cía por
+  // request); el CSV es multi-cía por diseño. Medido en la BD el 2026-09-21:
+  // las cías 11/01/42 sellan al 21-sep mientras 30/43/21 siguen en el 14-sep,
+  // sin que nada esté corrupto. Con un corte global la cía del sello viejo se
+  // descarta ENTERA y, como `replaceCxpForCias` la reemplaza, su saldo queda
+  // en cero.
+  it('no descarta la cía cuyo sello es más viejo que el de otra cía del archivo', () => {
+    const otra = (
+      { factura = 'X-1', nd = '1', dias = '-86', pendiente = '700' } = {},
+    ): string => `00030,P-9,BETA,${factura},${nd},14-09-2026,13-12-2026,${dias},${pendiente},${pendiente},0,0,MXP,A`;
+    const records = parseCXP(file(
+      // cía 00011 al día (sello más reciente del archivo)
+      row({ factura: 'A-1', nd: '1' }),
+      row({ factura: 'A-2', nd: '2' }),
+      // cía 00030 con un sello ANTERIOR, pero es su único snapshot
+      otra({ factura: 'B-1', nd: '1', dias: '-93' }),
+      otra({ factura: 'B-2', nd: '2', dias: '-93' }),
+    ));
+    expect(records.filter(r => r.cia === '00030').map(r => r.noFactura).sort()).toEqual(['B-1', 'B-2']);
+    expect(records.filter(r => r.cia === '00011').map(r => r.noFactura).sort()).toEqual(['A-1', 'A-2']);
+  });
+
+  it('sigue descartando la carga vieja DENTRO de cada cía', () => {
+    const otra = (
+      { factura = 'X-1', nd = '1', dias = '-86' } = {},
+    ): string => `00030,P-9,BETA,${factura},${nd},14-09-2026,13-12-2026,${dias},500,500,0,0,MXP,A`;
+    const records = parseCXP(file(
+      row({ factura: 'A-VIEJA-1', nd: '1', dias: '-90' }),
+      row({ factura: 'A-VIEJA-2', nd: '2', dias: '-90' }),
+      row({ factura: 'A-VIVA-1', nd: '3' }),
+      row({ factura: 'A-VIVA-2', nd: '4' }),
+      otra({ factura: 'B-VIEJA-1', nd: '1', dias: '-93' }),
+      otra({ factura: 'B-VIEJA-2', nd: '2', dias: '-93' }),
+      otra({ factura: 'B-VIVA-1', nd: '3', dias: '-91' }),
+      otra({ factura: 'B-VIVA-2', nd: '4', dias: '-91' }),
+    ));
+    expect(records.map(r => r.noFactura).sort())
+      .toEqual(['A-VIVA-1', 'A-VIVA-2', 'B-VIVA-1', 'B-VIVA-2']);
+  });
+
+  it('lee `nd` por los mismos alias que el mapper del API', () => {
+    const H2 = 'cia,no_prov,nombre,no_factura,no_documento,fecha_factura,fecha_vence,dias_vencida,'
+      + 'importe_pendiente_pesos,importe_bruto_pesos,por_vencer,v_1_30,moneda,edo_pago';
+    const r = (nd: string, pend: string) =>
+      `00011,P-1,ACME,F-1,${nd},14-09-2026,13-12-2026,-86,${pend},${pend},0,0,MXP,A`;
+    // Dos pay-items del MISMO folio: sin el alias la llave degrada y se
+    // colapsan, llevándose pasivo real.
+    const records = parseCXP([H2, r('1', '1000'), r('2', '400')].join('\n'));
+    expect(records).toHaveLength(2);
+    expect(records.reduce((a, x) => a + x.importePendientePesos, 0)).toBe(1400);
+  });
 });

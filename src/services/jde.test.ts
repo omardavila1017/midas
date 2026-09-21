@@ -563,6 +563,61 @@ describe('normalizeCobranzaPayments', () => {
     }));
     expect(payments).toHaveLength(2);
   });
+
+  // ── Reinserción diaria de `jde.Cobranza_Indicadores` (medido 2026-09-21) ──
+  //
+  // La tabla no se trunca: cada carga re-inserta la aplicación, así que una
+  // consulta por rango devuelve la misma N veces (18,294 filas para 8,688
+  // pares `cia|idPago|factura`; hasta 32 repeticiones). Cada consumidor las
+  // SUMA — el caro es el IVA causado (impuesto publicado): +$11.0M inflado en
+  // 2026, feb al +523%.
+  describe('reinserción de aplicaciones (fuente que no trunca)', () => {
+    function row(patch: Record<string, unknown>): Record<string, unknown> {
+      return {
+        'Id Pago': 'PAY-9', CIA: '00011', 'Fecha Cobro': '2026-02-10T00:00:00',
+        'cta bancaria': '11.1020.0011302', Banco: 'BANAMEX', 'No Recibo': 'RI - 500',
+        'Importe Recibo': '10000.00', 'No Cliente': 'C-1', Cliente: 'CLIENTE A',
+        'Tipo Docto': 'RI', 'Fecha aplicacion': '2026-02-10',
+        'Importe Original Factura': '5000.00', 'tasa iva': 'IVA16',
+        'Importe Iva Factura original': '689.66',
+        ...patch,
+      };
+    }
+
+    it('colapsa la MISMA aplicación reinsertada, aunque cambie Dias Antiguedad', () => {
+      // `Dias_Antiguedad_FAFV` se recalcula en cada carga, así que dos
+      // reinserciones nunca son filas idénticas: dedupear por la fila completa
+      // no colapsaría un solo peso.
+      const [payment] = normalizeCobranzaPayments([
+        row({ 'No Factura': 'RI - 777', 'Importe Cobrado': '3000.00', 'Dias Antiguedad FAFV': '9' }),
+        row({ 'No Factura': 'RI-777', 'Importe Cobrado': '3000.00', 'Dias Antiguedad FAFV': '10' }),
+        row({ 'No Factura': 'RI-777', 'Importe Cobrado': '3000.00', 'Dias Antiguedad FAFV': '11' }),
+      ]);
+      expect(payment.applications).toHaveLength(1);
+      expect(payment.applications.reduce((s, a) => s + a.importeCobrado, 0)).toBe(3000);
+    });
+
+    it('CONSERVA dos aplicaciones del mismo recibo a la misma factura con importe distinto', () => {
+      // 284 casos medidos DENTRO de una sola carga, los 284 con importe
+      // distinto y la misma Fecha_aplicacion: el importe es lo único que los
+      // separa. Llavear sólo por factura haría DESAPARECER cobro real.
+      const [payment] = normalizeCobranzaPayments([
+        row({ 'No Factura': 'RI-888', 'Importe Cobrado': '3000.00' }),
+        row({ 'No Factura': 'RI-888', 'Importe Cobrado': '1200.50' }),
+      ]);
+      expect(payment.applications).toHaveLength(2);
+      expect(payment.applications.reduce((s, a) => s + a.importeCobrado, 0)).toBeCloseTo(4200.5, 2);
+    });
+
+    it('degrada solo: sin reinserciones conserva el arreglo tal cual', () => {
+      const [payment] = normalizeCobranzaPayments([
+        row({ 'No Factura': 'RI-1', 'Importe Cobrado': '1000.00' }),
+        row({ 'No Factura': 'RI-2', 'Importe Cobrado': '2000.00' }),
+        row({ 'No Factura': 'RI-3', 'Importe Cobrado': '3000.00' }),
+      ]);
+      expect(payment.applications.map(a => a.noFacturaNormalizada)).toEqual(['RI-1', 'RI-2', 'RI-3']);
+    });
+  });
 });
 
 describe('normalizeBankAccountNumber', () => {

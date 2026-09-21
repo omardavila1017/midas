@@ -3,29 +3,38 @@
 //
 // Modelo de negocio (confirmado con Finanzas): CORNING deposita en la cuenta
 // BanBajío de la operadora; el día 15 el fideicomiso liquida el arrendamiento
-// a DINA. Hoy ese flujo está EXCLUIDO de la proyección (excludeBajio en
-// App.tsx), así que lo re-inyectamos como dos patas:
+// a DINA. Este módulo inyecta SÓLO el egreso:
 //
-//   - INGRESO: los ABONOs reales de CORNING detectados en los estados de
-//     cuenta Bajío, en su fecha real (sourceSystem 'BANK', status 'REAL').
-//   - EGRESO:  la obligación mensual fija a DINA el día 15 de cada mes de la
+//   - EGRESO: la obligación mensual fija a DINA el día 15 de cada mes de la
 //     ventana (config-driven, lockState 'LOCKED', mismo patrón que convenio).
 //
-// El egreso DINA se clasifica como deuda de fideicomiso. El ingreso Corning
-// se presenta como Clientes Citi para que sume en el bucket comercial correcto
-// de Planeación, sin perder el id/concepto de fideicomiso para auditoría.
+// ⚠️ El INGRESO Corning NO se inyecta aquí, y no es un olvido (2026-09-21).
+// Hasta 2026-06-04 Bajío estaba FUERA de la proyección (`excludeBajio`), así
+// que este módulo re-inyectaba los ABONOs Corning para no perderlos. Esa
+// premisa dejó de ser cierta: `accountableBankStatements` == todos los
+// estados (AppCore), y `bajioStatements` es un SUBCONJUNTO de ese mismo
+// arreglo, así que MOTOR 1 (`historicalReconciledEngine`) ya emite cada ABONO
+// Corning como una línea `bank:` INFLOW real — la cuenta BANBAJIO está
+// catalogada `role:'concentradora'`, `flow:'ingreso'` (NO neutra), de modo
+// que no la filtra ni el corte de internos ni el de cuentas neutras.
+// Re-inyectarlo contaba el MISMO depósito dos veces en todo escenario no-Base:
+// el recorte `>= currentMonthStart` de `scenarioForecastRun` dejaba pasar
+// justo los ABONOs del mes en curso, que por ser hechos bancarios observados
+// son siempre pasados. Dirección del error: INFLABA el ingreso del bucket
+// Clientes Citi. Si algún día Bajío vuelve a excluirse, la re-inyección se
+// restituye AQUÍ y el corte de ventana para esa pata debe ser `> today`
+// (un hecho bancario no es una obligación futura).
+//
+// El egreso DINA se clasifica como deuda de fideicomiso.
 //
 // Invariante Base: el llamador NO invoca esto para `id === 'base'` (mismo
 // gate que impuestos/convenio). Recortado a la ventana [startDate, endDate].
 //
 // Nota de modelado: se inyecta el egreso DINA para CADA mes de la ventana
 // (pasados y futuros) para que el sub-libro del fideicomiso netee de forma
-// coherente contra los depósitos Corning reales (que pueden ser de meses ya
-// transcurridos). El monto de meses pasados usa la obligación fija de config
+// coherente. El monto de meses pasados usa la obligación fija de config
 // (puede diferir del pago real; Finanzas lo afina vía VITE_DINA_*).
 // ─────────────────────────────────────────────────────────────────────────
-import type { BankAccountStatement } from '../../../services/jde';
-import { isCorningAbono } from '../../../domain/bankStatements';
 import { DINA_MONTHLY_OBLIGATION, DINA_PAYMENT_DAY } from '../../../config/fideicomiso.config';
 import type { FinancialMovement } from '../../shared-finance/types';
 import { calculateConfidenceBand } from '../../shared-finance/calculation-engine/financialProjectionEngine';
@@ -62,9 +71,8 @@ export function buildFideicomisoMovements(params: {
   startDate: string;
   endDate: string;
   asOfDate: string;
-  bajioStatements: readonly BankAccountStatement[];
 }): FinancialMovement[] {
-  const { scenarioId, startDate, endDate, asOfDate, bajioStatements } = params;
+  const { scenarioId, startDate, endDate, asOfDate } = params;
   const ts = `${asOfDate}T00:00:00.000Z`;
   const movements: FinancialMovement[] = [];
 
@@ -105,54 +113,6 @@ export function buildFideicomisoMovements(params: {
       createdAt: ts,
       updatedAt: ts,
     });
-  }
-
-  // ── INGRESO: ABONOs reales de CORNING en Bajío, fecha real. ──
-  const seen = new Set<string>();
-  for (const stmt of bajioStatements) {
-    for (const m of stmt.movimientos) {
-      if (!isCorningAbono(m)) continue;
-      const fecha = m.fechaOperacion;
-      if (!fecha || fecha < startDate || fecha > endDate) continue;
-      const amount = Math.abs(m.importe ?? 0);
-      if (amount <= 0) continue;
-      // Dedupe estable: dos cargas de estado de cuenta pueden traer el mismo
-      // ABONO; no lo contamos dos veces.
-      const dedupe = `${stmt.cia}|${stmt.cuenta}|${fecha}|${amount}|${m.referencia ?? ''}`;
-      if (seen.has(dedupe)) continue;
-      seen.add(dedupe);
-      movements.push({
-        id: `fideicomiso-corning:${scenarioId}:${dedupe}`,
-        sourceSystem: 'BANK',
-        sourceObjectId: dedupe,
-        type: 'INFLOW',
-        category: 'DEBT',
-        subcategory: 'Clientes Citi',
-        counterpartyName: 'CORNING',
-        counterpartyType: 'BANK',
-        concept: m.concepto || `Depósito Corning · Fideicomiso Dina ${fecha}`,
-        currency: 'MXN',
-        originalAmount: amount,
-        baseAmount: amount,
-        projectedAmount: amount,
-        adjustedAmount: amount,
-        issueDate: fecha,
-        dueDate: fecha,
-        projectedDate: fecha,
-        adjustedDate: fecha,
-        actualDate: fecha,
-        confidenceScore: 100,
-        confidenceBand: calculateConfidenceBand(100),
-        forecastMethod: 'RULE',
-        ruleApplied: 'ABONO Corning real en cuenta Bajío',
-        taxTreatment: 'IVA_EXEMPT',
-        status: 'REAL',
-        lockState: 'LOCKED',
-        comments: [`Depósito Corning real detectado en Bajío (${stmt.cuenta}).`],
-        createdAt: ts,
-        updatedAt: ts,
-      });
-    }
   }
 
   return movements;

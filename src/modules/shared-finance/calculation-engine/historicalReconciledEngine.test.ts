@@ -503,6 +503,47 @@ describe('buildHistoricalReconciledMovements (MOTOR 1)', () => {
     // Traspaso intercompañía etiquetado por el motor de conciliación → fuera.
     expect(mv.some((m) => m.id === 'auxiliar-historic:gl-interno')).toBe(false);
   });
+
+  // Premisa del fix del fideicomiso Dina (2026-09-21): la cuenta BANBAJIO está
+  // catalogada `role:'concentradora'`, `flow:'ingreso'` (NO neutra), así que un
+  // ABONO Corning NO lo filtra ni el corte de internos ni el de cuentas neutras
+  // — MOTOR 1 lo emite como `bank:` INFLOW real. Por eso `buildFideicomisoMovements`
+  // dejó de re-inyectarlo (lo contaba dos veces). Si esta aserción cae, la
+  // re-inyección tendría que volver: son las dos mitades de la misma invariante.
+  it('emite el ABONO Corning de la cuenta Bajío como bank: INFLOW real', () => {
+    const inputs = {
+      companyCode: 'all',
+      bankStatements: [bankStatement({
+        cia: '00011',
+        banco: 'BANBAJIO',
+        nombreBanco: 'BANBAJIO',
+        cuenta: 'BANBAJIO',
+        fechaEstadoCuenta: '2026-04-30',
+        movimientos: [
+          bankMovement({
+            cia: '00011', cuenta: 'BANBAJIO', banco: 'BANBAJIO', nombreBanco: 'BANBAJIO',
+            tipoMovimiento: 'ABONO', importe: 14_400_000, fechaOperacion: '2026-04-09',
+            concepto: 'TRANSFERENCIA CORNING SA DE CV',
+          }),
+        ],
+      })],
+      clients: [],
+      providers: [],
+      cxpRecords: [],
+      assumptions,
+      budget: null,
+      startingBalance: 0,
+      asOfDate: '2026-04-22',
+    };
+    const monthly = buildCanonicalProjection(inputs).monthly;
+    const mv = buildHistoricalReconciledMovements({ monthly, inputs });
+
+    const corning = mv.filter(m => m.type === 'INFLOW' && m.projectedAmount === 14_400_000);
+    expect(corning).toHaveLength(1);
+    expect(corning[0].id.startsWith('bank:00011:BANBAJIO:')).toBe(true);
+    expect(corning[0].status).toBe('REAL');
+    expect(corning[0].actualDate).toBe('2026-04-09');
+  });
 });
 
 // ── Fixtures ─────────────────────────────────────────────────────────────

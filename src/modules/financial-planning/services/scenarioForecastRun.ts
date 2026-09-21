@@ -78,7 +78,14 @@ export interface BuildScenarioForecastRunArgs {
   budget: Budget | null;
   companyCode: string;
   taxStore: TaxStore;
-  /** Bajío bank statements — used by fideicomiso (Dina) ingress reconciliation. */
+  /**
+   * Estados de cuenta Bajío. Ya NO los lee esta corrida (2026-09-21): el
+   * ingreso Corning lo emite MOTOR 1 y re-inyectarlo duplicaba. Se conserva
+   * el arg —y su tramo en `planningSharedRunInputsKey`— porque sacarlo toca
+   * 7 archivos (worker args, llave de corrida y su matriz, 3 tableros,
+   * AppCore); es limpieza de plomería pendiente, no un input vivo. Mientras
+   * siga aquí, subir un CSV de Bajío invalida corridas sin necesidad.
+   */
   bajioStatements?: BankAccountStatement[];
   startDate: string;
   endDate: string;
@@ -215,7 +222,9 @@ export function buildScenarioPipeline(args: BuildScenarioForecastRunArgs): Scena
       asOfDate: args.today,
     });
 
-  // Fideicomiso Dina: ingreso Corning real (Bajío) + egreso DINA mensual.
+  // Fideicomiso Dina: SÓLO el egreso DINA mensual. El ingreso Corning ya lo
+  // emite MOTOR 1 desde los estados Bajío (que hoy SÍ se contabilizan), así
+  // que re-inyectarlo aquí lo contaba dos veces — ver el docblock del módulo.
   // Mismo invariante/patrón que convenio (solo no-base, ventana recortada).
   const fideicomisoMovements = isBase
     ? []
@@ -224,7 +233,6 @@ export function buildScenarioPipeline(args: BuildScenarioForecastRunArgs): Scena
       startDate: args.startDate,
       endDate: args.endDate,
       asOfDate: args.today,
-      bajioStatements: args.bajioStatements ?? [],
     });
 
   // Las obligaciones (impuestos, convenio, fideicomiso) son compromisos hacia

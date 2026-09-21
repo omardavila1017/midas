@@ -1234,8 +1234,11 @@ export default function App() {
   // Banamex, así que incluir ambos lados netea solo. `accountableBankStatements`
   // == todos los estados (ya sin Multicarga/empresa 33 vía EXCLUSION_RULES).
   const accountableBankStatements = bankStatements;
-  // Bajío se separa aquí (además de contar en accountable) porque el módulo de
-  // planeación lo sigue usando para re-inyectar el flujo del fideicomiso Dina.
+  // Bajío se separa aquí SÓLO para el tablero del fideicomiso Dina, que pinta
+  // su sub-libro (depósitos Corning vs obligación DINA). NO se re-inyecta a la
+  // proyección: es un SUBCONJUNTO de `accountableBankStatements`, así que
+  // MOTOR 1 ya emite esos ABONOs y volver a inyectarlos los contaba dos veces
+  // (corregido 2026-09-21 — ver el docblock de `fideicomisoMovements.ts`).
   const bajioStatements = useMemo(
     () => bankStatements.filter(isBajioStatement),
     [bankStatements],

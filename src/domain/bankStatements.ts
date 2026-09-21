@@ -16,6 +16,13 @@ export function isBajioStatement(stmt: Pick<BankAccountStatement, 'banco' | 'nom
   return name.includes('BAJIO') || name.includes('BAJÍO') || code.includes('BAJIO');
 }
 
+/**
+ * ⚠️ SIN CALL SITES en producción desde 2026-06-04: Bajío SÍ se contabiliza
+ * (`accountableBankStatements` == todos los estados). Se conserva como la
+ * palanca para volver a excluirlo, pero NO asumas que está aplicado: tres
+ * comentarios del repo lo daban por hecho y de ahí salió el doble conteo del
+ * ingreso Corning del fideicomiso (corregido 2026-09-21).
+ */
 export function excludeBajio<T extends Pick<BankAccountStatement, 'banco' | 'nombreBanco'>>(stmts: readonly T[]): T[] {
   return stmts.filter(s => !isBajioStatement(s));
 }

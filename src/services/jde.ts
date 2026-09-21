@@ -1774,10 +1774,53 @@ function mapCobranzaPaymentHeader(rows: RawRecord[], idPago: string, ciaFallback
     noBatch: toStr(pick(header, ['no batch', 'no_batch', 'noBatch', 'No_Batch'])),
     tipoCambio: toNum(pick(header, ['tipo cambio', 'tipo_cambio', 'tipoCambio'])),
     tipoServicio: toStr(pick(header, ['Tipo Servicio', 'Tipo_Servicio', 'tipoServicio', 'tipo_servicio'])) || undefined,
-    applications: rows
-      .map(row => mapCobranzaPaymentApplication(row, idPago, cia))
-      .filter((app): app is CobranzaPaymentApplication => app !== null),
+    applications: dedupeCobranzaApplications(
+      rows
+        .map(row => mapCobranzaPaymentApplication(row, idPago, cia))
+        .filter((app): app is CobranzaPaymentApplication => app !== null),
+    ),
   };
+}
+
+/**
+ * Colapsa las aplicaciones REINSERTADAS de un mismo recibo (LAST-WINS).
+ *
+ * `jde.Cobranza_Indicadores` no se trunca: cada carga diaria vuelve a insertar
+ * la aplicación, así que una consulta por rango devuelve la MISMA aplicación
+ * una vez por carga (medido 2026-09-21: 18,294 filas para 8,688 pares
+ * `cia|idPago|factura`, hasta 32 repeticiones de una sola). El merge aguas
+ * arriba llavea por `cia::idPago`, o sea por RECIBO, así que no las ve: viajan
+ * dentro del recibo, como aplicaciones.
+ *
+ * Importa porque cada consumidor las SUMA. El más caro es el IVA causado
+ * (`accumulateCobranzaPaymentIva`, base-cobro), que es impuesto PUBLICADO:
+ * medido sobre 2026, +$11.0M de causado inflado, con feb-2026 al **+523%**
+ * ($304.7k reales contra $1.90M reportados) y jul-2026 +$5.33M. El overlay de
+ * recibos también se infla, ahí en la dirección que hace DESAPARECER cobranza
+ * real (descuenta de más), aunque el tope por saldo lo acota a ~$24k hoy.
+ *
+ * **El importe es LOAD-BEARING en la llave, y es el error natural omitirlo.**
+ * Un mismo recibo SÍ puede aplicar dos veces a la misma factura dentro de UNA
+ * sola carga: medido, 284 casos, y los 284 con `Importe_Cobrado` DISTINTO
+ * (misma `Fecha_aplicacion`, así que el importe es lo único que los separa).
+ * Llavear sólo por factura los colapsaría — desaparecería cobro real, la
+ * dirección peor. Con el importe dentro, la suma resultante coincide EXACTO
+ * ($115,235,440.33 de IVA 2026) con quedarse sólo con las filas de la carga
+ * más reciente, que es la verdad que la tabla quiso expresar.
+ *
+ * No se puede llavear por identidad de fila completa: `Dias_Antiguedad_FAFV`
+ * se recalcula en cada carga, así que dos reinserciones NUNCA son idénticas
+ * (medido: dedupear por todos los campos no colapsa un solo peso).
+ *
+ * Degrada solo: sin reinserciones el resultado es byte-idéntico.
+ */
+function dedupeCobranzaApplications(apps: CobranzaPaymentApplication[]): CobranzaPaymentApplication[] {
+  if (apps.length < 2) return apps;
+  const byKey = new Map<string, CobranzaPaymentApplication>();
+  for (const app of apps) {
+    byKey.set(`${app.noFacturaNormalizada}::${app.importeCobrado.toFixed(2)}`, app);
+  }
+  return apps.length === byKey.size ? apps : Array.from(byKey.values());
 }
 
 export function normalizeCobranzaPayments(rows: Record<string, unknown>[], ciaFallback = ''): CobranzaPayment[] {

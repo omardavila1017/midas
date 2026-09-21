@@ -159,9 +159,12 @@ interface Props {
   budget: Budget | null;
   startingBalance?: number;
   /**
-   * Estados de cuenta Bajío (fideicomiso Dina). Llegan SEPARADOS porque
-   * `bankStatements` ya viene sin Bajío (excludeBajio). Se usan para
-   * re-inyectar el flujo del fideicomiso en escenarios no-base.
+   * Estados de cuenta Bajío. El comentario previo afirmaba que
+   * `bankStatements` viene SIN Bajío (`excludeBajio`) — falso desde
+   * 2026-06-04: `excludeBajio` no tiene un solo call site y Bajío SÍ se
+   * contabiliza, así que esto es un SUBCONJUNTO de `bankStatements`. Ya no
+   * alimenta ninguna re-inyección (duplicaba el ingreso Corning); sólo sigue
+   * viajando en la llave de corrida. Ver `fideicomisoMovements.ts`.
    */
   bajioStatements?: BankAccountStatement[];
   /**
