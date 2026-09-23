@@ -3,7 +3,7 @@ name: Deploy Midas a IIS - QA
 on:
   push:
     branches:
-      - qa
+      - qa 
  
 jobs:
   deploy:
