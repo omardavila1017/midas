@@ -19,7 +19,6 @@ export type HeavySourceBundle = Pick<
   | 'purchaseReceipts'
   | 'payrollCosts'
   | 'cobranzaPayments'
-  | 'bajioStatements'
 >;
 
 // Everything that varies per run (small): scenario id/kind, adjustments,

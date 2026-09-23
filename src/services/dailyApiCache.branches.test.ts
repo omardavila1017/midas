@@ -278,16 +278,19 @@ describe('dailyApiCache — key en el índice pero payload ilegible', () => {
     expect(fetchDay).toHaveBeenCalledTimes(1);
     expect(out).toEqual([{ i: 'refetch' }]);
 
-    // El carril chunked NO re-fetchea la ventana: el día ilegible queda [].
+    // El carril chunked TAMBIÉN re-fetchea la ventana. Antes dejaba el día
+    // ilegible en `[]` y era la única rama del archivo que degradaba en
+    // silencio: en el auxiliar —su único consumidor— un día vacío se lee como
+    // "no hubo movimiento contable", no como "no se pudo leer el cache".
     const second = addDays(base, 1);
     expect(mod.hasDailyCached('big', second)).toBe(true);
-    const fetchChunk = vi.fn(async () => [] as Rec[]);
+    const fetchChunk = vi.fn(async () => [{ i: 'refetch-chunk', d: second }] as Rec[]);
     const outChunk = await mod.fetchRangeWithChunkedDailyCache<Rec>('big', {
       from: second, to: second, chunkSize: 7, fetchChunk,
       dateOf: (r) => r.d ?? '', today: TODAY,
     });
-    expect(fetchChunk).not.toHaveBeenCalled();
-    expect(outChunk).toEqual([]);
+    expect(fetchChunk).toHaveBeenCalledTimes(1);
+    expect(outChunk).toEqual([{ i: 'refetch-chunk', d: second }]);
 
     // Mismo desalojo en el carril mensual.
     const baseMonth = '2000-01';

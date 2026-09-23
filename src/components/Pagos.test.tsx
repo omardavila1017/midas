@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
+import { pagoRecordKey } from '../domain/pagoRecordKey';
 import Pagos from './Pagos';
 import type { PagoProveedorRecord } from '../services/jde';
 import type { PaymentMatch } from '../domain/paymentReconciliationEngine';
@@ -70,7 +71,7 @@ describe('<Pagos /> filters and sorting', () => {
         pagoProveedorLoadedCias={{ __all__: '2026-06-02T00:00:00Z' }}
         selectedCia="all"
         providers={[]}
-        internalPaymentKeys={new Set(['00001::200'])}
+        internalPaymentKeys={new Set([pagoRecordKey(records[1])])}
         paymentMatches={matches}
         comprasRecords={[]}
         cxpRecords={[]}

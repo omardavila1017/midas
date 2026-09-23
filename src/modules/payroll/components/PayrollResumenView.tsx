@@ -56,7 +56,17 @@ export default function PayrollResumenView({ records }: { records: PayrollCostRe
       </section>
 
       <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <ChartCard title="Por tratamiento de caja" subtitle="Distribución del monto total">
+        {/*
+          Las categorías NO son partes de un mismo todo: Deducciones y
+          Retenciones viven DENTRO de las Percepciones (salen de lo que se le
+          paga al empleado — ver `payrollOperatingFloor`), así que el total
+          contra el que se calcula cada porcentaje las cuenta dos veces. El
+          efectivo real de nómina es Percepciones + Aportaciones patronales.
+          Se conserva el desglose porque sí describe lo que manda TRESS; lo que
+          se corrige es el subtítulo, que lo presentaba como un reparto del
+          gasto.
+        */}
+        <ChartCard title="Por tratamiento de caja" subtitle="Peso de cada concepto — Deducciones y Retenciones van dentro de Percepciones">
           <DonutChart data={byCash} />
           <div className="mt-3">
             <CategoryLegend data={byCash} />

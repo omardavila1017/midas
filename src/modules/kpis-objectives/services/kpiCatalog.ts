@@ -306,7 +306,20 @@ function computeDerivedTotals(inputs: KpiInputs): DerivedTotals {
   let gasto90d = 0;
 
   if (hasPlanningRun && planningRun) {
-    const movementTotals = totalsFromPlanningMovements(planningRun.movements, {
+    // El scope por empresa aplica IGUAL que a bancos/cobranza/CXP arriba: sin
+    // esto, seleccionar una cía filtraba esas tres fuentes y dejaba pasar los
+    // movimientos del GRUPO ENTERO, así que el KPI mezclaba dos scopes. La
+    // igualdad estricta es la misma semántica que ya usa el filtro por
+    // `companyId` del motor (financialProjectionEngine); un movimiento sin cía
+    // (sintéticos: tendencia, convenio, fideicomiso, impuestos) es de grupo y
+    // no se atribuye a una empresa. Hoy la rama es inalcanzable —`selectedCia`
+    // está pineado a 'all' en AppCore—, pero revive con el filtro por empresa.
+    const scopedPlanningMovements = filterByCompany(
+      planningRun.movements,
+      companyCode,
+      (movement) => movement.companyId,
+    );
+    const movementTotals = totalsFromPlanningMovements(scopedPlanningMovements, {
       today: inputs.today,
       todayYear,
       todayYm,

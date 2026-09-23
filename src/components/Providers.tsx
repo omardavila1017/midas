@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   CLASIFICACION_LABELS,
   Provider,
@@ -142,6 +142,17 @@ export default function Providers({ providers, cxpRecords, spendIndex, onReplace
     });
     return Array.from(set).sort();
   }, [baseProviders]);
+
+  // Al alternar el chip "Prestaciones" cambia `baseProviders`, y con él el
+  // vocabulario de ambos selects. Un filtro heredado que ya no existe en el
+  // scope nuevo deja la tabla en CEROS silenciosos con el select mostrando un
+  // valor imposible. Mismo auto-reset que el filtro de segmento de Venta.
+  useEffect(() => {
+    if (categoryFilter !== 'all' && !categories.includes(categoryFilter)) setCategoryFilter('all');
+  }, [categories, categoryFilter]);
+  useEffect(() => {
+    if (freqFilter !== 'all' && !frequencies.includes(freqFilter)) setFreqFilter('all');
+  }, [frequencies, freqFilter]);
 
   // ─── Filtrado ─────────────────────────────────────────────────────────
   const filtered = useMemo(() => {

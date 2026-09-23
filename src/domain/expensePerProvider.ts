@@ -25,6 +25,7 @@
 import type { Provider } from './types';
 import type { AgedBalanceRecord, BankAccountStatement } from '../services/jdeTypes';
 import type { Flexibility } from './providerCatalog';
+import { normalizeJdeKey } from './providerIdentity';
 import { addMonths, compareYearMonth, toYearMonth } from './cashFlowEngine';
 import {
   isInternalTransfer,
@@ -50,21 +51,30 @@ export function paymentPeriodDays(p: Provider['paymentPeriod']): number {
 
 export interface ProviderIndex {
   byName: Map<string, Provider>;
+  /**
+   * Por clave JDE del proveedor. Los providers DERIVADOS llevan su clave en el
+   * id (`derived-<jdeKey>`), así que un registro de antigüedad —que trae
+   * `noProveedor`— puede cruzarse por clave EXACTA en vez de por nombre.
+   */
+  byJdeKey: Map<string, Provider>;
   /** Lista ordenada por longitud desc. para buscar substring más largo primero. */
   sortedByLen: Array<{ norm: string; provider: Provider }>;
 }
 
 export function buildProviderIndex(providers: Provider[]): ProviderIndex {
   const byName = new Map<string, Provider>();
+  const byJdeKey = new Map<string, Provider>();
   const arr: Array<{ norm: string; provider: Provider }> = [];
   for (const p of providers) {
+    const derivedKey = p.id.startsWith('derived-') ? normalizeJdeKey(p.id.slice('derived-'.length)) : '';
+    if (derivedKey) byJdeKey.set(derivedKey, p);
     const n = norm(p.name);
     if (!n) continue;
     byName.set(n, p);
     arr.push({ norm: n, provider: p });
   }
   arr.sort((a, b) => b.norm.length - a.norm.length);
-  return { byName, sortedByLen: arr };
+  return { byName, byJdeKey, sortedByLen: arr };
 }
 
 /**
@@ -92,11 +102,28 @@ export function matchConceptToProvider(
   return null;
 }
 
-/** Matchea un CXPRecord/aged por `nombre` directo (caso sencillo). */
+/**
+ * Matchea un CXPRecord/aged a su proveedor. Prueba primero la CLAVE JDE —que
+ * el registro ya trae y esta función ignoraba— y sólo cae al nombre si no hay
+ * clave o no está indexada.
+ *
+ * Por qué importa: `matchConceptToProvider` hace containment en UNA dirección
+ * (`nombreDelRegistro.includes(nombreDelCatálogo)`), así que un nombre de
+ * catálogo MÁS LARGO que el del registro no cruza — "DIESEL DEL NORTE S.A. DE
+ * C.V." contra "DIESEL DEL NORTE". La línea caía entonces en el bucket
+ * `__un::<nombre>`, el proveedor real NO quedaba en `coveredProviderIds`, y el
+ * paso 2 le sumaba ADEMÁS su línea `recurring`: el mismo gasto, dos veces.
+ * La clave es exacta y no depende de cómo se escribió la razón social.
+ */
 export function matchAgedToProvider(
   record: { nombre?: string; noProveedor?: string },
   index: ProviderIndex,
 ): Provider | null {
+  const jdeKey = normalizeJdeKey(record.noProveedor);
+  if (jdeKey) {
+    const byKey = index.byJdeKey.get(jdeKey);
+    if (byKey) return byKey;
+  }
   return matchConceptToProvider(record.nombre ?? '', index);
 }
 

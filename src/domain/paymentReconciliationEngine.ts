@@ -47,6 +47,7 @@ import type { PagoProveedorRecord, BankAccountStatement, BankStatementLine } fro
 import type { CXPRecord } from './persistence';
 import { bankMovementKey } from './bankMovementKey';
 import { normalizeCia } from './cia';
+import { pagoRecordKey } from './pagoRecordKey';
 import {
   buildOwnAccountDetector,
   buildOwnAccountsIndex,
@@ -627,9 +628,7 @@ export function reconcilePayments(input: {
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
-function paymentKey(payment: PagoProveedorRecord): string {
-  return `${payment.cia}::${payment.noPago}`;
-}
+const paymentKey = pagoRecordKey;
 
 /** Pago de nómina/empleado — no se cruza con CXP (no pasa por el módulo). */
 function isEmployeePayment(payment: PagoProveedorRecord): boolean {

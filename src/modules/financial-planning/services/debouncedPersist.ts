@@ -26,11 +26,15 @@
  * difiere el efecto secundario de saves rápidos.
  */
 
+import { notifyPlanningDocWritten } from './planningDocSync';
+
 interface DebouncedEntry {
   lastFiredAt: number;
   scheduledId: number | null;
   pendingValue: unknown;
   doSave: (value: unknown) => void;
+  /** Quién programó la última escritura — viaja en el aviso post-save. */
+  origin?: string;
 }
 
 // Ventana corta — suficiente para colapsar ráfagas (typing rápido, edit cell
@@ -47,7 +51,10 @@ function flushOne(key: string): void {
     window.clearTimeout(entry.scheduledId);
   }
   entry.scheduledId = null;
-  try { entry.doSave(entry.pendingValue); } catch { /* swallow */ }
+  try {
+    entry.doSave(entry.pendingValue);
+    notifyPlanningDocWritten(key, entry.origin);
+  } catch { /* swallow */ }
   entry.lastFiredAt = Date.now();
 }
 
@@ -63,6 +70,7 @@ function ensureUnloadHook(): void {
         window.clearTimeout(entry.scheduledId);
         entry.scheduledId = null;
         entry.doSave(entry.pendingValue);
+        notifyPlanningDocWritten(key, entry.origin);
       } catch {
         /* never block unload */
       }
@@ -85,6 +93,12 @@ export function debouncedPersist<T>(
   key: string,
   value: T,
   doSave: (value: T) => void,
+  /**
+   * Identidad del escritor. Viaja en el aviso post-save para que quien la
+   * emitió NO se recargue a sí mismo (ver `planningDocSync`). Omitirla sólo
+   * significa que ese escritor no se suprime — nunca pierde la escritura.
+   */
+  origin?: string,
 ): void {
   if (typeof window === 'undefined') {
     // SSR / jsdom sin window — persiste sync.
@@ -103,13 +117,18 @@ export function debouncedPersist<T>(
       scheduledId: null,
       pendingValue: value,
       doSave: wrapped,
+      origin,
     };
     entries.set(key, entry);
-    try { wrapped(value); } catch { /* swallow */ }
+    try {
+      wrapped(value);
+      notifyPlanningDocWritten(key, origin);
+    } catch { /* swallow */ }
     return;
   }
   existing.pendingValue = value;
   existing.doSave = wrapped;
+  existing.origin = origin;
   const elapsed = now - existing.lastFiredAt;
   if (elapsed >= WINDOW_MS) {
     // Fuera de ventana — fire inmediato y reset.

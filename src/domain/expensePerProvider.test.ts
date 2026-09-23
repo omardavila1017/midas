@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildProviderIndex,
+  matchAgedToProvider,
   matchConceptToProvider,
   buildProviderBankPatterns,
   isNoisyBankExpenseConcept,
@@ -277,3 +278,33 @@ function mov(fecha: string, importe: number, concepto: string) {
     tipoMovimiento: 'CARGO' as const, importe,
   };
 }
+
+/**
+ * `matchConceptToProvider` hace containment en UNA dirección, así que un nombre
+ * de catálogo MÁS LARGO que el del registro no cruza. La línea caía en el
+ * bucket `__un::<nombre>`, el proveedor real no quedaba en `coveredProviderIds`
+ * y el paso 2 le sumaba ADEMÁS su línea `recurring` — el mismo gasto dos veces.
+ * La clave JDE ya venía en el registro y la función la ignoraba.
+ */
+describe('matchAgedToProvider — cruza por clave JDE antes que por nombre', () => {
+  const catalogo = [
+    { id: 'derived-900123', name: 'DIESEL DEL NORTE S.A. DE C.V.' } as Provider,
+  ];
+
+  it('cruza aunque el nombre del catálogo sea más largo que el del registro', () => {
+    const index = buildProviderIndex(catalogo);
+    const hit = matchAgedToProvider({ nombre: 'DIESEL DEL NORTE', noProveedor: '900123' }, index);
+    expect(hit?.id).toBe('derived-900123');
+  });
+
+  it('sin clave, conserva el match por nombre de siempre', () => {
+    const index = buildProviderIndex(catalogo);
+    const hit = matchAgedToProvider({ nombre: 'PAGO A DIESEL DEL NORTE S.A. DE C.V.' }, index);
+    expect(hit?.id).toBe('derived-900123');
+  });
+
+  it('una clave desconocida no inventa proveedor: cae al nombre', () => {
+    const index = buildProviderIndex(catalogo);
+    expect(matchAgedToProvider({ nombre: 'OTRO PROVEEDOR', noProveedor: '999999' }, index)).toBeNull();
+  });
+});

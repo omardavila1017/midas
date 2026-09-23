@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { pagoRecordKey } from './pagoRecordKey';
 import { reconcilePayments } from './paymentReconciliationEngine';
 import type { PagoProveedorRecord, BankAccountStatement, BankStatementLine } from '../services/jdeTypes';
 import type { CXPRecord } from './persistence';
@@ -240,7 +241,7 @@ describe('reconcilePayments — CARGO matching', () => {
       bankStatements: [statement([cargo({ concepto: 'TRASPASO REF 123' })])],
     });
 
-    expect(result.internalPaymentKeys.has('00038::393866')).toBe(true);
+    expect(result.internalPaymentKeys.has(pagoRecordKey(result.paymentMatches[0].payment))).toBe(true);
     expect(result.paymentMatches[0].cargoMatch).toBeUndefined();
     expect(result.cargoEnrichments.size).toBe(0);
     expect(result.totals.internalPayments).toBe(1);
@@ -333,7 +334,7 @@ describe('reconcilePayments — CARGO matching', () => {
       ],
     });
 
-    expect(result.internalPaymentKeys.has('00038::393866')).toBe(true);
+    expect(result.internalPaymentKeys.has(pagoRecordKey(result.paymentMatches[0].payment))).toBe(true);
     expect(result.paymentMatches[0].cargoMatch).toBeUndefined();
     expect(result.cargoEnrichments.size).toBe(0);
     expect(result.totals.internalPayments).toBe(1);

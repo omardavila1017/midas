@@ -131,7 +131,13 @@ export function forecastSeries(series: number[], horizon: number): PayrollForeca
 
   // Banda creciente con el horizonte: σ_h = rmse · √h. La nómina no puede ser
   // negativa, así que el piso de cada banda se recorta a 0.
-  const bands: ForecastBandPoint[] = output.forecast.map((expected, i) => {
+  // El recorte a 0 aplica también al CENTRO de la banda, no sólo al piso: con
+  // una serie decreciente el modelo puede predecir negativo, y antes la línea
+  // se pintaba en 0 mientras `expected` seguía por debajo — la banda
+  // contradecía a su propia línea, y "la nómina no puede ser negativa" dejaba
+  // de cumplirse justo en el valor central.
+  const forecast = output.forecast.map(v => Math.max(0, v));
+  const bands: ForecastBandPoint[] = forecast.map((expected, i) => {
     const h = i + 1;
     const sigma = output.rmse * Math.sqrt(h);
     return {
@@ -147,7 +153,7 @@ export function forecastSeries(series: number[], horizon: number): PayrollForeca
   return {
     model,
     history: clean,
-    forecast: output.forecast.map(v => Math.max(0, v)),
+    forecast,
     bands,
     mape: output.mape,
     rmse: output.rmse,

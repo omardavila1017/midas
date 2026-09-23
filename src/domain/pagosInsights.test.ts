@@ -17,6 +17,11 @@ import {
 
 const AS_OF = '2026-06-10';
 
+// Llave esperada derivada del MISMO fixture: los tests verifican QUÉ registros
+// agrupa/marca cada insight, no el formato interno de la llave (que cambió al
+// unificarla en `domain/pagoRecordKey` — ver ese módulo).
+const k = (overrides: Partial<PagoProveedorRecord>) => pagoRecordKey(pago(overrides));
+
 function pago(overrides: Partial<PagoProveedorRecord>): PagoProveedorRecord {
   return {
     tipoPago: 'PT',
@@ -137,7 +142,7 @@ describe('buildPagadoPorMes', () => {
     expect(junio.totalMxn).toBe(5000);
     expect(junio.proveedoresMxn).toBe(3000);
     expect(junio.empleadosMxn).toBe(2000);
-    expect(junio.keys).toEqual(['00001::1', '00001::2']);
+    expect(junio.keys).toEqual([k({ noPago: '1' }), k({ noPago: '2' })]);
   });
 });
 
@@ -158,7 +163,7 @@ describe('buildPagosDepuracionInsights', () => {
     expect(hit).toBeDefined();
     expect(hit!.count).toBe(2);
     expect(hit!.totalMxn).toBe(10000);
-    expect(hit!.keys.sort()).toEqual(['00001::A', '00001::B']);
+    expect(hit!.keys.sort()).toEqual([k({ noPago: 'A' }), k({ noPago: 'B' })].sort());
   });
 
   it('flags stale real orphans only when matches are provided', () => {
@@ -177,7 +182,7 @@ describe('buildPagosDepuracionInsights', () => {
     const hit = findInsight(withMatches, 'huerfanoAntiguo');
     expect(hit).toBeDefined();
     expect(hit!.count).toBe(1);
-    expect(hit!.keys).toEqual(['00001::O1']);
+    expect(hit!.keys).toEqual([k({ noPago: 'O1' })]);
     expect(hit!.label).toContain(String(ORPHAN_STALE_DAYS));
   });
 
@@ -199,15 +204,15 @@ describe('buildPagosDepuracionInsights', () => {
     const insights = buildPagosDepuracionInsights(records, AS_OF);
     const byId = (id: PagosInsightId) => findInsight(insights, id);
 
-    expect(byId('sinFechaPago')!.keys).toEqual(['00001::1']);
-    expect(byId('fechaFutura')!.keys).toEqual(['00001::2']);
-    expect(byId('sinCuentaBanco')!.keys).toEqual(['00001::3']);
-    expect(byId('importeNoPositivo')!.keys).toEqual(['00001::4']);
-    expect(byId('monedaExtranjera')!.keys).toEqual(['00001::5']);
-    expect(byId('sinRfc')!.keys).toEqual(['00001::6']);
-    expect(byId('rfcGenerico')!.keys).toEqual(['00001::7']);
-    expect(byId('porClasificar')!.keys.sort()).toEqual(['00001::8', '00001::9']);
-    expect(byId('sinReferenciaCxp')!.keys).toEqual(['00001::10']);
+    expect(byId('sinFechaPago')!.keys).toEqual([k({ noPago: '1' })]);
+    expect(byId('fechaFutura')!.keys).toEqual([k({ noPago: '2' })]);
+    expect(byId('sinCuentaBanco')!.keys).toEqual([k({ noPago: '3' })]);
+    expect(byId('importeNoPositivo')!.keys).toEqual([k({ noPago: '4' })]);
+    expect(byId('monedaExtranjera')!.keys).toEqual([k({ noPago: '5' })]);
+    expect(byId('sinRfc')!.keys).toEqual([k({ noPago: '6' })]);
+    expect(byId('rfcGenerico')!.keys).toEqual([k({ noPago: '7' })]);
+    expect(byId('porClasificar')!.keys.sort()).toEqual([k({ noPago: '8' }), k({ noPago: '9' })].sort());
+    expect(byId('sinReferenciaCxp')!.keys).toEqual([k({ noPago: '10' })]);
     expect(byId('posibleDoblePago')).toBeUndefined();
   });
 
@@ -284,6 +289,16 @@ describe('pagosToCsv', () => {
 
 describe('pagoRecordKey', () => {
   it('matches the dedup key shape of fetchPagoProveedorRange', () => {
-    expect(pagoRecordKey(pago({ cia: '00033', noPago: '777' }))).toBe('00033::777');
+    expect(pagoRecordKey(pago({ cia: '00033', noPago: '777' })))
+      .toBe('00033::PT::777::900::B-1');
+  });
+
+  // JDE reutiliza `No_Pago` entre lotes: dos pagos con el mismo número pero
+  // distinto proveedor/batch son pagos DISTINTOS. Con la llave vieja
+  // (`cia::noPago`) colapsaban y uno desaparecía de la lista y de los totales.
+  it('separa dos pagos que comparten cia+noPago pero son de lotes distintos', () => {
+    const a = pago({ noPago: '428674', claveProveedor: '67876752', batchPago: '84562250' });
+    const b = pago({ noPago: '428674', claveProveedor: '24256377', batchPago: '84523892' });
+    expect(pagoRecordKey(a)).not.toBe(pagoRecordKey(b));
   });
 });

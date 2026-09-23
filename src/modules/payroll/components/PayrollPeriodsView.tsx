@@ -33,15 +33,28 @@ function periodKey(p: PayrollPeriodSummary): string {
 
 /** Rango de fechas del periodo; tolera que falte `FechaInicial` (el API a veces
  *  solo trae `FechaFinal`). */
-function periodRange(records: PayrollCostRecord[], p: PayrollPeriodSummary): string {
+/**
+ * Fechas de inicio/fin del periodo, cada una vacía si el API no la manda (caso
+ * habitual: sólo viene `FechaFinal`). El CSV consume ESTO, no el string de
+ * display: re-parsear la etiqueta ("→ 2026-06-30" → quitar flechas → un solo
+ * token) hacía que Inicio y Fin salieran IGUALES, inventando una fecha de
+ * inicio que nunca se conoció.
+ */
+function periodBounds(
+  records: PayrollCostRecord[],
+  p: PayrollPeriodSummary,
+): { start: string; end: string } {
   const own = records.filter(
     r => r.cia === p.cia && r.paymentDate === p.paymentDate
       && r.payrollType === p.payrollType && String(r.payrollPeriod) === String(p.payrollPeriod),
   );
   const start = own.map(r => r.periodStartDate).find(Boolean);
   const end = own.map(r => r.periodEndDate).find(Boolean);
-  const s = start ? start.slice(0, 10) : '';
-  const e = end ? end.slice(0, 10) : '';
+  return { start: start ? start.slice(0, 10) : '', end: end ? end.slice(0, 10) : '' };
+}
+
+function periodRange(records: PayrollCostRecord[], p: PayrollPeriodSummary): string {
+  const { start: s, end: e } = periodBounds(records, p);
   if (s && e) return `${s} → ${e}`;
   if (e) return `→ ${e}`;
   if (s) return `${s} →`;
@@ -68,9 +81,7 @@ const CSV_HEADERS = [
 
 function buildCsv(records: PayrollCostRecord[], periods: PayrollPeriodSummary[]): string {
   const rows = periods.map((p) => {
-    const range = periodRange(records, p).replace(/[→—]/g, '').trim().split(/\s+/);
-    const start = range[0] && /\d{4}-\d{2}-\d{2}/.test(range[0]) ? range[0] : '';
-    const end = range.reverse().find(x => /\d{4}-\d{2}-\d{2}/.test(x)) ?? '';
+    const { start, end } = periodBounds(records, p);
     return [
       p.cia, p.empresaNomina, p.payrollType, String(p.payrollPeriod), start, end,
       p.paymentDate?.slice(0, 10) ?? '',

@@ -1,5 +1,6 @@
 import type { Client } from './types';
 import type { CobranzaRecord } from '../services/jdeTypes';
+import { cobranzaVenta } from './cobranzaVenta';
 
 /**
  * Per-client monthly billing derived from real CXC (cobranza) invoices.
@@ -8,7 +9,7 @@ import type { CobranzaRecord } from '../services/jdeTypes';
  * difuso por RFC/nombre vive en `clientCobranzaMatcher.ts` y corre solo al
  * auto-seed o desde el wizard. Aquí solo sumamos.
  *
- * - Historical months come from the sum of `importeBrutoPesos` grouped by
+ * - Historical months come from the sum of the NET (ex-IVA) sale grouped by
  *   `fechaFactura` month, sobre la unión de facturas de todas las cuentas
  *   JDE enlazadas al client.
  * - Future months use ordinary-least-squares linear regression over the
@@ -119,7 +120,13 @@ export function computeMonthlyBillingFromRecords(
     // referencia ("hoy") es post-fechada (típicamente un error de captura);
     // no la contamos como facturación real ni la dejamos sesgar el pronóstico.
     if (am > referenceMonth) continue;
-    const amt = r.importeBrutoPesos ?? 0;
+    // Venta NETA (sin IVA) por la fórmula canónica. `importeBrutoPesos` es el
+    // importe CON IVA: usarlo aquí inflaba 16% la serie que la UI rotula
+    // "Facturación mensual (sin IVA)" y, peor, el panel derivaba "IVA (16%)" y
+    // "Total con IVA" APLICÁNDOLE el impuesto otra vez — bruto × 1.16 sobre un
+    // importe que ya lo traía. La serie se persiste además en
+    // `client.monthlyBilling`, así que el +16% no se quedaba en pantalla.
+    const amt = cobranzaVenta(r);
     if (!Number.isFinite(amt)) continue;
     byAbsMonth.set(am, (byAbsMonth.get(am) ?? 0) + amt);
     invoiceCount++;

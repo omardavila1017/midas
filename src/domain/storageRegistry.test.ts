@@ -36,7 +36,13 @@ function extractMidasKeys(source: string): string[] {
  *   - midas.local.auth.v1 — es el SALT del hash de contraseñas del modo auth
  *     local (vive en el JSON de config, citado en comentarios de localAuth.ts).
  */
-const NOT_STORAGE_KEYS = new Set(['midas.local.auth.v1']);
+// Literales `midas.*` que NO son keys de storage: el salt del auth local y el
+// nombre del CustomEvent con el que los dos tableros de planeación se avisan
+// una escritura (no persiste nada — ver `planningDocSync`).
+const NOT_STORAGE_KEYS = new Set([
+  'midas.local.auth.v1',
+  'midas.planning.docChanged',
+]);
 
 const registeredExact = new Set(
   MIDAS_STORAGE_REGISTRY.filter((e) => !e.key.endsWith('.*')).map((e) => e.key),

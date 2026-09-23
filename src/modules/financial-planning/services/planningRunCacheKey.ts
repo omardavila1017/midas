@@ -1,7 +1,6 @@
 import type { AuxiliarReconResult } from '../../../domain/auxiliarReconciliationEngine';
 import type { CxpPaymentCoverage } from '../../../domain/paymentReconciliationEngine';
 import type { Provider } from '../../../domain/types';
-import type { BankAccountStatement } from '../../../services/jde';
 import type { CobranzaPayment } from '../../../services/jdeTypes';
 import { fingerprintArray } from '../../financial-projection/services/projectionCache';
 import { projectionWindowFor } from '../../financial-projection/services/projectionWindow';
@@ -70,7 +69,6 @@ export interface PlanningSharedRunInputs {
   taxStore: TaxStore;
   providers: readonly Provider[];
   cobranzaPayments: readonly CobranzaPayment[] | undefined;
-  bajioStatements: readonly BankAccountStatement[] | undefined;
   auxiliarReconciliation: AuxiliarReconResult | undefined;
   cxpPaymentCoverage: Map<string, CxpPaymentCoverage> | undefined;
   yearStart: string;
@@ -103,10 +101,6 @@ export function planningSharedRunInputsKey(input: PlanningSharedRunInputs): stri
     fingerprintArray(
       input.cobranzaPayments ?? [],
       (payment) => payment.idPago + ':' + payment.importeRecibo + ':' + payment.pendienteAplicar,
-    ),
-    fingerprintArray(
-      input.bajioStatements ?? [],
-      (s) => s.cia + ':' + s.cuenta + ':' + s.fechaEstadoCuenta + ':' + s.movimientos.length,
     ),
     auxiliarTaxCoverageFingerprint(input.auxiliarReconciliation),
     cxpPaymentCoverageFingerprint(input.cxpPaymentCoverage),

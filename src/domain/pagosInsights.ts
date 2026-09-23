@@ -56,9 +56,9 @@ export function attributePagoSource(m: PaymentMatch): SourceAttribution {
 export const ORPHAN_STALE_DAYS = 30;
 
 /** Clave estable de pago — misma que el dedup de `fetchPagoProveedorRange`. */
-export function pagoRecordKey(r: PagoProveedorRecord): string {
-  return `${r.cia}::${r.noPago}`;
-}
+export { pagoRecordKey } from './pagoRecordKey';
+// Re-exportado arriba para no romper los imports existentes; aquí se usa local.
+import { pagoRecordKey } from './pagoRecordKey';
 
 export function isEmployeePago(r: PagoProveedorRecord): boolean {
   return isEmployeeSearchType(r.tipoBusqueda);
@@ -232,7 +232,7 @@ const SEVERITY_RANK: Record<PagosInsightSeverity, number> = {
   info: 2,
 };
 
-const GENERIC_RFC_RE = /^X[AE]XX010101000$/i;
+import { GENERIC_RFC_RE } from './rfc';
 const POR_CLASIFICAR_RE = /por\s+clasificar/i;
 
 /** Días transcurridos de `iso` a `asOfDate` (negativo si `iso` es futura). */

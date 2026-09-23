@@ -16,6 +16,7 @@
 import type { CobranzaPayment, CobranzaRecord, RolRecord, ViajeEspecialRecord } from '../../../services/jde';
 import { buildRolCobranzaCross, normFactura } from '../../../domain/rolCobranzaMatch';
 import { segmentOf, buildSegmentByFactura, SEGMENT_UNCLASSIFIED } from '../../../domain/cobranzaSegment';
+import { cobranzaVenta } from '../../../domain/cobranzaVenta';
 import { csvDate } from '../../../utils/export';
 import { sourceOf, type SourceAttribution, type SourceId } from '../../../domain/sourceAttribution';
 
@@ -101,23 +102,6 @@ function isFinitePositive(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0;
 }
 
-/**
- * Venta NETA (sin IVA) de una factura de cobranza, con fallbacks tolerantes:
- *   1. `subTotal` directo si viene poblado.
- *   2. `importeBrutoPesos - importeIVA` cuando el IVA viene explícito (incluye
- *      el caso exento, IVA=0 → regresa el bruto, que ya es sin IVA).
- *   3. Sin dato de IVA: estima asumiendo 16% (estándar MX) — `bruto / 1.16`.
- * Mantener todo en base sin-IVA para que las tres fuentes sean comparables.
- */
-function cobranzaVenta(r: CobranzaRecord): number {
-  if (isFinitePositive(r.subTotal)) return r.subTotal;
-  const bruto = Number.isFinite(r.importeBrutoPesos) ? r.importeBrutoPesos : 0;
-  if (typeof r.importeIVA === 'number' && Number.isFinite(r.importeIVA)) {
-    const net = bruto - r.importeIVA;
-    return net > 0 ? net : bruto;
-  }
-  return bruto > 0 ? bruto / 1.16 : 0;
-}
 
 export interface SaleSourceInputs {
   cobranza: CobranzaRecord[];

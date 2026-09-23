@@ -83,6 +83,33 @@ describe('clientGrouping', () => {
     expect(groups[0].accounts).toHaveLength(2);
   });
 
+  /**
+   * `XAXX010101000` (público en general) y `XEXX010101000` (extranjero) son un
+   * marcador de "sin RFC", no una identidad. Medido en `jde.Cobranza_Citi`
+   * (2026-09-21): 9 clientes distintos en 10,233 facturas colapsaban en 2
+   * grupos comerciales falsos con confianza 0.97, contaminando su historial de
+   * facturación y la proyección de cobranza por cliente.
+   */
+  it('NO agrupa por RFC genérico (XAXX/XEXX)', () => {
+    const groups = buildClientHierarchy([
+      client('Mostrador Monterrey', { rfc: 'XAXX010101000' }),
+      client('Ventanilla Saltillo', { rfc: 'XAXX010101000' }),
+      // nombres sin token común: si se agrupan, es por el RFC genérico
+    ], { today: '2026-04-22' });
+
+    expect(groups).toHaveLength(2);
+    expect(groups.every(g => g.source !== 'rfc')).toBe(true);
+  });
+
+  it('tampoco agrupa por el genérico de extranjero', () => {
+    const groups = buildClientHierarchy([
+      client('Zeta Imports LLC', { rfc: 'XEXX010101000' }),
+      client('Omega Trading Corp', { rfc: 'XEXX010101000' }),
+    ], { today: '2026-04-22' });
+
+    expect(groups).toHaveLength(2);
+  });
+
   // B2.4 — jerarquía padre/hijo desde la autoridad JDE (Nombre_Cliente_Padre).
   it('groups accounts under their JDE parent even when their RFCs differ', () => {
     const clients = [

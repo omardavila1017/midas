@@ -17,6 +17,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { clearDailyCache, primeDailyCache } from './dailyApiCache';
 import { AUX_IVA_PARAMS } from '../domain/auxiliarReconciliationConfig';
+import { pagoRecordKey } from '../domain/pagoRecordKey';
+import type { PagoProveedorRecord } from './jdeTypes';
 import {
   __internal,
   fetchAgedBalances,
@@ -902,7 +904,7 @@ describe('fetchPagoProveedor — mapPagoProveedor', () => {
 });
 
 describe('fetchPagoProveedorRange — troceo diario + dedup + cache', () => {
-  it('pide día por día (fechaInicial === fechaFinal), dedupea por cia::noPago y cachea', async () => {
+  it('pide día por día (fechaInicial === fechaFinal), dedupea por la identidad del pago y cachea', async () => {
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
       const body = bodyOf(init) as { fechaInicial: string };
       // El mismo pago aparece en ambos días (reentrega del API) + uno propio del día 3.
@@ -932,14 +934,29 @@ describe('fetchPagoProveedorRange — troceo diario + dedup + cache', () => {
     expect(again.map(r => r.noPago).sort()).toEqual(['70001', '70002']);
   });
 
-  it('salta fines de semana sin pegarle al API (isNonOperatingDay)', async () => {
-    const fetchMock = vi.fn(async () => jsonResponse([pagoRow({})]));
+  /**
+   * Antes se saltaban los días inhábiles: la rama devolvía `[]` ANTES de la red
+   * y ese `[]` se cacheaba, así que ni `revalidateSince` podía repararlo — el
+   * día volvía a entrar al mismo corte. La premisa ("bancos no emiten CARGOs a
+   * proveedor en fin de semana") es falsa para esta fuente: `Fecha_Pago` es la
+   * fecha del REGISTRO en JDE, no la de liquidación bancaria. Medido en
+   * `jde.Pago_Proveedor` (2026-09-21): 1,064 pagos en sábado y 1,591 en domingo
+   * — $416.8M — más 17 el 1-may. Ese dinero no llegaba a la pestaña Pagos, ni
+   * al cruce que descuenta CXP ya pagada del egreso proyectado.
+   */
+  it('SÍ consulta fines de semana: ahí hay pagos reales', async () => {
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = bodyOf(init) as { fechaInicial: string };
+      return body.fechaInicial === '2026-06-06'
+        ? jsonResponse([pagoRow({ No_Pago: '80001', Fecha_Pago: '06-06-2026' })])
+        : jsonResponse([]);
+    });
     vi.stubGlobal('fetch', fetchMock);
 
     // 2026-06-06/07 = sábado/domingo.
     const records = await fetchPagoProveedorRange('2026-06-06', '2026-06-07');
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(records).toEqual([]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(records.map(r => r.noPago)).toEqual(['80001']);
   });
 });
 
@@ -1235,5 +1252,50 @@ describe('fetchAuxiliarContableIvaRange — discovery + full en dos fases', () =
     const records = await fetchAuxiliarContableIvaRange('00099', '2026-05-04', '2026-05-08');
     expect(records).toEqual([]);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * `cia::noPago` NO identifica un pago: JDE reutiliza `No_Pago` entre lotes.
+ * Medido contra `jde.Pago_Proveedor` (2026-09-21): 69 grupos dentro de una
+ * MISMA carga con importes distintos, $38.46M de diferencia — el dedup viejo
+ * los borraba creyéndolos duplicados. Con la llave real, cero grupos del
+ * espejo difieren en importe.
+ */
+describe('fetchPagoProveedorRange — dedup por la identidad real del pago', () => {
+  const pago = (over: Partial<PagoProveedorRecord>): PagoProveedorRecord => ({
+    cia: '00011',
+    tipoPago: 'PT',
+    noPago: '428674',
+    claveProveedor: '67876752',
+    batchPago: '84562250',
+    nombreProveedor: 'GASNGO MEXICO SA DE CV',
+    importePesos: 956_454.66,
+    fechaPago: '2026-04-05',
+    ...over,
+  } as PagoProveedorRecord);
+
+  it('CONSERVA dos pagos que comparten cia+noPago pero son de lotes distintos', () => {
+    const gasngo = pago({});
+    const cfe = pago({
+      claveProveedor: '24256377',
+      batchPago: '84523892',
+      nombreProveedor: 'CFE SUMINISTRADOR DE SERVICIOS BASICOS',
+      importePesos: 24_795,
+    });
+    const keys = new Set([pagoRecordKey(gasngo), pagoRecordKey(cfe)]);
+    expect(keys.size).toBe(2);
+  });
+
+  it('COLAPSA la reinserción byte-idéntica del mismo pago', () => {
+    expect(pagoRecordKey(pago({}))).toBe(pagoRecordKey(pago({})));
+  });
+
+  it('la cía participa: el mismo noPago en otra compañía es otro pago', () => {
+    expect(pagoRecordKey(pago({}))).not.toBe(pagoRecordKey(pago({ cia: '00001' })));
+  });
+
+  it('el tipo de pago participa (identidad documentada: tipo + número)', () => {
+    expect(pagoRecordKey(pago({}))).not.toBe(pagoRecordKey(pago({ tipoPago: 'PK' })));
   });
 });

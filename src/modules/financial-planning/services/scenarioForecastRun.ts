@@ -3,7 +3,6 @@ import type { CXPRecord } from '../../../domain/persistence';
 import type { CxpPaymentCoverage } from '../../../domain/paymentReconciliationEngine';
 import type { AuxiliarReconResult } from '../../../domain/auxiliarReconciliationEngine';
 import type { CashFlowAssumptions, Client, Provider } from '../../../domain/types';
-import type { BankAccountStatement } from '../../../services/jde';
 import type { CobranzaPayment } from '../../../services/jdeTypes';
 import {
   applyAdjustmentsToMovements,
@@ -78,15 +77,6 @@ export interface BuildScenarioForecastRunArgs {
   budget: Budget | null;
   companyCode: string;
   taxStore: TaxStore;
-  /**
-   * Estados de cuenta Bajío. Ya NO los lee esta corrida (2026-09-21): el
-   * ingreso Corning lo emite MOTOR 1 y re-inyectarlo duplicaba. Se conserva
-   * el arg —y su tramo en `planningSharedRunInputsKey`— porque sacarlo toca
-   * 7 archivos (worker args, llave de corrida y su matriz, 3 tableros,
-   * AppCore); es limpieza de plomería pendiente, no un input vivo. Mientras
-   * siga aquí, subir un CSV de Bajío invalida corridas sin necesidad.
-   */
-  bajioStatements?: BankAccountStatement[];
   startDate: string;
   endDate: string;
   today: string;

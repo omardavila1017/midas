@@ -56,6 +56,8 @@ export interface AnomalyOptions {
    * marcar conceptos minúsculos como anomalías ruidosas.
    */
   relevanceFloor: number;
+  /** Reloj inyectable (ISO `YYYY-MM-DD`). En runtime es hoy. */
+  todayIso: string;
 }
 
 export const DEFAULT_ANOMALY_OPTIONS: AnomalyOptions = {
@@ -65,6 +67,7 @@ export const DEFAULT_ANOMALY_OPTIONS: AnomalyOptions = {
   zCritico: 3,
   momMedioPct: 40,
   relevanceFloor: 0.02,
+  todayIso: new Date().toISOString().slice(0, 10),
 };
 
 function mean(xs: number[]): number {
@@ -167,7 +170,21 @@ export function detectPayrollAnomalies(
 
   // Excluye meses parciales/truncados.
   const suspect = new Set(findSuspectMonths(records).map(s => `${s.year}-${String(s.month).padStart(2, '0')}`));
-  const clean = records.filter(r => !suspect.has(`${r.year}-${String(r.month).padStart(2, '0')}`));
+  // …y el mes EN CURSO y los FUTUROS, que las firmas de `findSuspectMonths` no
+  // cubren: la Firma 3 exenta al mes en curso a propósito, la Firma 1 exige
+  // cero deducciones Y cero aportaciones (un mes a un cuarto sí las trae), y la
+  // Firma 2 pide ratio bajo Y gross por debajo del 25% del techo — un mes a la
+  // mitad tiene ratio sano y pasa. Medido el 2026-09-21: septiembre llevaba
+  // $120.6M contra $237.7M de agosto (49% corto) y NINGUNA firma lo marcaba,
+  // así que entraba a la serie como mes cerrado y casi todo concepto salía
+  // CRÍTICO "abajo del promedio". Un mes en progreso no es un total mensual —
+  // mismo criterio, y por la misma razón, que `payrollOperatingFloor`. TRESS
+  // además carga meses por adelantado (octubre ya traía $67k el 21-sep).
+  const currentMonth = opts.todayIso.slice(0, 7);
+  const clean = records.filter(r => {
+    const ym = `${r.year}-${String(r.month).padStart(2, '0')}`;
+    return !suspect.has(ym) && ym < currentMonth;
+  });
   if (clean.length === 0) return [];
 
   const months = distinctMonths(clean);

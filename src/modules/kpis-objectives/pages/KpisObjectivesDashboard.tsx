@@ -43,7 +43,6 @@ import { AlertTriangle, Scale, TrendingDown, TrendingUp, Wallet } from 'lucide-r
 interface Props {
   companyCode?: string;
   bankStatements: BankAccountStatement[];
-  bajioStatements?: BankAccountStatement[];
   clients?: Client[];
   providers?: Provider[];
   cobranzaRecords: CobranzaRecord[];
@@ -63,7 +62,6 @@ interface Props {
 export default function KpisObjectivesDashboard({
   companyCode = 'all',
   bankStatements,
-  bajioStatements = [],
   clients = [],
   providers = [],
   cobranzaRecords,
@@ -198,7 +196,6 @@ export default function KpisObjectivesDashboard({
         minimumCash: 20_000_000,
         granularity: 'monthly',
         includeManualEntries: true,
-        bajioStatements,
         paidPurchaseOrderKeys: source.paidPurchaseOrderKeys,
       });
 
@@ -211,7 +208,6 @@ export default function KpisObjectivesDashboard({
     activeScenarioId,
     assumptions,
     auxiliarReconciliation,
-    bajioStatements,
     bankStatements,
     budget,
     clients,

@@ -317,9 +317,11 @@ function movement(
   category: FinancialMovement['category'],
   amount: number,
   date: string,
+  companyId = '00011',
 ): FinancialMovement {
   return {
-    id: `${type}:${category}:${amount}:${date}`,
+    id: `${type}:${category}:${amount}:${date}:${companyId}`,
+    companyId,
     sourceSystem: type === 'INFLOW' ? 'JDE' : 'BANK',
     type,
     category,

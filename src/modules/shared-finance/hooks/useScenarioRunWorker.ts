@@ -63,14 +63,13 @@ const HEAVY_KEYS = [
   'purchaseReceipts',
   'payrollCosts',
   'cobranzaPayments',
-  'bajioStatements',
 ] as const;
 
 function splitArgs(a: BuildScenarioForecastRunArgs): { heavy: HeavySourceBundle; light: LightRunArgs } {
   const {
     sourceMovements, clients, providers, cxpRecords,
     cxpPaymentCoverage, auxiliarReconciliation,
-    purchaseReceipts, payrollCosts, cobranzaPayments, bajioStatements,
+    purchaseReceipts, payrollCosts, cobranzaPayments,
     ...light
   } = a;
   return {
@@ -84,7 +83,6 @@ function splitArgs(a: BuildScenarioForecastRunArgs): { heavy: HeavySourceBundle;
       purchaseReceipts,
       payrollCosts,
       cobranzaPayments,
-      bajioStatements,
     },
     light: light as LightRunArgs,
   };

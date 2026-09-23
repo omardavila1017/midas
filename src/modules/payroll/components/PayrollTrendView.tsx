@@ -22,11 +22,12 @@ import {
   YAxis,
 } from 'recharts';
 import { ArrowDownRight, ArrowRight, ArrowUpRight, TrendingUp } from 'lucide-react';
-import { fmtCompact, fmtCurrency } from '../../../formatters';
+import { fmtCompact, fmtCurrency, todayISO } from '../../../formatters';
 import EmptyState from '../../shared-finance/components/EmptyState';
 import type { PayrollCostRecord } from '../../shared-finance/types';
 import {
   buildPayrollTimeSeries,
+  isoWeekMonday,
   seriesVariation,
   type PayrollGranularity,
 } from '../services/payrollAnalyticsService';
@@ -42,10 +43,40 @@ export default function PayrollTrendView({ records }: { records: PayrollCostReco
     return granularity === 'weekly' ? all.slice(-WEEKLY_WINDOW) : all;
   }, [records, granularity]);
 
+  // El ÚLTIMO bucket casi nunca es comparable: el mes/semana en curso está a
+  // medias y TRESS además carga periodos por adelantado (el 21-sep, octubre ya
+  // traía $67k). Compararlo contra un periodo completo pinta una caída que no
+  // ocurrió — medido el 2026-09-21, septiembre iba en $120.6M contra $237.7M de
+  // agosto por estar a medio mes. La serie SÍ los sigue graficando (es una
+  // tendencia); lo que no puede usarlos es el KPI de variación. Mismo criterio
+  // que `payrollOperatingFloor` y `detectPayrollAnomalies`.
+  const closedSeries = useMemo(() => {
+    const today = todayISO();
+    const cutoff = granularity === 'weekly' ? (isoWeekMonday(today) ?? today) : today.slice(0, 7);
+    return series.filter(p => p.bucket < cutoff);
+  }, [series, granularity]);
+
   const variation = useMemo(
-    () => seriesVariation(series.map(p => p.employerCost)),
-    [series],
+    () => seriesVariation(closedSeries.map(p => p.employerCost)),
+    [closedSeries],
   );
+
+  // `buildPayrollTimeSeries` sólo emite los periodos PRESENTES, así que si
+  // falta uno (un backfill que falló) los dos últimos no son consecutivos y
+  // "vs mes anterior" mentiría sobre qué se está comparando.
+  const comparedAreAdjacent = useMemo(() => {
+    if (closedSeries.length < 2) return true;
+    const [prev, curr] = closedSeries.slice(-2);
+    if (granularity === 'weekly') {
+      const next = new Date(`${prev.bucket}T00:00:00Z`);
+      next.setUTCDate(next.getUTCDate() + 7);
+      return next.toISOString().slice(0, 10) === curr.bucket;
+    }
+    const [y, m] = prev.bucket.split('-').map(Number);
+    const ny = m === 12 ? y + 1 : y;
+    const nm = m === 12 ? 1 : m + 1;
+    return `${ny}-${String(nm).padStart(2, '0')}` === curr.bucket;
+  }, [closedSeries, granularity]);
 
   if (records.length === 0) {
     return (
@@ -57,7 +88,9 @@ export default function PayrollTrendView({ records }: { records: PayrollCostReco
     );
   }
 
-  const periodLabel = granularity === 'weekly' ? 'vs semana anterior' : 'vs mes anterior';
+  const periodLabel = comparedAreAdjacent
+    ? (granularity === 'weekly' ? 'vs semana anterior' : 'vs mes anterior')
+    : (granularity === 'weekly' ? 'vs la semana previa CON DATO' : 'vs el mes previo CON DATO');
   const deltaColor = variation.deltaAbs > 0 ? 'var(--danger)' : variation.deltaAbs < 0 ? 'var(--success)' : 'var(--gray-400)';
   const DeltaIcon = variation.deltaAbs > 0 ? ArrowUpRight : variation.deltaAbs < 0 ? ArrowDownRight : ArrowRight;
 

@@ -28,7 +28,22 @@ export function pushPlanningDoc(docKey: PlanningDocKey, value: unknown): void {
 }
 
 function isEmptyDoc(value: unknown): boolean {
-  return value == null || (Array.isArray(value) && value.length === 0);
+  return Array.isArray(value) && value.length === 0;
+}
+
+/**
+ * Desenvuelve el sobre `{ value, updatedAt }` si el upstream lo usa. `getDoc`
+ * (remoteStore) ya es tolerante a los dos shapes; `batchGet` devuelve el valor
+ * crudo, así que esta ruta tenía que serlo también: sin esto se escribía el
+ * OBJETO ENVOLVENTE al espejo local, los seis loaders veían un no-arreglo,
+ * devolvían `[]` y los tableros persistían ese `[]` encima — el trabajo del
+ * usuario, borrado por un detalle de shape.
+ */
+function unwrapDoc(value: unknown): unknown {
+  if (value && typeof value === 'object' && !Array.isArray(value) && 'value' in (value as Record<string, unknown>)) {
+    return (value as { value: unknown }).value;
+  }
+  return value;
 }
 
 /**
@@ -43,8 +58,12 @@ export async function hydratePlanningFromServer(): Promise<boolean> {
   let changed = false;
   for (const docKey of PLANNING_DOC_KEYS) {
     const localKey = PLANNING_LOCAL_KEY[docKey];
-    if (docKey in remote) {
-      const value = (remote as Record<string, unknown>)[docKey];
+    // `null` presente = el server NO tiene el doc (semántica habitual de un
+    // batch-get), no "el doc está vacío". Tratarlo como vacío BORRABA el
+    // espejo local en vez de sembrarlo hacia arriba.
+    const rawRemote = (remote as Record<string, unknown>)[docKey];
+    if (docKey in remote && rawRemote != null) {
+      const value = unwrapDoc(rawRemote);
       try {
         const current = localStorage.getItem(localKey);
         if (isEmptyDoc(value)) {

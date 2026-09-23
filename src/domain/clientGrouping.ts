@@ -6,6 +6,7 @@ import {
 } from './types';
 import { projectClientMonth, projectYear } from './collectionEngine';
 import type { CobranzaRecord } from '../services/jdeTypes';
+import { isGenericRfc } from './rfc';
 import { todayISO } from '../formatters';
 
 /**
@@ -363,7 +364,14 @@ function groupSignalForClient(client: Client, jdeInfo: CobranzaAccountInfo | nul
   }
 
   const rfc = normalizeRfc(client.rfc);
-  if (rfc.length >= 10) {
+  // El RFC GENÉRICO no identifica a nadie: `XAXX010101000` (público en
+  // general) y `XEXX010101000` (extranjero) son un marcador de "sin RFC".
+  // Usarlo como llave colapsaba en UN solo grupo comercial —con confianza
+  // 0.97— a todo cliente que lo trajera. Medido en `jde.Cobranza_Citi`
+  // (2026-09-21): 9 clientes distintos en 10,233 facturas caían en 2 grupos
+  // falsos, y de ahí se contaminaban su historial de facturación y la
+  // proyección de cobranza por cliente.
+  if (rfc.length >= 10 && !isGenericRfc(rfc)) {
     return {
       id: `client-rfc-${rfc}`,
       name: titleCase(significantTokens(client.legalName || client.name).slice(0, 2).join(' ') || client.name),

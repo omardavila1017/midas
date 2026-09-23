@@ -17,6 +17,10 @@ function inv(partial: Partial<CobranzaRecord>): CobranzaRecord {
     fechaCobro: '',
     diasVencida: 0,
     importeBrutoPesos: 1000,
+    // Exenta por defecto (IVA=0) para que el bruto de cada fixture YA sea la
+    // venta neta: así estos casos siguen midiendo lo suyo (meses, cancelados,
+    // post-fechadas) y no la conversión sin-IVA, que tiene sus propios tests.
+    importeIVA: 0,
     importePendientePesos: 0,
     importeBrutoDolares: 0,
     importePendienteDolares: 0,
@@ -72,6 +76,38 @@ describe('computeMonthlyBillingFromRecords — B2.7', () => {
     );
     expect(b.values[2]).toBe(1000); // la cancelada de 9999 NO cuenta
     expect(b.invoiceCount).toBe(1);
+  });
+
+  /**
+   * La UI rotula esta serie "Facturación mensual (sin IVA)" y encima deriva
+   * "IVA (16%)" y "Total con IVA" multiplicándola. Sumar `importeBrutoPesos`
+   * —que viene CON IVA— inflaba la base 16% y cobraba el impuesto dos veces.
+   */
+  it('suma la venta NETA, no el bruto con IVA', () => {
+    const b = computeMonthlyBillingFromRecords(
+      [inv({ fechaFactura: '2026-03-10', importeBrutoPesos: 11_600, importeIVA: 1_600 })],
+      YEAR,
+      REFERENCE_MONTH,
+    );
+    expect(b.values[2]).toBe(10_000);
+  });
+
+  it('prefiere subTotal cuando viene poblado', () => {
+    const b = computeMonthlyBillingFromRecords(
+      [inv({ fechaFactura: '2026-03-10', importeBrutoPesos: 11_600, subTotal: 10_000 })],
+      YEAR,
+      REFERENCE_MONTH,
+    );
+    expect(b.values[2]).toBe(10_000);
+  });
+
+  it('estima al 16% cuando la factura no trae desglose de IVA', () => {
+    const b = computeMonthlyBillingFromRecords(
+      [inv({ fechaFactura: '2026-03-10', importeBrutoPesos: 11_600, importeIVA: undefined })],
+      YEAR,
+      REFERENCE_MONTH,
+    );
+    expect(b.values[2]).toBeCloseTo(10_000, 6);
   });
 
   it('ignores post-dated invoices beyond the reference month (hasta fecha reciente)', () => {

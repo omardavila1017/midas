@@ -96,6 +96,7 @@ import { buildCustomConceptKey, loadCustomRows, saveCustomRows } from '../servic
 import { loadChangeLog, saveChangeLog } from '../services/changeLogStorage';
 import { hydratePlanningFromServer } from '../services/planningRemoteSync';
 import { debouncedPersist } from '../services/debouncedPersist';
+import { newPlanningDocOrigin, subscribePlanningDocs } from '../services/planningDocSync';
 import {
   describeAddRow,
   describeClearCell,
@@ -158,15 +159,6 @@ interface Props {
   assumptions: CashFlowAssumptions;
   budget: Budget | null;
   startingBalance?: number;
-  /**
-   * Estados de cuenta Bajío. El comentario previo afirmaba que
-   * `bankStatements` viene SIN Bajío (`excludeBajio`) — falso desde
-   * 2026-06-04: `excludeBajio` no tiene un solo call site y Bajío SÍ se
-   * contabiliza, así que esto es un SUBCONJUNTO de `bankStatements`. Ya no
-   * alimenta ninguna re-inyección (duplicaba el ingreso Corning); sólo sigue
-   * viajando en la llave de corrida. Ver `fideicomisoMovements.ts`.
-   */
-  bajioStatements?: BankAccountStatement[];
   /**
    * Costo real de nómina del mes en curso (TRESS). Entra al piso operativo que
    * define el umbral de "Días en déficit" — mismo contrato que Proyección.
@@ -337,7 +329,7 @@ export default function FinancialPlanningDashboard(props: Props) {
   // INVARIANTE DE ESTABILIDAD (2026-07-31): una vez que el tablero pintó cifras
   // reales NUNCA regresa al warm-up shell porque llegó data de fondo.
   //
-  // Las deps de abajo (bancos, proveedores, saldo inicial, cía, Bajío) cambian
+  // Las deps de abajo (bancos, proveedores, saldo inicial, cía) cambian
   // de IDENTIDAD con cada ola posterior al boot — `accountableBankStatements` es
   // el array de estado crudo de AppCore, así que un delta de bancos, un backfill
   // o una revalidación basta. Bajar `scenarioRunCacheReady` a `false` en ese
@@ -376,7 +368,6 @@ export default function FinancialPlanningDashboard(props: Props) {
     props.startingBalance,
     props.companyCode,
     props.providers,
-    props.bajioStatements,
   ]);
 
   // Segundo paint gate: una vez `source` está listo, esperamos un frame
@@ -476,7 +467,6 @@ async function preloadPlanningScenarioRuns(input: {
     taxStore,
     providers: props.providers,
     cobranzaPayments: props.cobranzaPayments,
-    bajioStatements: props.bajioStatements,
     auxiliarReconciliation: props.auxiliarReconciliation,
     cxpPaymentCoverage: props.cxpPaymentCoverage,
     yearStart,
@@ -594,12 +584,39 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
   // (JSON.stringify of these arrays is multi-MB on real datasets and was
   // blocking the main thread per keystroke). Flushed on beforeunload/pagehide
   // so no data is lost.
-  useEffect(() => { debouncedPersist('planning.scenarios', storedScenarios, savePlanningScenarios); }, [storedScenarios]);
-  useEffect(() => { debouncedPersist('planning.adjustments', storedAdjustments, savePlanningAdjustments); }, [storedAdjustments]);
-  useEffect(() => { debouncedPersist('planning.manualEntries', manualEntries, saveManualPlanningEntries); }, [manualEntries]);
-  useEffect(() => { debouncedPersist('planning.customRows', customRows, saveCustomRows); }, [customRows]);
-  useEffect(() => { debouncedPersist('planning.cellOverrides', cellOverrides, saveCellOverrides); }, [cellOverrides]);
-  useEffect(() => { debouncedPersist('planning.changeLog', changeLog, saveChangeLog); }, [changeLog]);
+  // Los seis documentos los edita TAMBIÉN Proyección, y `KeepAlivePanel` deja
+  // los dos tableros montados. Cada uno persiste el arreglo completo, así que
+  // sin esto el segundo en escribir borra lo del primero — ver `planningDocSync`.
+  const docOriginRef = useRef<string>();
+  if (!docOriginRef.current) docOriginRef.current = newPlanningDocOrigin('planning');
+  // Llaves recién recargadas desde el espejo: su efecto de persistencia se
+  // salta UNA vez para no devolver el eco al otro tablero.
+  const skipNextPersistRef = useRef<Set<string>>(new Set());
+  const persistDoc = useCallback(<T,>(key: string, value: T, save: (v: T) => void) => {
+    if (skipNextPersistRef.current.delete(key)) return;
+    debouncedPersist(key, value, save, docOriginRef.current);
+  }, []);
+
+  useEffect(() => { persistDoc('planning.scenarios', storedScenarios, savePlanningScenarios); }, [storedScenarios, persistDoc]);
+  useEffect(() => { persistDoc('planning.adjustments', storedAdjustments, savePlanningAdjustments); }, [storedAdjustments, persistDoc]);
+  useEffect(() => { persistDoc('planning.manualEntries', manualEntries, saveManualPlanningEntries); }, [manualEntries, persistDoc]);
+  useEffect(() => { persistDoc('planning.customRows', customRows, saveCustomRows); }, [customRows, persistDoc]);
+  useEffect(() => { persistDoc('planning.cellOverrides', cellOverrides, saveCellOverrides); }, [cellOverrides, persistDoc]);
+  useEffect(() => { persistDoc('planning.changeLog', changeLog, saveChangeLog); }, [changeLog, persistDoc]);
+
+  // Re-hidrata la llave que escribió el OTRO tablero.
+  useEffect(() => subscribePlanningDocs(docOriginRef.current!, (key) => {
+    skipNextPersistRef.current.add(key);
+    switch (key) {
+      case 'planning.scenarios': setStoredScenarios(loadPlanningScenarios([])); break;
+      case 'planning.adjustments': setStoredAdjustments(loadPlanningAdjustments([])); break;
+      case 'planning.manualEntries': setManualEntries(loadManualPlanningEntries([])); break;
+      case 'planning.customRows': setCustomRows(loadCustomRows([])); break;
+      case 'planning.cellOverrides': setCellOverrides(loadCellOverrides([])); break;
+      case 'planning.changeLog': setChangeLog(loadChangeLog([])); break;
+      default: skipNextPersistRef.current.delete(key);
+    }
+  }), []);
 
   useEffect(() => {
     const reloadTaxStore = () => setTaxStore(loadTaxStore(defaultTaxStore()));
@@ -768,7 +785,6 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
       taxStore,
       providers: props.providers,
       cobranzaPayments: props.cobranzaPayments,
-      bajioStatements: props.bajioStatements,
       auxiliarReconciliation: props.auxiliarReconciliation,
       cxpPaymentCoverage: props.cxpPaymentCoverage,
       yearStart,
@@ -786,7 +802,6 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
     taxStore,
     props.providers,
     props.cobranzaPayments,
-    props.bajioStatements,
     props.auxiliarReconciliation,
     props.cxpPaymentCoverage,
     yearStart,
@@ -857,7 +872,6 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
         startDate: yearStart,
         endDate: yearEnd,
         today,
-        bajioStatements: props.bajioStatements ?? [],
         initialCash,
         supplierInitialCash,
         minimumCash,

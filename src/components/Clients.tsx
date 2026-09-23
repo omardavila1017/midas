@@ -1082,7 +1082,10 @@ function ClientEditor({
         {hasData && (
           <div className="mt-2 flex items-center gap-1.5 text-[11px] text-[var(--gray-400)]">
             <TrendingUp className="h-3 w-3" />
-            {billing!.historicalMonths} mes{billing!.historicalMonths === 1 ? '' : 'es'} de histórico
+            {/* Son los meses OBSERVADOS del año, no los meses con factura: un
+                mes pasado sin facturación es dato real ("no se facturó"), no un
+                hueco. Decir "de histórico" a secas se leía como lo segundo. */}
+            {billing!.historicalMonths} mes{billing!.historicalMonths === 1 ? '' : 'es'} observado{billing!.historicalMonths === 1 ? '' : 's'}
           </div>
         )}
       </section>

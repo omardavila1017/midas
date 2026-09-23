@@ -701,6 +701,11 @@ export async function fetchRangeWithChunkedDailyCache<T>(
   let done = 0;
   onProgress?.(done, days.length);
 
+  // Chunks que una carrera con el prune obliga a re-fetchear (ver abajo). El
+  // loop de fetch corre DESPUÉS de este reader, así que empujarlos a
+  // `chunksNeedFetch` basta para que los recoja.
+  const requeuedChunks = new Set<number>();
+
   // Serve all-cached chunks.
   {
     let rc = 0;
@@ -709,7 +714,8 @@ export async function fetchRangeWithChunkedDailyCache<T>(
       while (true) {
         const slot = rc++;
         if (slot >= allCachedChunks.length) return;
-        const win = windows[allCachedChunks[slot]];
+        const chunkIdx = allCachedChunks[slot];
+        const win = windows[chunkIdx];
         for (const day of win) {
           const hit = await getDailyCachedAsync<T>(api, day, cia);
           const idx = dayIndex.get(day)!;
@@ -717,8 +723,17 @@ export async function fetchRangeWithChunkedDailyCache<T>(
             out[idx] = hit;
             if (hit.length > 0) { try { onDay?.(hit); } catch { /* swallow */ } }
           } else {
-            // Race con prune: queda vacío; el chunk no se re-fetchea.
+            // Carrera con un prune o un delete entre la comprobación de
+            // membresía (sync) y la lectura del payload (async): re-fetch del
+            // chunk, igual que hace la ruta no-chunked. Dejarlo en `[]` era la
+            // única rama del archivo que degradaba en silencio — y en el
+            // auxiliar, que es quien usa esta ruta, un día vacío se lee como
+            // "no hubo movimiento contable", no como "no se pudo leer".
             out[idx] = [];
+            if (!requeuedChunks.has(chunkIdx)) {
+              requeuedChunks.add(chunkIdx);
+              chunksNeedFetch.push(chunkIdx);
+            }
           }
           done++;
           onProgress?.(done, days.length);

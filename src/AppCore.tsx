@@ -137,11 +137,11 @@ import { filterActiveCompanies, matchesExclusionIdentity } from './domain/compan
 import { applyViajesEspecialesGroup } from './domain/viajesEspecialesCatalog';
 import {
   attachImportedStatementsToKnownCompanies,
-  isBajioStatement,
   latestStatementDate,
   mergeBankStatements,
   type BankQueryState,
 } from './domain/bankStatements';
+import { pagoRecordKey } from './domain/pagoRecordKey';
 import { summarizeBankFreshnessByCompany, summarizeManualBankFreshness } from './domain/bankSourceFreshness';
 import {
   summarizeSourceDataFreshnessPreferred,
@@ -1234,15 +1234,6 @@ export default function App() {
   // Banamex, así que incluir ambos lados netea solo. `accountableBankStatements`
   // == todos los estados (ya sin Multicarga/empresa 33 vía EXCLUSION_RULES).
   const accountableBankStatements = bankStatements;
-  // Bajío se separa aquí SÓLO para el tablero del fideicomiso Dina, que pinta
-  // su sub-libro (depósitos Corning vs obligación DINA). NO se re-inyecta a la
-  // proyección: es un SUBCONJUNTO de `accountableBankStatements`, así que
-  // MOTOR 1 ya emite esos ABONOs y volver a inyectarlos los contaba dos veces
-  // (corregido 2026-09-21 — ver el docblock de `fideicomisoMovements.ts`).
-  const bajioStatements = useMemo(
-    () => bankStatements.filter(isBajioStatement),
-    [bankStatements],
-  );
   // PERF (2026-05-14): los heavy memos (paymentReconciliation,
   // payrollMonthlyActualJDE, etc.) iteran cientos de miles
   // de records por commit de boot. Sin deferred React procesa el memo dentro
@@ -1371,7 +1362,7 @@ export default function App() {
   const nonInternalPagoProveedorRecords = useMemo(() => {
     const internalKeys = paymentReconciliationDeferred.internalPaymentKeys;
     if (internalKeys.size === 0) return pagoProveedorRecordsDeferred;
-    return pagoProveedorRecordsDeferred.filter((record) => !internalKeys.has(`${record.cia}::${record.noPago}`));
+    return pagoProveedorRecordsDeferred.filter((record) => !internalKeys.has(pagoRecordKey(record)));
   }, [pagoProveedorRecordsDeferred, paymentReconciliationDeferred]);
   // ── Cruce cobranza ↔ bancos (compartido) ──────────────────────────────
   // Es un motor pesado (texto + subset-sum), así que no corre durante render.
@@ -3226,7 +3217,7 @@ export default function App() {
     // `data: []`. En esta branch (no-long-term-projection) NO se proyectan
     // OCs futuras no emitidas: el egreso de compras es solo OC real
     // (F_Recepcion + D_Credito) + CXP abierto.
-    const fechaFinal = today.toISOString().slice(0, 10);
+    const fechaFinal = todayISO();
     // Ventana por defecto uniforme (año en curso + 12 meses atrás). Cubre el
     // año fiscal de compras que la auditoría Pago↔CXP↔OC necesita; OCs previas
     // se cargan bajo demanda (DataWindowContext). El piso de OCs aún ABIERTAS
@@ -3379,7 +3370,12 @@ export default function App() {
     // necesita backfill (días viejos de la ventana). Ambos → refetch.
     // Floor = ventana por defecto uniforme (año en curso + 12 meses atrás).
     const expectedFloorDate = defaultWindowFloor();
-    const expectedTopDate = new Date().toISOString().slice(0, 10);
+    // `todayISO()` (America/Mexico_City), NO `toISOString()`: éste último es UTC y
+    // entre las 18:00 y la medianoche de CDMX devuelve MAÑANA. Eso pedía un día
+    // futuro al API y, peor, hacía que la comprobación de cobertura
+    // (`loadedThrough < expectedTopDate`) fuera SIEMPRE verdadera → toda cía se
+    // evaluaba stale y se re-fetcheaba en cada boot, cada tarde.
+    const expectedTopDate = todayISO();
     const minDateByCia = new Map<string, string>();
     const maxDateByCia = new Map<string, string>();
     for (const r of auxiliarContableRecords) {
@@ -3413,7 +3409,7 @@ export default function App() {
     setBootSlot('auxiliar', 'loading');
     setDatasetSlot('auxiliar', 'loading');
     const today = new Date();
-    const fechaFinal = today.toISOString().slice(0, 10);
+    const fechaFinal = todayISO();
     // Piso = ventana por defecto uniforme (`defaultWindowFloor`: año en curso +
     // 12 meses atrás). Antes bajaba hasta 2 años con piso duro 2025-01-01;
     // ahora arranca en el piso compartido y los libros previos se cargan bajo
@@ -3517,13 +3513,21 @@ export default function App() {
         };
         const flushInterval = window.setInterval(() => flush('throttle'), 3000);
 
+        // `seenKeys` evita re-mergear lo ya hidratado (el Map se mantiene chico),
+        // PERO no debe aplicarse a los días que estamos revalidando a propósito:
+        // ahí el punto es justamente que la línea CAMBIÓ (importe corregido,
+        // reversa, `estatusConciliado` pasando a 'R'). Con el guard a secas el
+        // refetch de `AUX_PARTIAL_REVALIDATE_DAYS` se tiraba a la basura y sólo
+        // entraban llaves nuevas — el mecanismo quedaba a medias sin decirlo.
+        // El merge de `flush` ya es last-wins, así que dejarlas pasar basta.
         const onDay = (batch: AuxiliarContableRecord[]) => {
           for (const r of batch) {
             const k = keyOf(r);
-            if (!seenKeys.has(k) && !mergedByKey.has(k)) {
-              mergedByKey.set(k, r);
-              dirty = true;
-            }
+            const inRevalidationWindow = (r.fechaContable ?? '') >= auxRevalidateSince;
+            if (mergedByKey.has(k) && !inRevalidationWindow) continue;
+            if (seenKeys.has(k) && !inRevalidationWindow) continue;
+            mergedByKey.set(k, r);
+            dirty = true;
           }
         };
 
@@ -3614,7 +3618,7 @@ export default function App() {
     }
     const now = new Date();
     const expectedFloorDate = `${now.getUTCFullYear()}-01-01`;
-    const expectedTopDate = now.toISOString().slice(0, 10);
+    const expectedTopDate = todayISO();
     const ciasToFetch = activeCias.filter(cia => {
       const meta = auxiliarIvaLoadedCias[cia];
       if (!meta || meta.version !== AUX_IVA_LEDGER_VERSION) return true;
@@ -3808,7 +3812,7 @@ export default function App() {
     setBootSlot('pagos', 'loading');
     setDatasetSlot('pagos', 'loading');
     const today = new Date();
-    const fechaFinal = today.toISOString().slice(0, 10);
+    const fechaFinal = todayISO();
     // Ventana por defecto uniforme (año en curso + 12 meses atrás); pagos
     // previos se cargan bajo demanda (DataWindowContext).
     const lookbackStart = defaultWindowFloor(today);
@@ -3848,8 +3852,8 @@ export default function App() {
           // Siempre merge para preservar historia hidratada desde el store.
           setPagoProveedorRecords(prev => {
             const map = new Map<string, PagoProveedorRecord>();
-            for (const r of prev) map.set(`${r.cia}::${r.noPago}`, r);
-            for (const r of fetched) map.set(`${r.cia}::${r.noPago}`, r);
+            for (const r of prev) map.set(pagoRecordKey(r), r);
+            for (const r of fetched) map.set(pagoRecordKey(r), r);
             return Array.from(map.values());
           });
         }
@@ -4115,7 +4119,7 @@ export default function App() {
       // defecto. Años previos → carga diferida (DataWindowContext). ROL corre
       // detrás del splash (Fase 0), así que el rango extra no retrasa el boot.
       const yearStart = defaultWindowFloor(today);
-      const fechaFinal = today.toISOString().slice(0, 10);
+      const fechaFinal = todayISO();
       const cacheKey = `${year}:full`;
       // Refresh si force=true, si no hay cache aún, o si el timestamp es viejo.
       const lastFetch = rolLoadedKeys[cacheKey];
@@ -4282,7 +4286,7 @@ export default function App() {
       // Ventana por defecto uniforme (año en curso + 12 meses atrás); años
       // previos se cargan bajo demanda (DataWindowContext).
       const yearStart = defaultWindowFloor(today);
-      const fechaFinal = today.toISOString().slice(0, 10);
+      const fechaFinal = todayISO();
       const cacheKey = `${year}:full`;
       const lastFetch = viajesEspecialesLoadedKeys[cacheKey];
       if (!force && viajesEspecialesRecords.length > 0 && lastFetch && isFreshTimestamp(lastFetch, COBRANZA_AUTO_REFRESH_TTL_MS)) {
@@ -4904,8 +4908,8 @@ export default function App() {
     if (fetched.length > 0) {
       setPagoProveedorRecords(prev => {
         const map = new Map<string, PagoProveedorRecord>();
-        for (const r of prev) map.set(`${r.cia}::${r.noPago}`, r);
-        for (const r of fetched) map.set(`${r.cia}::${r.noPago}`, r);
+        for (const r of prev) map.set(pagoRecordKey(r), r);
+        for (const r of fetched) map.set(pagoRecordKey(r), r);
         const merged = Array.from(map.values());
         void saveHeavyRecords('pagoProveedorRecords', merged);
         return merged;
@@ -5685,7 +5689,6 @@ export default function App() {
   const planningProps = useMemo(() => ({
     companyCode: selectedCia,
     bankStatements: accountableBankStatements,
-    bajioStatements,
     clients,
     providers,
     cxpRecords,
@@ -5708,7 +5711,6 @@ export default function App() {
   }), [
     selectedCia,
     accountableBankStatements,
-    bajioStatements,
     clients,
     providers,
     cxpRecords,
@@ -6256,7 +6258,6 @@ export default function App() {
                 <KpisObjectivesDashboard
                   companyCode={selectedCia}
                   bankStatements={accountableBankStatements}
-                  bajioStatements={bajioStatements}
                   clients={clients}
                   providers={providers}
                   cobranzaRecords={cobranzaRecords}

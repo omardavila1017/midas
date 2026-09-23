@@ -81,6 +81,7 @@ import { loadCustomRows, saveCustomRows } from '../../financial-planning/service
 import { createNewDraft } from '../../financial-planning/services/scenarioDuplicate';
 import { loadChangeLog, saveChangeLog } from '../../financial-planning/services/changeLogStorage';
 import { debouncedPersist } from '../../financial-planning/services/debouncedPersist';
+import { newPlanningDocOrigin, subscribePlanningDocs } from '../../financial-planning/services/planningDocSync';
 import { newChangeLogEntry } from '../../financial-planning/services/changeLogTemplates';
 import { type ScenarioForecastRun } from '../../financial-planning/services/scenarioForecastRun';
 import { APPROVED_SCENARIO_ID, BASE_SCENARIO_ID, ensureCoreScenarios } from '../../financial-planning/services/scenarioBootstrap';
@@ -730,30 +731,57 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
   const savedOverridesRef = useRef(false);
   const savedCustomRowsRef = useRef(false);
   const savedChangeLogRef = useRef(false);
+  // Planeación edita los MISMOS seis documentos y `KeepAlivePanel` deja los dos
+  // tableros montados; cada uno persiste el arreglo completo, así que sin la
+  // sincronización el segundo en escribir borra lo del primero — ver
+  // `planningDocSync`. Aquí el daño era concreto: una propuesta creada en este
+  // tablero desaparecía en cuanto una ola de rebuild disparaba el bootstrap de
+  // Planeación sobre su snapshot viejo.
+  const docOriginRef = useRef<string>();
+  if (!docOriginRef.current) docOriginRef.current = newPlanningDocOrigin('projection');
+  const skipNextPersistRef = useRef<Set<string>>(new Set());
+  const persistDoc = useCallback(<T,>(key: string, value: T, save: (v: T) => void) => {
+    if (skipNextPersistRef.current.delete(key)) return;
+    debouncedPersist(key, value, save, docOriginRef.current);
+  }, []);
   useEffect(() => {
     if (!savedScenariosRef.current) { savedScenariosRef.current = true; return; }
-    debouncedPersist('planning.scenarios', storedScenarios, savePlanningScenarios);
-  }, [storedScenarios]);
+    persistDoc('planning.scenarios', storedScenarios, savePlanningScenarios);
+  }, [storedScenarios, persistDoc]);
   useEffect(() => {
     if (!savedAdjustmentsRef.current) { savedAdjustmentsRef.current = true; return; }
-    debouncedPersist('planning.adjustments', storedAdjustments, savePlanningAdjustments);
-  }, [storedAdjustments]);
+    persistDoc('planning.adjustments', storedAdjustments, savePlanningAdjustments);
+  }, [storedAdjustments, persistDoc]);
   useEffect(() => {
     if (!savedManualRef.current) { savedManualRef.current = true; return; }
-    debouncedPersist('planning.manualEntries', manualEntries, saveManualPlanningEntries);
-  }, [manualEntries]);
+    persistDoc('planning.manualEntries', manualEntries, saveManualPlanningEntries);
+  }, [manualEntries, persistDoc]);
   useEffect(() => {
     if (!savedOverridesRef.current) { savedOverridesRef.current = true; return; }
-    debouncedPersist('planning.cellOverrides', cellOverrides, saveCellOverrides);
-  }, [cellOverrides]);
+    persistDoc('planning.cellOverrides', cellOverrides, saveCellOverrides);
+  }, [cellOverrides, persistDoc]);
   useEffect(() => {
     if (!savedCustomRowsRef.current) { savedCustomRowsRef.current = true; return; }
-    debouncedPersist('planning.customRows', customRows, saveCustomRows);
-  }, [customRows]);
+    persistDoc('planning.customRows', customRows, saveCustomRows);
+  }, [customRows, persistDoc]);
   useEffect(() => {
     if (!savedChangeLogRef.current) { savedChangeLogRef.current = true; return; }
-    debouncedPersist('planning.changeLog', changeLog, saveChangeLog);
-  }, [changeLog]);
+    persistDoc('planning.changeLog', changeLog, saveChangeLog);
+  }, [changeLog, persistDoc]);
+
+  // Re-hidrata la llave que escribió el OTRO tablero.
+  useEffect(() => subscribePlanningDocs(docOriginRef.current!, (key) => {
+    skipNextPersistRef.current.add(key);
+    switch (key) {
+      case 'planning.scenarios': setStoredScenarios(loadPlanningScenarios([])); break;
+      case 'planning.adjustments': setStoredAdjustments(loadPlanningAdjustments([])); break;
+      case 'planning.manualEntries': setManualEntries(loadManualPlanningEntries([])); break;
+      case 'planning.customRows': setCustomRows(loadCustomRows([])); break;
+      case 'planning.cellOverrides': setCellOverrides(loadCellOverrides([])); break;
+      case 'planning.changeLog': setChangeLog(loadChangeLog([])); break;
+      default: skipNextPersistRef.current.delete(key);
+    }
+  }), []);
 
   useEffect(() => {
     const reloadTaxStore = () => setTaxStore(loadTaxStore(defaultTaxStore()));

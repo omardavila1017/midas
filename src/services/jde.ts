@@ -37,9 +37,9 @@ import { canonicalBankAccountNumber, canonicalBankName } from '../domain/bankSta
 import { todayISO } from '../formatters';
 import { matchesExclusionIdentity } from '../domain/companyExclusion';
 import { normalizeCia } from '../domain/cia';
+import { pagoRecordKey } from '../domain/pagoRecordKey';
 import { isAuxiliarAllowlistedCia, AUX_IVA_PARAMS } from '../domain/auxiliarReconciliationConfig';
 import { discoverIvaObjetosByKind } from '../domain/ivaLedger';
-import { isNonOperatingDay } from '../domain/bankHolidays';
 
 /**
  * Drop globally-excluded rows (empresa 33 / multicarga) at the JDE normalize
@@ -3143,12 +3143,18 @@ export async function fetchPagoProveedorRange(
   const config = options.config ?? {};
 
   const MAX_ATTEMPTS = 3;
+  // NO saltar fines de semana / festivos. El corte anterior asumía que "bancos
+  // no emiten CARGOs a proveedor en día inhábil" y se justificaba en
+  // AuxiliarContable, que en realidad NUNCA hizo ese salto (`isNonOperatingDay`
+  // se usaba sólo aquí). La premisa es falsa para esta fuente: `Fecha_Pago` es
+  // la fecha del REGISTRO del pago en JDE, no la de liquidación bancaria.
+  // Medido en `jde.Pago_Proveedor` (2026-09-21): 1,064 pagos en sábado y 1,591
+  // en domingo — $416.8M — más 17 el 1-may ($5.36M). El corte devolvía `[]`
+  // ANTES de la red y ese `[]` se cacheaba, así que ni `revalidateSince` podía
+  // repararlo: el día volvía a entrar al mismo corte. Ese dinero no llegaba a
+  // la pestaña Pagos, ni al cruce que descuenta CXP ya pagada del egreso
+  // proyectado, ni a la clasificación del egreso histórico por proveedor.
   const fetchDayWithRetry = async (day: string): Promise<PagoProveedorRecord[]> => {
-    // Bancos no emiten CARGOs a proveedor en fines de semana / festivos —
-    // mismo razonamiento que AuxiliarContable. Saltar evita 0-yield round-trips.
-    const d = new Date(day + 'T00:00:00Z');
-    if (!Number.isNaN(d.getTime()) && isNonOperatingDay(d)) return [];
-
     let lastErr: unknown;
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       try {
@@ -3173,15 +3179,15 @@ export async function fetchPagoProveedorRange(
     onDayFailed: (day) => reportDataGap('pagoproveedor', 'day-failed', day),
   });
 
-  const seen = new Set<string>();
-  const merged: PagoProveedorRecord[] = [];
-  for (const rec of all) {
-    const key = `${rec.cia}::${rec.noPago}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    merged.push(rec);
-  }
-  return merged;
+  // Dedup LAST-WINS por la identidad REAL del pago (ver `pagoRecordKey`): la
+  // fuente reinserta el mismo pago en cada carga, pero `cia::noPago` NO es un
+  // pago — JDE reutiliza `No_Pago` entre lotes, así que la llave vieja borraba
+  // pagos distintos (medido: 69 grupos en una MISMA carga, $38.46M). Last-wins
+  // igual que rol/compras/cobranza/CXP: la fila más tardía es la versión más
+  // reciente; la llave vieja además era first-wins y conservaba la más vieja.
+  const byKey = new Map<string, PagoProveedorRecord>();
+  for (const rec of all) byKey.set(pagoRecordKey(rec), rec);
+  return Array.from(byKey.values());
 }
 
 // ───────────────────────────────────────────────────────────────

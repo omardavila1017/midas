@@ -43,7 +43,6 @@ const baseInputs = (over: Partial<PlanningSharedRunInputs> = {}): PlanningShared
   taxStore: taxStore(),
   providers: [],
   cobranzaPayments: undefined,
-  bajioStatements: undefined,
   auxiliarReconciliation: undefined,
   cxpPaymentCoverage: undefined,
   yearStart: '2026-01-01',
@@ -61,12 +60,12 @@ describe('planningSharedRunInputsKey', () => {
     expect(planningSharedRunInputsKey(baseInputs())).toBe(planningSharedRunInputsKey(baseInputs()));
   });
 
-  it('emits the 16 segments the run key depends on', () => {
+  it('emits the 15 segments the run key depends on', () => {
     // La llave se dobla dentro de `planningRunCacheKey`. El conteo de tramos es
     // el guardrail: agregar o quitar un input sin pensarlo mueve la llave de
     // TODAS las corridas persistidas (cache miss masivo), y omitir uno hace que
     // dos estados distintos compartan llave (números de otro estado).
-    expect(planningSharedRunInputsKey(baseInputs()).split('|')).toHaveLength(16);
+    expect(planningSharedRunInputsKey(baseInputs()).split('|')).toHaveLength(15);
   });
 
   /**
@@ -83,8 +82,8 @@ describe('planningSharedRunInputsKey', () => {
     }],
     ['manualEntries', { manualEntries: [{ id: 'man-1', createdAt: '2026-07-01' } as unknown as ManualPlanningEntry] }],
     // Los 4 sub-fingerprints del taxStore van unidos en UN tramo (`taxKey`), así
-    // que el conteo de 16 no los protege: si uno deja de participar, la llave
-    // sigue teniendo 16 tramos y el resto de la matriz sigue verde.
+    // que el conteo de 15 no los protege: si uno deja de participar, la llave
+    // sigue teniendo 15 tramos y el resto de la matriz sigue verde.
     ['taxStore.overdueBalance', { taxStore: taxStore({ overdueBalance: 1 }) }],
     ['taxStore.obligations', {
       taxStore: taxStore({
@@ -103,9 +102,6 @@ describe('planningSharedRunInputsKey', () => {
     }],
     ['providers', { providers: [{ id: 'prov-1', score: 5 } as Provider] }],
     ['cobranzaPayments', { cobranzaPayments: [{ idPago: 'p1', importeRecibo: 10, pendienteAplicar: 0 } as CobranzaPayment] }],
-    ['bajioStatements', {
-      bajioStatements: [{ cia: '00033', cuenta: '123', fechaEstadoCuenta: '2026-07-01', movimientos: [] } as never],
-    }],
     ['auxiliarReconciliation', {
       auxiliarReconciliation: { summary: { totalLineas: 1 }, lines: [{ cia: '00150', flujo: 'ingreso', matchTier: 'exact', source: { kind: 'cobranza', ref: 'x' }, bankDate: '2026-02-01', fechaContable: '2026-02-01', importe: 1 }] } as unknown as AuxiliarReconResult,
     }],
