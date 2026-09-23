@@ -7,6 +7,7 @@ import {
   buildIvaLedgerByPeriod,
   summarizeIvaAccounts,
   hasIvaLedgerCoverage,
+  excludeByFiscalConcepts,
 } from './ivaLedger';
 
 function rec(partial: Partial<AuxiliarContableRecord>): AuxiliarContableRecord {
@@ -204,20 +205,38 @@ describe('buildIvaLedgerByPeriod', () => {
     expect(byPeriod.size).toBe(0);
   });
 
-  it('excluye del ACREDITABLE los conceptos que Fiscal quita (nómina/empleados/vales/…)', () => {
+  /**
+   * Las reglas de `ivaCreditableExclusions` las dio Fiscal para el REPORTE DE
+   * EGRESOS, no para el mayor, y matchean texto libre — sobre un asiento
+   * contable atrapan compras legítimas cuya descripción menciona "vales" o
+   * "empleados". Medido contra la cifra autoritativa de Fiscal (acreditable de
+   * pagos a proveedores a agosto 2026 = $154,099,012, sin Multicarga):
+   * aplicarlas da $150,617,035 (−2.3%) y NO aplicarlas $151,741,051 (−1.5%).
+   * Por eso el default del mayor es no excluir.
+   */
+  it('por defecto NO aplica las exclusiones de Fiscal al mayor', () => {
     const byPeriod = buildIvaLedgerByPeriod([
-      // Acreditable legítimo (proveedor real) → cuenta.
       rec({ nombreCuenta: 'IVA ACREDITABLE', importe: 1600, nombre: 'DIESEL DEL NORTE SA', fechaContable: '2026-03-05' }),
-      // Acreditable con concepto excluido → NO cuenta.
+      rec({ nombreCuenta: 'IVA ACREDITABLE', importe: 800, concepto: 'Reembolso a empleados', fechaContable: '2026-03-06' }),
+      rec({ nombreCuenta: 'IVA ACREDITABLE', importe: 300, explicacion: 'Compra de vales de despensa', fechaContable: '2026-03-08' }),
+    ]);
+    expect(byPeriod.get('2026-03')?.creditable).toBe(2700);
+    expect(byPeriod.get('2026-03')?.creditableLines).toHaveLength(3);
+  });
+
+  it('`excludeByFiscalConcepts` restituye el comportamiento previo en una línea', () => {
+    const rows = [
+      rec({ nombreCuenta: 'IVA ACREDITABLE', importe: 1600, nombre: 'DIESEL DEL NORTE SA', fechaContable: '2026-03-05' }),
       rec({ nombreCuenta: 'IVA ACREDITABLE', importe: 800, concepto: 'Reembolso a empleados', fechaContable: '2026-03-06' }),
       rec({ nombreCuenta: 'IVA ACREDITABLE', importe: 500, nombre: 'ASOCIACION PROTACIO', fechaContable: '2026-03-07' }),
       rec({ nombreCuenta: 'IVA ACREDITABLE', importe: 300, explicacion: 'Compra de vales de despensa', fechaContable: '2026-03-08' }),
-      // El causado NO se filtra aunque el concepto suene a excluido.
+      // El causado NUNCA se filtra, aunque el concepto suene a excluido.
       rec({ cuentaObjeto: '2160', nombreCuenta: 'IVA TRASLADADO', importe: 3200, concepto: 'Nomina cobrada', fechaContable: '2026-03-15' }),
-    ]);
+    ];
+    const byPeriod = buildIvaLedgerByPeriod(rows, { isCreditableExcluded: excludeByFiscalConcepts });
     const march = byPeriod.get('2026-03');
-    expect(march?.creditable).toBe(1600); // sólo el proveedor legítimo
-    expect(march?.caused).toBe(3200);     // causado intacto
+    expect(march?.creditable).toBe(1600);
+    expect(march?.caused).toBe(3200);
     expect(march?.creditableLines).toHaveLength(1);
   });
 

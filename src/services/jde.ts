@@ -38,6 +38,7 @@ import { todayISO } from '../formatters';
 import { matchesExclusionIdentity } from '../domain/companyExclusion';
 import { normalizeCia } from '../domain/cia';
 import { pagoRecordKey } from '../domain/pagoRecordKey';
+import { auxiliarRecordKey, hasLoadStamp } from '../domain/auxiliarRecordKey';
 import { isAuxiliarAllowlistedCia, AUX_IVA_PARAMS } from '../domain/auxiliarReconciliationConfig';
 import { discoverIvaObjetosByKind } from '../domain/ivaLedger';
 
@@ -2104,6 +2105,10 @@ function parseDmyDate(v: unknown): string {
  * Tipo_OV, Refacturacion, CodigoCategoria* y CC_Centro_Costos_46/47.
  */
 const KEPT_AUXILIAR_FIELDS = new Set<string>([
+  // Sello de carga (opcional; ver `auxiliarRecordKey`). Sin esto la whitelist
+  // lo recortaba ANTES del mapper y el campo llegaba `undefined` aunque el API
+  // lo mandara — el dedup quedaba permanentemente apagado.
+  'f_carga', 'fecha_carga', 'fechacarga', 'fecha_corte', 'fechacorte',
   'cia', 'compañia', 'compania', 'company',
   'cuenta', 'cuentacontable',
   'idcuenta', 'id_cuenta',
@@ -2147,6 +2152,11 @@ function mapAuxiliarContable(raw: RawRecord): AuxiliarContableRecord {
     noFactura:         toStr(pick(raw, ['No_Factura', 'no_factura', 'noFactura'])),
     noOrdenCompra:     toStr(pick(raw, ['No_Orden_Compra', 'no_orden_compra', 'noOrdenCompra'])),
     fechaContable:     parseDmyDate(pick(raw, ['Fecha_Contable_ddmmaa', 'fecha_contable_ddmmaa', 'Fecha_Contable', 'fechaContable'])),
+    // Sello de carga — OPCIONAL. Si el SP lo expone, el dedup puede separar
+    // reinserciones de líneas repetidas legítimas; si no, no se dedupea (ver
+    // `fetchAuxiliarContableRange`). Alias tolerantes: no está confirmado con
+    // qué nombre lo manda el API.
+    fechaCarga:        trimIsoDate(pick(raw, ['F_Carga', 'f_carga', 'Fecha_Carga', 'fecha_carga', 'fechaCarga', 'Fecha_Corte', 'fecha_corte'])) || undefined,
     tipoLibro:         toStr(pick(raw, ['Tipo_Libro', 'tipo_libro', 'tipoLibro'])),
     noBatch:           toNum(pick(raw, ['No_Batch', 'no_batch', 'noBatch'])),
     tipoBatch:         toStr(pick(raw, ['Tipo_Batch', 'tipo_batch', 'tipoBatch'])),
@@ -2350,15 +2360,31 @@ export async function fetchAuxiliarContableRange(
     },
   );
 
-  const seen = new Set<string>();
-  const merged: AuxiliarContableRecord[] = [];
-  for (const rec of all) {
-    const key = `${rec.cia}::${rec.idCuenta}::${rec.noDocto}::${rec.tipoDocto}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    merged.push(rec);
+  // Dedup LAST-WINS por la identidad REAL de la LÍNEA (ver `auxiliarRecordKey`).
+  // La llave por DOCUMENTO que había antes borraba líneas reales — medido:
+  // $1,356.9M dentro de cargas individuales, incluidos pares de reversa y la
+  // comisión+IVA de un mismo movimiento.
+  //
+  // PERO el dedup SÓLO corre si el payload trae el sello de carga. Sin él no
+  // hay forma de distinguir una reinserción del espejo de un renglón repetido
+  // legítimo del mismo documento, y colapsar los dos destruye dinero real:
+  // verificado contra la cifra autoritativa de Fiscal (IVA acreditable
+  // acumulado a agosto 2026 = $154,099,012), colapsar entre cargas deja el
+  // acreditable en $136.4M (−11.5%) mientras que colapsar sólo dentro de la
+  // misma carga da $153,649,595 (−0.29%). Entre borrar líneas reales y
+  // arrastrar duplicados de la fuente se elige lo segundo, y se confiesa.
+  if (!hasLoadStamp(all)) {
+    reportDataGap(
+      cacheNamespace,
+      'source-contradiction',
+      `${cia}: el API no expone el sello de carga (F_Carga/Fecha_Corte) — no se dedupea; `
+      + 'el mayor puede incluir reinserciones de la fuente (medido: ~+6% en el IVA acreditable)',
+    );
+    return all;
   }
-  return merged;
+  const byKey = new Map<string, AuxiliarContableRecord>();
+  for (const rec of all) byKey.set(auxiliarRecordKey(rec), rec);
+  return Array.from(byKey.values());
 }
 
 function rangeKey(range: AuxObjetoRange): string {

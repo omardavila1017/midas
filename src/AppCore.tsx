@@ -142,6 +142,7 @@ import {
   type BankQueryState,
 } from './domain/bankStatements';
 import { pagoRecordKey } from './domain/pagoRecordKey';
+import { auxiliarRecordKey } from './domain/auxiliarRecordKey';
 import { summarizeBankFreshnessByCompany, summarizeManualBankFreshness } from './domain/bankSourceFreshness';
 import {
   summarizeSourceDataFreshnessPreferred,
@@ -3489,8 +3490,8 @@ export default function App() {
         // llaves que backfillAuxiliar hubiera commiteado mientras este loader
         // seguía en vuelo. `seenKeys` conserva el dedup contra lo ya
         // hidratado; el overlay funcional sobre `prev` conserva lo ajeno.
-        const keyOf = (r: AuxiliarContableRecord) =>
-          `${r.cia}::${r.idCuenta}::${r.noDocto}::${r.tipoDocto}`;
+        // Identidad de LÍNEA, no de documento — ver `auxiliarRecordKey`.
+        const keyOf = auxiliarRecordKey;
         const seenKeys = new Set<string>();
         for (const r of auxiliarContableRecords) {
           seenKeys.add(keyOf(r));
@@ -3609,9 +3610,21 @@ export default function App() {
     if (!storeHydrated) return;
     if (companies.length === 0) return;
     if (!idbHydratedDatasets.has('auxiliar')) return;
-    const activeCias = companies
-      .filter(c => c.activa !== false && isAuxiliarAllowlistedCia(c.cia))
-      .map(c => c.cia);
+    // Scope del IVA: TODAS las cias activas no excluidas — NO la
+    // `AUXILIAR_CIA_ALLOWLIST`. Ese allowlist se dimensiono para el costo de la
+    // CONCILIACION (objetos 1010-1020, el fetch mas caro del boot), y este es
+    // otro fetch: objetos 1120/2050 con descubrimiento en dos fases. Heredarlo
+    // costaba IVA acreditable REAL a cambio de nada — medido a agosto 2026, la
+    // cia 00046 aporta $3.58M en apenas 23 filas, y el resto de las no
+    // allowlisted junta <$50k cada una. Contra la cifra autoritativa de Fiscal
+    // ($154,099,012 acumulado a agosto) ese recorte era una de las dos brechas.
+    //
+    // `filterActiveCompanies` es LOAD-BEARING y no se puede cambiar por un
+    // `.filter(activa)`: el auxiliar es el unico fetch que NO pasa por
+    // `dropExcludedByCia` (ver el gate canonico en `jde.ts`), asi que el
+    // allowlist era lo UNICO que mantenia fuera a Multicarga. Sin esto, ampliar
+    // el scope reviviria en silencio una exclusion de negocio explicita.
+    const activeCias = filterActiveCompanies(companies).map(c => c.cia);
     if (activeCias.length === 0) {
       auxiliarIvaAutoFetchDone.current = true;
       return;
@@ -3689,8 +3702,8 @@ export default function App() {
         // estado y commitear el snapshot completo pisaría (estado + IDB) lo
         // que cualquier escritor concurrente commitee mientras este loader
         // sigue en vuelo. `seenKeys` conserva el dedup contra lo hidratado.
-        const keyOf = (r: AuxiliarContableRecord) =>
-          `${r.cia}::${r.idCuenta}::${r.noDocto}::${r.tipoDocto}`;
+        // Identidad de LÍNEA, no de documento — ver `auxiliarRecordKey`.
+        const keyOf = auxiliarRecordKey;
         const seenKeys = new Set<string>();
         for (const r of auxiliarIvaRecords) seenKeys.add(keyOf(r));
         const mergedByKey = new Map<string, AuxiliarContableRecord>();
@@ -4927,7 +4940,7 @@ export default function App() {
     if (activeCias.length === 0) return true;
     await primeDailyCache();
     const keyOf = (r: AuxiliarContableRecord) =>
-      `${r.cia}::${r.idCuenta}::${r.noDocto}::${r.tipoDocto}`;
+      auxiliarRecordKey(r);
     const fetchedAll: AuxiliarContableRecord[] = [];
     let anyFailed = false;
     let cursor = 0;

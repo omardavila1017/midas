@@ -43,6 +43,7 @@ import type {
   BankStatementLine,
 } from '../services/jdeTypes';
 import { bankMovementKey } from './bankMovementKey';
+import { auxiliarRecordKey } from './auxiliarRecordKey';
 import { enrichMovementWithCatalog, findBankAccount } from './bankAccountsCatalog';
 import {
   buildOwnAccountsIndex,
@@ -140,7 +141,7 @@ export interface AuxiliarSourceRef {
 
 /** Una línea del libro mayor JDE con su estado de conciliación. */
 export interface AuxiliarReconLine {
-  /** Llave estable: `cia::idCuenta::tipoDocto::noDocto`. */
+  /** Llave estable de LÍNEA (no de documento) — ver `auxiliarRecordKey`. */
   glKey: string;
   cia: string;
   cuentaBanco: string;
@@ -425,9 +426,11 @@ function deriveSource(rec: AuxiliarContableRecord): AuxiliarSourceRef {
   return { kind: 'otro', cia: rec.cia, ref: rec.concepto || rec.explicacion || String(rec.noDocto), contraparte };
 }
 
-function glKeyFor(rec: AuxiliarContableRecord): string {
-  return `${rec.cia}::${rec.idCuenta}::${rec.tipoDocto}::${rec.noDocto}`;
-}
+// Identidad de LÍNEA, no de documento — ver `auxiliarRecordKey`. Viaja como
+// `glKey` de cada `AuxiliarReconLine` y, de ahí, como id del movimiento
+// `auxiliar-historic:` de MOTOR 1: con la llave por documento, dos líneas
+// distintas del mismo documento emitían movimientos con el MISMO id.
+const glKeyFor = auxiliarRecordKey;
 
 // ── Estructuras internas de match ───────────────────────────────────────
 

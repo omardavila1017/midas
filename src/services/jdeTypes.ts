@@ -535,6 +535,20 @@ export interface AuxiliarContableRequest {
  * auxiliarReconciliationEngine.ts — chokepoint único).
  */
 export interface AuxiliarContableRecord {
+  /**
+   * Sello de la CARGA que trajo esta fila (`F_Carga`/`Fecha_Corte` del espejo),
+   * OPCIONAL — el SP puede no exponerlo.
+   *
+   * Es el único discriminador que separa una REINSERCIÓN (la misma línea
+   * traída otra vez en una carga posterior) de una LÍNEA REPETIDA legítima
+   * (dos renglones idénticos del mismo documento). Sin él, cualquier dedup por
+   * contenido colapsa las dos cosas. Medido contra la cifra autoritativa de
+   * Fiscal (IVA acreditable acumulado a agosto 2026 = $154,099,012): colapsar
+   * sólo dentro de una misma carga da **$153,649,595 — 0.29%**; colapsar
+   * también entre cargas se va a $136.4M (−11.5%) y no colapsar nada a
+   * $163.6M (+6.1%). Ver `auxiliarRecordKey`.
+   */
+  fechaCarga?: string;
   /** Compañía JDE normalizada a 5 dígitos. */
   cia: string;
   /** Cuenta contable completa (Cuenta, trim — p.ej. "42.1020.0010409"). */

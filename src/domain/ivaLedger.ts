@@ -28,6 +28,17 @@ function creditableMatchText(rec: AuxiliarContableRecord): string {
 }
 
 /**
+ * Predicado que SÍ aplica las exclusiones de Fiscal al mayor — el
+ * comportamiento previo, conservado para que revertir la decisión sea una
+ * línea (`buildIvaLedgerByPeriod(recs, { isCreditableExcluded: excludeByFiscalConcepts })`)
+ * y no una arqueología. Hoy NO se usa en producción: ver el docblock de la
+ * opción para la medición que sostiene el default.
+ */
+export function excludeByFiscalConcepts(rec: AuxiliarContableRecord): boolean {
+  return isCreditableExcludedConcept(creditableMatchText(rec));
+}
+
+/**
  * El mayor JDE modela CUATRO estados de IVA, no dos: el impuesto nace devengado
  * (acreditable-no-pagado / trasladado-no-cobrado) y se mueve a su cuenta
  * hermana cuando efectivamente se paga o se cobra. El IVA mexicano es
@@ -308,17 +319,36 @@ export function buildIvaLedgerByPeriod(
     startDate?: string;
     endDate?: string;
     /**
-     * Predicado de exclusión del ACREDITABLE (Fiscal quita nómina/empleados/
-     * vales/reembolsos/… — ver `config/ivaCreditableExclusions`). Inyectable
-     * para tests; por defecto usa el catálogo contra el texto del asiento.
-     * NO afecta el causado.
+     * Predicado de exclusión del ACREDITABLE. **Por defecto NO excluye nada**
+     * en la ruta del LIBRO MAYOR — y eso es deliberado, medido y reversible.
+     *
+     * Las reglas de `config/ivaCreditableExclusions` las dio Fiscal para el
+     * **reporte de Egresos que se extrae de JDE**, no para el mayor. Matchean
+     * TEXTO LIBRE (contraparte + concepto + explicación), así que aplicadas a
+     * un asiento del mayor atrapan compras legítimas cuya descripción menciona
+     * "vales" o "empleados" — falsos positivos sobre líneas que SÍ son IVA
+     * acreditable real.
+     *
+     * Medido contra la cifra autoritativa de Fiscal (IVA acreditable de pagos
+     * a proveedores acumulado a agosto 2026 = $154,099,012, sin Multicarga):
+     *   · sin exclusiones → $151,741,051  (−1.5%)  ← se usa ésta
+     *   · con exclusiones → $150,617,035  (−2.3%)
+     * O sea: aplicarlas ALEJA el número del dato correcto.
+     *
+     * Los estimadores (CXP/OC/movimientos, `addIvaCreditable` en
+     * `taxModuleService`) SÍ las conservan: ésa es la ruta análoga al reporte
+     * de Egresos, que es para la que se escribieron.
+     *
+     * Sigue inyectable para tests y para revertir la decisión sin tocar el
+     * motor. NO afecta el causado.
      */
     isCreditableExcluded?: (rec: AuxiliarContableRecord) => boolean;
   } = {},
 ): Map<string, IvaLedgerPeriod> {
   const { companyCode, startDate, endDate } = opts;
-  const isCreditableExcluded = opts.isCreditableExcluded
-    ?? ((rec: AuxiliarContableRecord) => isCreditableExcludedConcept(creditableMatchText(rec)));
+  // Default: NO excluir (ver el docblock de la opción). Las reglas de Fiscal
+  // son del reporte de Egresos y sobre el mayor producen falsos positivos.
+  const isCreditableExcluded = opts.isCreditableExcluded ?? (() => false);
   const creditableNet = new Map<string, number>();
   const causedNet = new Map<string, number>();
   const creditableLines = new Map<string, IvaLedgerLine[]>();
