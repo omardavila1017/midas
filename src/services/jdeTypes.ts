@@ -541,14 +541,24 @@ export interface AuxiliarContableRecord {
    *
    * Es el único discriminador que separa una REINSERCIÓN (la misma línea
    * traída otra vez en una carga posterior) de una LÍNEA REPETIDA legítima
-   * (dos renglones idénticos del mismo documento). Sin él, cualquier dedup por
-   * contenido colapsa las dos cosas. Medido contra la cifra autoritativa de
-   * Fiscal (IVA acreditable acumulado a agosto 2026 = $154,099,012): colapsar
-   * sólo dentro de una misma carga da **$153,649,595 — 0.29%**; colapsar
-   * también entre cargas se va a $136.4M (−11.5%) y no colapsar nada a
-   * $163.6M (+6.1%). Ver `auxiliarRecordKey`.
+   * (dos renglones idénticos del mismo documento). Se conserva COMPLETO, con
+   * hora: el 2026-05-28 abril-2026 se cargó dos veces el mismo día. Con él, el
+   * IVA acreditable a agosto (sin cía 33) es $135,045,844.80; sin él, el dedup
+   * colapsa por contenido ($126.5M). Ver `markDuplicateOccurrences`.
    */
   fechaCarga?: string;
+  /**
+   * Ordinal de la ocurrencia repetida dentro de su payload, asignado por
+   * `markDuplicateOccurrences` SÓLO cuando el fetcher conserva renglones
+   * idénticos por falta de sello de carga. La primera ocurrencia NO lo lleva,
+   * así que toda fila no duplicada mantiene su llave byte-idéntica.
+   *
+   * Existe porque el gate de `hasLoadStamp` vivía sólo en el fetcher: los cinco
+   * consumidores de `auxiliarRecordKey` upsertean en un `Map`, así que sin un
+   * discriminador volvían a colapsar exactamente las filas que el gate había
+   * decidido preservar.
+   */
+  occurrence?: number;
   /** Compañía JDE normalizada a 5 dígitos. */
   cia: string;
   /** Cuenta contable completa (Cuenta, trim — p.ej. "42.1020.0010409"). */

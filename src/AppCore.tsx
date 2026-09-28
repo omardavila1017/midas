@@ -143,6 +143,7 @@ import {
 } from './domain/bankStatements';
 import { pagoRecordKey } from './domain/pagoRecordKey';
 import { auxiliarRecordKey } from './domain/auxiliarRecordKey';
+import { shouldMergeAuxiliarLine } from './domain/auxiliarRevalidationMerge';
 import { summarizeBankFreshnessByCompany, summarizeManualBankFreshness } from './domain/bankSourceFreshness';
 import {
   summarizeSourceDataFreshnessPreferred,
@@ -3517,16 +3518,17 @@ export default function App() {
         // `seenKeys` evita re-mergear lo ya hidratado (el Map se mantiene chico),
         // PERO no debe aplicarse a los días que estamos revalidando a propósito:
         // ahí el punto es justamente que la línea CAMBIÓ (importe corregido,
-        // reversa, `estatusConciliado` pasando a 'R'). Con el guard a secas el
-        // refetch de `AUX_PARTIAL_REVALIDATE_DAYS` se tiraba a la basura y sólo
-        // entraban llaves nuevas — el mecanismo quedaba a medias sin decirlo.
-        // El merge de `flush` ya es last-wins, así que dejarlas pasar basta.
+        // reversa, `estatusConciliado` pasando a 'R'). Regla compartida con el
+        // loader del libro mayor de IVA — ver `shouldMergeAuxiliarLine`.
         const onDay = (batch: AuxiliarContableRecord[]) => {
           for (const r of batch) {
             const k = keyOf(r);
-            const inRevalidationWindow = (r.fechaContable ?? '') >= auxRevalidateSince;
-            if (mergedByKey.has(k) && !inRevalidationWindow) continue;
-            if (seenKeys.has(k) && !inRevalidationWindow) continue;
+            if (!shouldMergeAuxiliarLine({
+              fechaContable: r.fechaContable,
+              revalidateSince: auxRevalidateSince,
+              alreadyMerged: mergedByKey.has(k),
+              alreadyHydrated: seenKeys.has(k),
+            })) continue;
             mergedByKey.set(k, r);
             dirty = true;
           }
@@ -3614,10 +3616,9 @@ export default function App() {
     // `AUXILIAR_CIA_ALLOWLIST`. Ese allowlist se dimensiono para el costo de la
     // CONCILIACION (objetos 1010-1020, el fetch mas caro del boot), y este es
     // otro fetch: objetos 1120/2050 con descubrimiento en dos fases. Heredarlo
-    // costaba IVA acreditable REAL a cambio de nada — medido a agosto 2026, la
-    // cia 00046 aporta $3.58M en apenas 23 filas, y el resto de las no
-    // allowlisted junta <$50k cada una. Contra la cifra autoritativa de Fiscal
-    // ($154,099,012 acumulado a agosto) ese recorte era una de las dos brechas.
+    // costaba IVA acreditable REAL a cambio de nada — medido 2026-09-24 a
+    // agosto, las cias fuera del allowlist aportan $2.80M, casi todo la 00046
+    // ($2.73M); el resto junta <$50k cada una.
     //
     // `filterActiveCompanies` es LOAD-BEARING y no se puede cambiar por un
     // `.filter(activa)`: el auxiliar es el unico fetch que NO pasa por
@@ -3632,9 +3633,25 @@ export default function App() {
     const now = new Date();
     const expectedFloorDate = `${now.getUTCFullYear()}-01-01`;
     const expectedTopDate = todayISO();
+    // Cias que REALMENTE tienen registros en memoria. `clearCacheStorageOnEntry`
+    // borra `auxiliarIvaRecords` (esta en HEAVY_KEYS) pero NO los marcadores
+    // `auxiliarIvaLoadedCias`, que viven en el MidasStore — asi que el marcador
+    // sobrevive a los datos que describe. Sin este cruce, el segundo ingreso del
+    // dia veia "ya cargado hasta hoy" contra un store VACIO y solo bajaba el
+    // delta de 14 dias: el mayor de IVA quedaba practicamente vacio y el modulo
+    // de Impuestos caia a los estimadores. Es la MISMA clase que el propio
+    // `clearCacheStorageOnEntry` documenta para `SNAPSHOT_VERSION_KEY`
+    // ("marker e IDB viven o mueren juntos") y la que el loader hermano de
+    // conciliacion no tiene porque deriva su rango de los records, no de un
+    // marcador. Aqui se cruza explicitamente: sin registros, el marcador no vale.
+    const ciasWithIvaRecords = new Set<string>();
+    for (const r of auxiliarIvaRecords) ciasWithIvaRecords.add(r.cia);
+
     const ciasToFetch = activeCias.filter(cia => {
       const meta = auxiliarIvaLoadedCias[cia];
       if (!meta || meta.version !== AUX_IVA_LEDGER_VERSION) return true;
+      // Marcador sin datos detras → re-descargar el rango completo.
+      if (!ciasWithIvaRecords.has(cia)) return true;
       if (!/^\d{4}-\d{2}-\d{2}$/.test(meta.loadedThrough)) return true;
       return meta.loadedThrough < expectedTopDate;
     });
@@ -3688,7 +3705,12 @@ export default function App() {
         const perCiaFechaInicial = new Map<string, string>();
         for (const cia of ciasToFetch) {
           const meta = auxiliarIvaLoadedCias[cia];
-          const lastSeen = meta?.version === AUX_IVA_LEDGER_VERSION ? meta.loadedThrough : null;
+          // `lastSeen` sólo vale si TODAVÍA hay registros de esa cía: si no, el
+          // delta arrancaria despues del ultimo dia cargado sobre un store
+          // vacio y el año nunca se repondria.
+          const lastSeen = (meta?.version === AUX_IVA_LEDGER_VERSION && ciasWithIvaRecords.has(cia))
+            ? meta.loadedThrough
+            : null;
           const candidateFrom = lastSeen ? nextIsoDay(lastSeen) : bootClampStart;
           let clamped = candidateFrom < bootClampStart ? bootClampStart : candidateFrom;
           if (clamped > ivaRevalidateSince) {
@@ -3722,13 +3744,22 @@ export default function App() {
           });
         };
         const flushInterval = window.setInterval(flush, 3000);
+        // MISMA regla que el loader del auxiliar de conciliación: este loader
+        // también paga el refetch de `ivaRevalidateSince`, así que descartar la
+        // línea por "ya la vi" dejaba esa revalidación INERTE — una póliza de
+        // IVA corregida o reversada nunca actualizaba el acreditable que
+        // publica Impuestos. Ver `shouldMergeAuxiliarLine`.
         const onDay = (batch: AuxiliarContableRecord[]) => {
           for (const r of batch) {
             const k = keyOf(r);
-            if (!seenKeys.has(k) && !mergedByKey.has(k)) {
-              mergedByKey.set(k, r);
-              dirty = true;
-            }
+            if (!shouldMergeAuxiliarLine({
+              fechaContable: r.fechaContable,
+              revalidateSince: ivaRevalidateSince,
+              alreadyMerged: mergedByKey.has(k),
+              alreadyHydrated: seenKeys.has(k),
+            })) continue;
+            mergedByKey.set(k, r);
+            dirty = true;
           }
         };
 

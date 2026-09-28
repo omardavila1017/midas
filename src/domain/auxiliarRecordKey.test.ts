@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AuxiliarContableRecord } from '../services/jdeTypes';
-import { auxiliarRecordKey, hasLoadStamp } from './auxiliarRecordKey';
+import { auxiliarRecordKey, hasLoadStamp, markDuplicateOccurrences } from './auxiliarRecordKey';
 
 function linea(over: Partial<AuxiliarContableRecord>): AuxiliarContableRecord {
   return {
@@ -70,30 +70,45 @@ describe('auxiliarRecordKey — identidad de LÍNEA, no de documento', () => {
 });
 
 /**
- * El sello de carga es lo único que separa una REINSERCIÓN del espejo de un
- * renglón repetido legítimo del mismo documento. Calibrado contra la cifra
- * autoritativa de Fiscal — IVA acreditable acumulado a agosto 2026 =
- * $154,099,012 (José Luis Gallegos):
- *
- *   · colapsar sólo dentro de una misma carga → $153,649,595  (−0.29%)  ✅
- *   · colapsar también entre cargas          → $136,379,250  (−11.5%)
- *   · no colapsar nada                        → $163,551,205  (+6.1%)
- *   · la llave por DOCUMENTO (lo previo)      →  ~$85,715,368 (−44%)
+ * Regla medida en la BD (2026-09-24, IVA acreditable `Ano 26` P<=8 sin cía 33):
+ * conservar las repeticiones DENTRO de una carga (líneas reales — el origen no
+ * expone número de línea) y colapsar la misma línea entre cargas (reinserción:
+ * abril-2026 se cargó dos veces el 2026-05-28, 01:07 y 01:16). Resultado
+ * $135,045,844.80; sólo abril cambia respecto a no dedupear ($151,741,050.81).
+ * Las cifras previas de este bloque incluían a Multicarga y están retiradas.
  */
-describe('auxiliarRecordKey — sello de carga', () => {
-  it('separa la misma línea traída en dos cargas distintas', () => {
-    const a = linea({ fechaCarga: '2026-09-17' });
-    const b = linea({ fechaCarga: '2026-09-18' });
-    expect(auxiliarRecordKey(a)).not.toBe(auxiliarRecordKey(b));
+describe('auxiliarRecordKey + markDuplicateOccurrences — sello de carga', () => {
+  it('la misma línea de dos cargas distintas COLAPSA (reinserción)', () => {
+    const rows = markDuplicateOccurrences([
+      linea({ fechaCarga: '2026-05-28T01:07:43.187' }),
+      linea({ fechaCarga: '2026-05-28T01:16:43.690' }),
+    ]);
+    expect(auxiliarRecordKey(rows[0])).toBe(auxiliarRecordKey(rows[1]));
   });
 
-  it('COLAPSA el duplicado dentro de la MISMA carga', () => {
-    expect(auxiliarRecordKey(linea({ fechaCarga: '2026-09-17' })))
-      .toBe(auxiliarRecordKey(linea({ fechaCarga: '2026-09-17' })));
+  it('dos repeticiones de UNA carga se CONSERVAN (líneas reales)', () => {
+    const rows = markDuplicateOccurrences([
+      linea({ fechaCarga: '2026-05-28T01:07:43.187' }),
+      linea({ fechaCarga: '2026-05-28T01:07:43.187' }),
+    ]);
+    expect(auxiliarRecordKey(rows[0])).not.toBe(auxiliarRecordKey(rows[1]));
   });
 
-  it('sin sello, la llave degrada a la forma previa (no inventa separación)', () => {
-    expect(auxiliarRecordKey(linea({}))).toBe(auxiliarRecordKey(linea({})));
+  it('entre cargas sobrevive el MÁXIMO de repeticiones de una sola carga', () => {
+    const rows = markDuplicateOccurrences([
+      linea({ fechaCarga: 'A' }), linea({ fechaCarga: 'A' }),
+      linea({ fechaCarga: 'B' }),
+    ]);
+    expect(new Set(rows.map(auxiliarRecordKey)).size).toBe(2);
+  });
+
+  it('el sello no entra a la llave: una fila no repetida conserva llave estable', () => {
+    expect(auxiliarRecordKey(linea({ fechaCarga: 'A' }))).toBe(auxiliarRecordKey(linea({})));
+  });
+
+  it('sin sello NO numera: colapsa por contenido (evita doblar abril-2026)', () => {
+    const rows = markDuplicateOccurrences([linea({}), linea({})]);
+    expect(new Set(rows.map(auxiliarRecordKey)).size).toBe(1);
   });
 });
 

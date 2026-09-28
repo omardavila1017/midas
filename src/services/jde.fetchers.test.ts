@@ -22,6 +22,7 @@ import type { PagoProveedorRecord } from './jdeTypes';
 import {
   __internal,
   fetchAgedBalances,
+  fetchAuxiliarContable,
   fetchAuxiliarContableIvaRange,
   fetchBankStatements,
   fetchCobranza,
@@ -1246,10 +1247,48 @@ describe('fetchAuxiliarContableIvaRange — discovery + full en dos fases', () =
     expect(records[0].fechaContable).toBe('2026-05-04');
   });
 
-  it('cia fuera del allowlist auxiliar → [] sin tocar la red', async () => {
+  /**
+   * El scope del IVA se desacopló de `AUXILIAR_CIA_ALLOWLIST` (2026-09-23),
+   * pero ese desacople vivía sólo en la selección de cías de `AppCore`: el
+   * allowlist cortaba dentro de `fetchAuxiliarContable`, así que toda cía
+   * ampliada regresaba `[]` sin tocar la red y el cambio era INERTE — la cía
+   * 00046 ($2.73M de acreditable a agosto 2026) seguía fuera.
+   */
+  it('una cía FUERA del allowlist sí se consulta — el scope del IVA no lo hereda', async () => {
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = bodyOf(init) as { objIni: string };
+      return jsonResponse(body.objIni === '1000' || body.objIni === '1180'
+        ? [{ ...auxIvaRow('2026-05-04', '1180', 'IVA ACREDITABLE', 1), Cia: '00046' }]
+        : []);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const records = await fetchAuxiliarContableIvaRange('00046', '2026-05-04', '2026-05-08');
+    expect(fetchMock).toHaveBeenCalled();
+    expect(records.map(r => r.cia)).toEqual(['00046']);
+  });
+
+  /**
+   * Saltar el allowlist NO puede revivir la exclusión global: para el auxiliar
+   * ese allowlist era también el gate de Multicarga (es el único fetch que no
+   * pasa por `dropExcludedByCia`), así que al saltarlo se sustituye por el
+   * predicado de identidad.
+   */
+  it('la cía EXCLUIDA (Multicarga, 33) sigue en [] sin tocar la red', async () => {
     const fetchMock = vi.fn(async () => jsonResponse([]));
     vi.stubGlobal('fetch', fetchMock);
-    const records = await fetchAuxiliarContableIvaRange('00099', '2026-05-04', '2026-05-08');
+    const records = await fetchAuxiliarContableIvaRange('00033', '2026-05-04', '2026-05-08');
+    expect(records).toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('la conciliación (objetos 1010-1020) SIGUE acotada al allowlist', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse([]));
+    vi.stubGlobal('fetch', fetchMock);
+    const records = await fetchAuxiliarContable({
+      cia: '00046', fechaInicial: '2026-05-04', fechaFinal: '2026-05-08',
+      tl: 'AA', nr: 999, objIni: '1020', objFin: '1020',
+    });
     expect(records).toEqual([]);
     expect(fetchMock).not.toHaveBeenCalled();
   });

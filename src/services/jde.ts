@@ -38,7 +38,7 @@ import { todayISO } from '../formatters';
 import { matchesExclusionIdentity } from '../domain/companyExclusion';
 import { normalizeCia } from '../domain/cia';
 import { pagoRecordKey } from '../domain/pagoRecordKey';
-import { auxiliarRecordKey, hasLoadStamp } from '../domain/auxiliarRecordKey';
+import { auxiliarRecordKey, hasLoadStamp, markDuplicateOccurrences } from '../domain/auxiliarRecordKey';
 import { isAuxiliarAllowlistedCia, AUX_IVA_PARAMS } from '../domain/auxiliarReconciliationConfig';
 import { discoverIvaObjetosByKind } from '../domain/ivaLedger';
 
@@ -2156,7 +2156,10 @@ function mapAuxiliarContable(raw: RawRecord): AuxiliarContableRecord {
     // reinserciones de líneas repetidas legítimas; si no, no se dedupea (ver
     // `fetchAuxiliarContableRange`). Alias tolerantes: no está confirmado con
     // qué nombre lo manda el API.
-    fechaCarga:        trimIsoDate(pick(raw, ['F_Carga', 'f_carga', 'Fecha_Carga', 'fecha_carga', 'fechaCarga', 'Fecha_Corte', 'fecha_corte'])) || undefined,
+    // Sello COMPLETO (con hora), NO `trimIsoDate`: las dos corridas que
+    // duplicaron abril-2026 son del mismo día (2026-05-28 01:07 y 01:16); a
+    // nivel día no se distinguen y la reinserción no colapsaría.
+    fechaCarga:        String(pick(raw, ['F_Carga', 'f_carga', 'Fecha_Carga', 'fecha_carga', 'fechaCarga', 'Fecha_Corte', 'fecha_corte']) ?? '').trim() || undefined,
     tipoLibro:         toStr(pick(raw, ['Tipo_Libro', 'tipo_libro', 'tipoLibro'])),
     noBatch:           toNum(pick(raw, ['No_Batch', 'no_batch', 'noBatch'])),
     tipoBatch:         toStr(pick(raw, ['Tipo_Batch', 'tipo_batch', 'tipoBatch'])),
@@ -2187,12 +2190,30 @@ function mapAuxiliarContable(raw: RawRecord): AuxiliarContableRecord {
 export async function fetchAuxiliarContable(
   req: AuxiliarContableRequest,
   config: JdeClientConfig = {},
+  opts: {
+    /**
+     * Salta la `AUXILIAR_CIA_ALLOWLIST` — la usa SÓLO el fetch de IVA, cuyo
+     * scope se desacopló de ella (objetos 1120/2050, otro fetch y otro costo).
+     * Sin esto ese desacople es INERTE: el allowlist corta aquí y toda cía
+     * ampliada regresa `[]` sin tocar la red, así que la cía 00046 —$2.73M de
+     * acreditable a agosto 2026— seguía fuera.
+     *
+     * La exclusión global NO se salta: el allowlist es también el gate canónico
+     * de Multicarga para auxiliar (único fetch que no pasa por
+     * `dropExcludedByCia`), así que al saltarlo se sustituye por el predicado
+     * de identidad. Sin esa sustitución, ampliar el scope reviviría en silencio
+     * una exclusión de negocio explícita (Santiago, 2026-08-05).
+     */
+    bypassAllowlist?: boolean;
+  } = {},
 ): Promise<AuxiliarContableRecord[]> {
   // Allowlist explícita — solo 5 cías. Bloqueamos cualquier otra ANTES de
   // pegarle al API. Cía 33 (multicarga) salió de la allowlist el 2026-08-05
   // (exclusión global reactivada); el filtro de allowlist sigue siendo el
   // gate canónico para auxiliar — no usamos `dropExcludedByCia` downstream.
-  if (!isAuxiliarAllowlistedCia(req.cia)) return [];
+  if (opts.bypassAllowlist) {
+    if (matchesExclusionIdentity({ cia: req.cia })) return [];
+  } else if (!isAuxiliarAllowlistedCia(req.cia)) return [];
   // El path debe ir en PascalCase exacto: el endpoint JDE está registrado
   // como /JDEdwards/AuxiliarContable y responde 404 a `/auxiliarcontable`.
   const raw = await jdeClient.post<unknown>('/AuxiliarContable', req, config);
@@ -2243,6 +2264,8 @@ export async function fetchAuxiliarContableRange(
      * main no revalidaba el cache chunked). `undefined` = no revalidar.
      */
     revalidateSince?: string;
+    /** Pass-through a `fetchAuxiliarContable` — ver su docblock. Sólo IVA. */
+    bypassAllowlist?: boolean;
   } = {},
 ): Promise<AuxiliarContableRecord[]> {
   const config = options.config ?? {};
@@ -2281,9 +2304,17 @@ export async function fetchAuxiliarContableRange(
             objFin: rango.fin,
           },
           config,
+          { bypassAllowlist: options.bypassAllowlist },
         ),
       ),
-    ).then((perObjeto) => perObjeto.flat());
+    ).then((perObjeto) => {
+      const rows = perObjeto.flat();
+      // Numerar aquí —único punto que ve el payload completo, aguas arriba del
+      // cache diario y de `onDay`— hace que los cinco merges por
+      // `auxiliarRecordKey` apliquen la MISMA regla: conservar las repeticiones
+      // de una carga, colapsar las de otra carga. Ver `markDuplicateOccurrences`.
+      return markDuplicateOccurrences(rows);
+    });
 
   const fetchChunkWithRetry = async (
     chunkFrom: string,
@@ -2365,22 +2396,19 @@ export async function fetchAuxiliarContableRange(
   // $1,356.9M dentro de cargas individuales, incluidos pares de reversa y la
   // comisión+IVA de un mismo movimiento.
   //
-  // PERO el dedup SÓLO corre si el payload trae el sello de carga. Sin él no
-  // hay forma de distinguir una reinserción del espejo de un renglón repetido
-  // legítimo del mismo documento, y colapsar los dos destruye dinero real:
-  // verificado contra la cifra autoritativa de Fiscal (IVA acreditable
-  // acumulado a agosto 2026 = $154,099,012), colapsar entre cargas deja el
-  // acreditable en $136.4M (−11.5%) mientras que colapsar sólo dentro de la
-  // misma carga da $153,649,595 (−0.29%). Entre borrar líneas reales y
-  // arrastrar duplicados de la fuente se elige lo segundo, y se confiesa.
-  if (!hasLoadStamp(all)) {
+  // Con el ordinal de `markDuplicateOccurrences` (numerado POR CARGA) este
+  // dedup colapsa la reinserción entre cargas y el mismo renglón pedido dos
+  // veces, nunca líneas distintas de una carga. Medido 2026-09-24 (IVA
+  // acreditable a ago-2026, sin cía 33): con sello $135,045,844.80 (sólo abril
+  // cambia: la carga doble del 2026-05-28). Sin sello colapsa por contenido
+  // —la MISMA regla que los cinco merges aguas abajo— y se confiesa.
+  if (all.length > 0 && !hasLoadStamp(all)) {
     reportDataGap(
       cacheNamespace,
       'source-contradiction',
-      `${cia}: el API no expone el sello de carga (F_Carga/Fecha_Corte) — no se dedupea; `
-      + 'el mayor puede incluir reinserciones de la fuente (medido: ~+6% en el IVA acreditable)',
+      `${cia}: el API no expone el sello de carga (F_Carga/Fecha_Corte) — se dedupea por contenido; `
+      + 'puede colapsar líneas reales repetidas de una misma carga (medido 2026-09-24: −$8.6M de IVA acreditable a agosto)',
     );
-    return all;
   }
   const byKey = new Map<string, AuxiliarContableRecord>();
   for (const rec of all) byKey.set(auxiliarRecordKey(rec), rec);
@@ -2501,7 +2529,7 @@ export async function fetchAuxiliarContableIvaRange(
     discoveryFrom,
     to,
     { tl: AUX_IVA_PARAMS.tl, nr: AUX_IVA_PARAMS.nr, objetos: AUX_IVA_PARAMS.discoveryObjetos },
-    { config, cacheNamespace: `${discoveryNamespace}:discovery` },
+    { config, cacheNamespace: `${discoveryNamespace}:discovery`, bypassAllowlist: true },
   );
 
   const objetos = selectIvaFullObjetoRanges(discoverySample, AUX_IVA_PARAMS.discoveryObjetos);
@@ -2513,7 +2541,7 @@ export async function fetchAuxiliarContableIvaRange(
     from,
     to,
     { tl: AUX_IVA_PARAMS.tl, nr: AUX_IVA_PARAMS.nr, objetos },
-    { config, onDay, cacheNamespace, revalidateSince: options.revalidateSince },
+    { config, onDay, cacheNamespace, revalidateSince: options.revalidateSince, bypassAllowlist: true },
   );
 }
 

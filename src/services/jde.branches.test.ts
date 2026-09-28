@@ -38,6 +38,7 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { clearDailyCache, primeDailyCache, setDailyCached } from './dailyApiCache';
 import { jdeFetchPauseGate } from './pauseGate';
+import { auxiliarRecordKey } from '../domain/auxiliarRecordKey';
 import {
   __internal,
   fetchAgedBalances,
@@ -795,14 +796,14 @@ describe('fetchAuxiliarContableRange — piso duro 2025-01-01', () => {
   });
 
   /**
-   * SIN sello de carga el fetcher NO dedupea: dos renglones idénticos pueden ser
-   * una reinserción del espejo o dos líneas reales del mismo documento, y sin el
-   * sello no hay forma de distinguirlas. Calibrado contra la cifra de Fiscal
-   * (IVA acreditable a agosto 2026 = $154,099,012): colapsar sin el sello deja
-   * el acreditable en −11.5%; conservar, en +6.1%. Se prefiere arrastrar un
-   * duplicado de la fuente a borrar dinero real, y se confiesa en Salud de datos.
+   * SIN sello de carga el fetcher colapsa por contenido, la MISMA regla que los
+   * cinco merges aguas abajo (si divergieran, el store sostendría otra cosa que
+   * el fetcher). Medido 2026-09-24: conservar metería las 41,863 líneas de
+   * abril-2026 que el origen cargó dos veces — $506.7M con marca 'R' contarían
+   * doble en la conciliación — y dejaría el IVA acreditable en $151.7M contra
+   * $135.0M reales; colapsar da $126.5M. Se confiesa en Salud de datos.
    */
-  it('recorta el `from` al piso y, sin sello de carga, NO dedupea', async () => {
+  it('recorta el `from` al piso y, sin sello de carga, colapsa por contenido', async () => {
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
       expect(String(bodyOf(init).fechaInicial) >= '2025-01-01').toBe(true);
       return jsonResponse([
@@ -814,19 +815,29 @@ describe('fetchAuxiliarContableRange — piso duro 2025-01-01', () => {
 
     // Sin `cacheNamespace` → usa el default 'auxiliarcontable'.
     const rows = await fetchAuxiliarContableRange('00011', '2024-06-01', '2025-01-02', AUX_PARAMS);
-    expect(rows).toHaveLength(2);
+    expect(rows).toHaveLength(1);
     expect(rows[0].fechaContable).toBe('2025-01-02');
+    expect(rows[0].occurrence).toBeUndefined();
   }, 20_000);
 
-  it('CON sello de carga sí colapsa la reinserción y conserva la línea de otra carga', async () => {
+  /**
+   * Regla medida en la BD (2026-09-24): repeticiones de UNA carga son líneas
+   * reales y se conservan; la misma línea de OTRA carga es reinserción y
+   * colapsa. Sello con hora: la carga doble de abril-2026 fue el mismo día.
+   */
+  it('CON sello: conserva las repeticiones de una carga y colapsa la reinserción de otra', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse([
-      { Cia: '00011', IdCuenta: 'ID-1', No_Docto: 1, Tipo_Docto: 'PV', Fecha_Contable_ddmmaa: '02/01/2025', Importe: 10, F_Carga: '2026-09-17' },
-      { Cia: '00011', IdCuenta: 'ID-1', No_Docto: 1, Tipo_Docto: 'PV', Fecha_Contable_ddmmaa: '02/01/2025', Importe: 10, F_Carga: '2026-09-17' },
-      { Cia: '00011', IdCuenta: 'ID-1', No_Docto: 1, Tipo_Docto: 'PV', Fecha_Contable_ddmmaa: '02/01/2025', Importe: 10, F_Carga: '2026-09-18' },
+      { Cia: '00011', IdCuenta: 'ID-1', No_Docto: 1, Tipo_Docto: 'PV', Fecha_Contable_ddmmaa: '02/01/2025', Importe: 10, F_Carga: '2026-05-28T01:07:43.187' },
+      { Cia: '00011', IdCuenta: 'ID-1', No_Docto: 1, Tipo_Docto: 'PV', Fecha_Contable_ddmmaa: '02/01/2025', Importe: 10, F_Carga: '2026-05-28T01:07:43.187' },
+      { Cia: '00011', IdCuenta: 'ID-1', No_Docto: 1, Tipo_Docto: 'PV', Fecha_Contable_ddmmaa: '02/01/2025', Importe: 10, F_Carga: '2026-05-28T01:16:43.690' },
+      { Cia: '00011', IdCuenta: 'ID-1', No_Docto: 1, Tipo_Docto: 'PV', Fecha_Contable_ddmmaa: '02/01/2025', Importe: 10, F_Carga: '2026-05-28T01:16:43.690' },
     ])));
 
     const rows = await fetchAuxiliarContableRange('00011', '2024-06-01', '2025-01-02', AUX_PARAMS);
     expect(rows).toHaveLength(2);
+    expect(new Set(rows.map(auxiliarRecordKey)).size).toBe(2);
+    // El sello conserva la hora (a nivel día las dos corridas no se distinguen).
+    expect(rows[0].fechaCarga).toBe('2026-05-28T01:16:43.690');
   }, 20_000);
 });
 

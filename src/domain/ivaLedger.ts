@@ -329,11 +329,10 @@ export function buildIvaLedgerByPeriod(
      * "vales" o "empleados" — falsos positivos sobre líneas que SÍ son IVA
      * acreditable real.
      *
-     * Medido contra la cifra autoritativa de Fiscal (IVA acreditable de pagos
-     * a proveedores acumulado a agosto 2026 = $154,099,012, sin Multicarga):
-     *   · sin exclusiones → $151,741,051  (−1.5%)  ← se usa ésta
-     *   · con exclusiones → $150,617,035  (−2.3%)
-     * O sea: aplicarlas ALEJA el número del dato correcto.
+     * (La comparación contra Fiscal que acompañaba esta decisión —−1.5% vs
+     * −2.3%— se retiró el 2026-09-24: ambas cifras incluían abril-2026 cargado
+     * dos veces en el origen. La razón que queda es la semántica: las reglas
+     * son de otro reporte y dan falsos positivos sobre el mayor.)
      *
      * Los estimadores (CXP/OC/movimientos, `addIvaCreditable` en
      * `taxModuleService`) SÍ las conservan: ésa es la ruta análoga al reporte

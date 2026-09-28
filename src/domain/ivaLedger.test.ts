@@ -209,10 +209,7 @@ describe('buildIvaLedgerByPeriod', () => {
    * Las reglas de `ivaCreditableExclusions` las dio Fiscal para el REPORTE DE
    * EGRESOS, no para el mayor, y matchean texto libre — sobre un asiento
    * contable atrapan compras legítimas cuya descripción menciona "vales" o
-   * "empleados". Medido contra la cifra autoritativa de Fiscal (acreditable de
-   * pagos a proveedores a agosto 2026 = $154,099,012, sin Multicarga):
-   * aplicarlas da $150,617,035 (−2.3%) y NO aplicarlas $151,741,051 (−1.5%).
-   * Por eso el default del mayor es no excluir.
+   * "empleados". Por eso el default del mayor es no excluir.
    */
   it('por defecto NO aplica las exclusiones de Fiscal al mayor', () => {
     const byPeriod = buildIvaLedgerByPeriod([
