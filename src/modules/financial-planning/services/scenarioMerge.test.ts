@@ -77,6 +77,41 @@ describe('scenarioMerge', () => {
     expect(result.scenarios.find((item) => item.id === draft.id)?.archivedAt).toBeTruthy();
   });
 
+  it('dos ajustes del draft con la misma llave no quedan bajo un id duplicado', () => {
+    // `adjustmentKey` es tipo+target, así que dos propuestas pueden compartirla.
+    // Al promover las dos contra un aprobado existente, ambas reusaban su id.
+    const approvedAdjustment = adjustment('adj-approved', [approved.id]);
+    const draftA = adjustment('adj-draft-a', [draft.id]);
+    const draftB = adjustment('adj-draft-b', [draft.id]);
+    const all = [approvedAdjustment, draftA, draftB];
+    const result = applyMerge({
+      approved,
+      draft,
+      scenarios: [approved, draft],
+      approvedOverrides: [],
+      draftOverrides: [],
+      allOverrides: [],
+      approvedAdjustments: [approvedAdjustment],
+      draftAdjustments: [draftA, draftB],
+      allAdjustments: all,
+      approvedCustomRows: [],
+      draftCustomRows: [],
+      allCustomRows: [],
+      manualEntries: [],
+      changeLog: [],
+      selectedChanges: [
+        { kind: 'MOVEMENT_ADJUSTMENT', id: draftA.id },
+        { kind: 'MOVEMENT_ADJUSTMENT', id: draftB.id },
+      ],
+      archiveDraft: true,
+      user: 'tester@senda.local',
+    });
+
+    expect(result.adjustments).toHaveLength(2);
+    const ids = result.adjustments.map((a) => a.id);
+    expect(new Set(ids).size).toBe(2);
+  });
+
   // Colisión: el draft edita la MISMA celda que ya tenía un override aprobado.
   // El promovido REUSA `existing.id`, así que el filtro por id dejaba pasar
   // también al aprobado viejo: dos valores bajo el mismo id, y cuál ganaba

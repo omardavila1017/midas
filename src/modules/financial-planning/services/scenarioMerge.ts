@@ -280,8 +280,17 @@ export function applyMerge(args: ApplyMergeArgs): ApplyMergeResult {
   const promotedAdjustments: FinancialAdjustment[] = [];
   for (const adjustment of args.draftAdjustments) {
     if (!selectedSet.has(`MOVEMENT_ADJUSTMENT:${adjustmentChangeId(adjustment.id)}`)) continue;
-    const existing = approvedAdjustmentByKey.get(adjustmentKey(adjustment));
+    const key = adjustmentKey(adjustment);
+    const existing = approvedAdjustmentByKey.get(key);
     if (existing) replacedApprovedAdjustmentIds.add(existing.id);
+    // Consumir la entrada, igual que el camino de los overrides: `adjustmentKey`
+    // es tipo+target, así que DOS propuestas del draft pueden compartirla (dos
+    // AMOUNT_DELTA sobre la misma categoría es rutina). Sin este `delete` las dos
+    // reusaban el MISMO `existing.id` y quedaban dos ajustes bajo un id duplicado,
+    // mientras el aprobado original se descartaba — cuál gana al editar o borrar
+    // por id dependía del orden del arreglo. Es la puerta hermana del mismo
+    // defecto que se cerró en los overrides (2026-09-09c).
+    if (existing) approvedAdjustmentByKey.delete(key);
     promotedAdjustmentIds.add(adjustment.id);
     promotedAdjustments.push({
       ...adjustment,

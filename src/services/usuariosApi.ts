@@ -93,14 +93,43 @@ function errorForStatus(status: number, envelope: Envelope | null): AuthApiError
   return new AuthApiError('unknown', messageFrom(envelope, 'No se pudo completar la solicitud.'), status);
 }
 
-async function parseEnvelope(res: Response): Promise<Envelope | null> {
-  const contentType = res.headers.get('content-type') ?? '';
-  if (!contentType.includes('application/json')) return null;
+/**
+ * Resultado de leer el cuerpo de la respuesta. Son TRES casos, no dos, y la
+ * distinción es lo que impide que un fallo pase por éxito:
+ *
+ *   • `json`     — el sobre .NET. Único caso del que se puede leer `data`.
+ *   • `empty`    — 204, cuerpo vacío o un primitivo JSON. El servicio contestó
+ *                  en su propio lenguaje sin datos que devolver (una baja).
+ *   • `non-json` — HAY cuerpo y NO es JSON. El servicio NO contestó: es el
+ *                  fallback SPA de un host estático sin la ruta `/api/midas`
+ *                  (HTTP 200 + `index.html`), el MISMO modo de falla que ya
+ *                  costó un diagnóstico equivocado en `/api/openai`.
+ *
+ * Se juzga por el CONTENIDO, no por el `content-type`: un backend que mande
+ * `text/json` sigue siendo válido, y el HTML no parsea en ningún caso.
+ */
+type EnvelopeResult =
+  | { kind: 'json'; envelope: Envelope }
+  | { kind: 'empty' }
+  | { kind: 'non-json' };
+
+async function parseEnvelope(res: Response): Promise<EnvelopeResult> {
+  if (res.status === 204) return { kind: 'empty' };
+  let text: string;
   try {
-    const payload = await res.json();
-    return payload && typeof payload === 'object' ? (payload as Envelope) : null;
+    text = await res.text();
   } catch {
-    return null;
+    return { kind: 'non-json' };
+  }
+  if (!text.trim()) return { kind: 'empty' };
+  try {
+    const payload: unknown = JSON.parse(text);
+    // Un primitivo (`true`, `"ok"`) no es el sobre pero sí es una respuesta del
+    // servicio: se trata como `empty` para no romper una baja que conteste así.
+    if (payload && typeof payload === 'object') return { kind: 'json', envelope: payload as Envelope };
+    return { kind: 'empty' };
+  } catch {
+    return { kind: 'non-json' };
   }
 }
 
@@ -119,9 +148,25 @@ async function request(path: string, init: RequestInit = {}): Promise<unknown> {
     throw new AuthApiError('network', 'No se pudo conectar con el servicio de usuarios.', 0);
   }
 
-  const envelope = await parseEnvelope(res);
+  const parsed = await parseEnvelope(res);
+  const envelope = parsed.kind === 'json' ? parsed.envelope : null;
   if (!res.ok) {
     throw errorForStatus(res.status, envelope);
+  }
+  // Un 2xx cuyo cuerpo NO es JSON no es una respuesta de este servicio. Sin
+  // esto `request` devolvía `null` y los writes lo leían como éxito:
+  // `createUsuario`/`updateUsuario` hacen `toUsuarioApi(null) ?? body` y
+  // `deleteUsuario` ignora el resultado — o sea que un alta, una baja, un
+  // cambio de rol/permisos o una contraseña fijada por un admin se reportaban
+  // APLICADOS sin haber salido del navegador. Es el hermano por la otra puerta
+  // del `success:false` de abajo: mismo modo de falla, distinta forma del
+  // cuerpo.
+  if (parsed.kind === 'non-json') {
+    throw new AuthApiError(
+      'network',
+      'El servicio de usuarios respondió algo que no es su contrato (revisa que la ruta /api/midas esté desplegada).',
+      res.status,
+    );
   }
   // El sobre puede reportar fallo lógico con HTTP 2xx (`success:false`) — no
   // tratarlo como éxito (p.ej. un PUT rechazado se leería como aplicado).

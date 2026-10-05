@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import type { PlanningRow } from '../../../shared-finance/types';
+import type { CellOverride, PlanningRow } from '../../../shared-finance/types';
 import { SpreadsheetGrid } from './SpreadsheetGrid';
 
 const row: PlanningRow = {
@@ -13,6 +13,32 @@ const row: PlanningRow = {
 };
 
 describe('<SpreadsheetGrid />', () => {
+  // El motor (`applyCellOverridesToBuckets`) salta los overrides de una columna
+  // cerrada. El grid no lo hacía: un override capturado sobre un mes futuro
+  // seguía PINTÁNDOSE (celda + total del bucket) cuando ese mes cerraba, pero ya
+  // no entraba en Neto ni en Caja final. La pantalla contradecía al motor sobre
+  // el mismo dinero, y el usuario no podía corregirlo (la columna cerrada no es
+  // editable).
+  it('una columna CERRADA ignora el override y muestra el agregado real', () => {
+    const stale: CellOverride = {
+      id: 'co-1',
+      scenarioId: 'approved',
+      conceptKey: row.conceptKey,
+      granularity: 'monthly',
+      bucketKey: '2026-04-01',
+      type: 'INFLOW',
+      mode: 'REPLACE',
+      value: 999,
+      createdBy: 'tester',
+      createdAt: '2026-04-01T00:00:00.000Z',
+      updatedAt: '2026-04-01T00:00:00.000Z',
+    };
+    renderPastGrid(stale);
+
+    // `baseValueFor` devuelve 100 en toda celda; el override valdría 999.
+    expect(screen.queryAllByText(/999/).length).toBe(0);
+  });
+
   it('selects cells on click without opening the advanced inspector', () => {
     const onInspectCell = vi.fn();
     renderGrid(onInspectCell);
@@ -127,6 +153,28 @@ describe('<SpreadsheetGrid />', () => {
     }
   });
 });
+
+function renderPastGrid(override: CellOverride | undefined) {
+  return render(
+    <SpreadsheetGrid
+      rows={[row]}
+      columns={[
+        { key: '2026-04-01', label: 'Abr', isPast: true, isCurrent: false },
+        { key: '2026-05-01', label: 'May', isPast: false, isCurrent: true },
+      ]}
+      granularity="monthly"
+      isReadOnly={false}
+      asOfDate="2026-05-01"
+      baseValueFor={() => 100}
+      overrideFor={(_c, bucketKey) => (bucketKey === '2026-04-01' ? override : undefined)}
+      totalsFor={() => 100}
+      onCommitCell={() => {}}
+      onClearCell={() => {}}
+      onAddRow={() => {}}
+      onInspectCell={() => {}}
+    />,
+  );
+}
 
 function renderGrid(
   onInspectCell: (conceptKey: string, bucketKey: string) => void,

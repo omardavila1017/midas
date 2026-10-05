@@ -181,7 +181,11 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
         const colSums = new Map<string, number>();
         for (const child of entry.rows) {
           for (const column of columns) {
-            const override = overrideFor(child.conceptKey, column.key);
+            // Una columna CERRADA ignora el override, igual que el motor
+            // (`applyCellOverridesToBuckets` lo salta con `isPast`). Sin esto el
+            // total del bucket sumaba un valor que Neto y Caja final ya no
+            // cuentan: la pantalla contradecía al motor sobre el mismo dinero.
+            const override = column.isPast ? undefined : overrideFor(child.conceptKey, column.key);
             const value = override ? override.value : baseValueFor(child.conceptKey, column.key);
             if (value) colSums.set(column.key, (colSums.get(column.key) ?? 0) + value);
           }
@@ -546,7 +550,10 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
       {leftSpacer}
       {visibleColumns.map((column, vi) => {
         const colIndex = colStart + vi;
-        const override = overrideFor(row.conceptKey, column.key);
+        // Misma regla que el motor y que el total del bucket: cerrada la
+        // columna, manda el agregado real. El override no se borra —deja de
+        // aplicar—, así que la celda vuelve a decir lo que el motor calcula.
+        const override = column.isPast ? undefined : overrideFor(row.conceptKey, column.key);
         const baseValue = baseValueFor(row.conceptKey, column.key);
         const value = override ? override.value : baseValue;
         const isSelected = selection?.rowIndex === rowIndex && selection?.colIndex === colIndex;

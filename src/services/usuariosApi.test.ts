@@ -89,6 +89,60 @@ describe('usuariosApi', () => {
       );
       await expect(listUsuarios()).rejects.toMatchObject({ code: 'not_found', status: 404 });
     });
+
+    it('trata HTTP 2xx con cuerpo NO-JSON como error, no como exito', async () => {
+      // Fallback SPA de un host estatico sin la ruta /api/midas: HTTP 200 +
+      // index.html. Antes `parseEnvelope` devolvia null y `request` lo leia
+      // como exito.
+      vi.mocked(fetch).mockResolvedValueOnce(
+        new Response('<!doctype html><html><body>Midas</body></html>', {
+          status: 200,
+          headers: { 'Content-Type': 'text/html' },
+        }),
+      );
+      await expect(listUsuarios()).rejects.toMatchObject({ code: 'network', status: 200 });
+    });
+
+    it('un write NO se reporta aplicado cuando el servicio no contesto', async () => {
+      // El caso caro: `createUsuario` hace `toUsuarioApi(data) ?? body`, asi que
+      // devolvia el body como si el alta hubiera ocurrido. Lo mismo valia para
+      // el cambio de rol/permisos y la contrasena que fija un admin (PUT).
+      vi.mocked(fetch).mockResolvedValueOnce(
+        new Response('<!doctype html><html></html>', { status: 200, headers: { 'Content-Type': 'text/html' } }),
+      );
+      await expect(
+        createUsuario({ usuario: 'nuevo@x.com', contrasena: 'HASH', role: 'user', permissions: ['cxp'] }),
+      ).rejects.toMatchObject({ code: 'network' });
+    });
+
+    it('204 sin cuerpo sigue siendo exito (degrada solo)', async () => {
+      // Una baja puede contestar 204. Endurecer el 2xx no la puede romper.
+      vi.mocked(fetch).mockResolvedValueOnce(new Response(null, { status: 204 }));
+      await expect(deleteUsuario('x@x.com')).resolves.toBeUndefined();
+    });
+
+    it('un primitivo JSON sigue siendo exito (degrada solo)', async () => {
+      // `true`/`"ok"` no es el sobre pero SI es una respuesta del servicio;
+      // tratarlo como fallo rompería una baja que conteste asi.
+      vi.mocked(fetch).mockResolvedValueOnce(
+        new Response('true', { status: 200, headers: { 'Content-Type': 'application/json' } }),
+      );
+      await expect(deleteUsuario('x@x.com')).resolves.toBeUndefined();
+    });
+
+    it('lee el sobre aunque el content-type no diga application/json', async () => {
+      // Se juzga por contenido, no por encabezado: antes un `text/json` perdia
+      // el `data` entero y se leia como exito vacio.
+      vi.mocked(fetch).mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ status: 200, success: true, message: 'OK', date: 'x', data: [
+            { usuario: 'a@x.com', contrasena: 'h', rol: 'Usuario', permisos: 'cxp', b_Activo: true },
+          ] }),
+          { status: 200, headers: { 'Content-Type': 'text/json' } },
+        ),
+      );
+      await expect(listUsuarios()).resolves.toHaveLength(1);
+    });
   });
 
   describe('POST /usuarios (#6) — alta', () => {
