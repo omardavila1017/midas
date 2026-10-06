@@ -172,6 +172,29 @@ function options() {
   };
 }
 
+describe('propuesta dirigida a una ocurrencia manual con el id legado', () => {
+  it('el id viejo con índice de ventana sigue apuntando a la misma ocurrencia', () => {
+    const occurrence = movement('manual-entry:me-1:2026-07-15', 'OUTFLOW', 'OPEX', '2026-07-15', 1_000);
+    const [adjusted] = applyAdjustmentsToMovements(
+      [occurrence],
+      [adjustment('AMOUNT_OVERRIDE', { targetExpression: 'manual-entry:me-1:2026-07-15:3', adjustedValue: 1_500 })],
+      'liquidity',
+    );
+    expect(adjusted.adjustedAmount).toBe(1_500);
+  });
+
+  it('no confunde ocurrencias de otra fecha', () => {
+    const occurrence = movement('manual-entry:me-1:2026-08-15', 'OUTFLOW', 'OPEX', '2026-08-15', 1_000);
+    const [untouched] = applyAdjustmentsToMovements(
+      [occurrence],
+      [adjustment('AMOUNT_OVERRIDE', { targetExpression: 'manual-entry:me-1:2026-07-15:3', adjustedValue: 1_500 })],
+      'liquidity',
+    );
+    expect(untouched.adjustedAmount).toBeUndefined();
+    expect(untouched.projectedAmount).toBe(1_000);
+  });
+});
+
 function movement(
   id: string,
   type: FinancialMovement['type'],

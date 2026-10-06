@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowDownLeft, ArrowUpRight, Search, X } from 'lucide-react';
-import { fmtCurrency } from '../../../formatters';
+import { fmtCurrency, parseDateForDisplay } from '../../../formatters';
 import { effectiveAmount, effectiveMovementDate } from '../../shared-finance/calculation-engine/financialProjectionEngine';
 import type { FinancialMovement } from '../../shared-finance/types';
 
@@ -155,7 +155,7 @@ export function MovementPickerModal({ movements, asOfDate, onPick, onClose }: Pr
 
 function formatDateMx(iso: string): string {
   try {
-    const date = new Date(iso);
+    const date = parseDateForDisplay(iso);
     if (Number.isNaN(date.getTime())) return iso;
     return new Intl.DateTimeFormat('es-MX', { day: '2-digit', month: 'short', year: '2-digit' }).format(date);
   } catch {

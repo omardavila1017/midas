@@ -82,6 +82,7 @@ import { createNewDraft } from '../../financial-planning/services/scenarioDuplic
 import { loadChangeLog, saveChangeLog } from '../../financial-planning/services/changeLogStorage';
 import { debouncedPersist } from '../../financial-planning/services/debouncedPersist';
 import { newPlanningDocOrigin, subscribePlanningDocs } from '../../financial-planning/services/planningDocSync';
+import { hydratePlanningFromServer } from '../../financial-planning/services/planningRemoteSync';
 import { newChangeLogEntry } from '../../financial-planning/services/changeLogTemplates';
 import { type ScenarioForecastRun } from '../../financial-planning/services/scenarioForecastRun';
 import { APPROVED_SCENARIO_ID, BASE_SCENARIO_ID, ensureCoreScenarios } from '../../financial-planning/services/scenarioBootstrap';
@@ -782,6 +783,14 @@ function ProjectionDashboardInner(props: Props & { today: string; source: Financ
       default: skipNextPersistRef.current.delete(key);
     }
   }), []);
+
+  // Este tablero edita los mismos seis documentos que Planeación, así que
+  // también hidrata del store compartido al montar (una vez por sesión, la
+  // lectura se comparte). Sin esto, una sesión que sólo abre Proyección nunca
+  // abría la compuerta del write-through. No-op con el store apagado.
+  useEffect(() => {
+    void hydratePlanningFromServer().catch(() => {});
+  }, []);
 
   useEffect(() => {
     const reloadTaxStore = () => setTaxStore(loadTaxStore(defaultTaxStore()));

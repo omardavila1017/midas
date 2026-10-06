@@ -187,7 +187,11 @@ describe('expandManualPlanningEntriesToMovements — category / recurrence branc
     // cada ocurrencia se cuenta desde la fecha de INICIO, así que el día vuelve
     // en los meses que sí lo tienen.
     expect(quarterly.map((m) => m.projectedDate)).toEqual(['2026-01-31', '2026-04-30', '2026-07-31', '2026-10-31']);
-    expect(weekly[0].concept).toBe('Movimiento manual (1/4)');
+    // Este assert pineaba el contador en el concepto ("(1/4)"), que volvía
+    // inestable la llave de la fila. El concepto es ahora el nombre y el
+    // contador vive en los comentarios.
+    expect(weekly[0].concept).toBe('Movimiento manual');
+    expect(weekly[0].comments).toContain('Ocurrencia 1 de 4 en la ventana');
   });
 
   it('clips occurrences that fall outside the requested window', () => {

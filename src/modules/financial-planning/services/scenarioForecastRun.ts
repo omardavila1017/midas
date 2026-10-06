@@ -115,6 +115,8 @@ export interface BuildScenarioForecastRunArgs {
  */
 export function buildScenarioPipeline(args: BuildScenarioForecastRunArgs): ScenarioPipelineResult {
   const isBase = args.scenarioKind === 'BASE';
+  // `asOfDate` corta las ocurrencias de meses cerrados (mismo corte que
+  // `nonBaseSource` abajo): el pasado de un escenario no-Base es el de Base.
   const manualMovements = !isBase && args.includeManualEntries !== false
     ? expandManualPlanningEntriesToMovements(args.manualEntries, {
       scenarioId: args.scenarioId,
@@ -299,15 +301,20 @@ export function aggregateScenarioForecastRun(
     name: args.scenarioName,
   });
 
+  // Invariante del Escenario Base: sin overrides ni custom rows. La UI ya no los
+  // crea sobre Base, pero la hidratación remota sí podría traerlos — defensa en
+  // profundidad para que nunca toquen el run de Base.
+  const overrides = pipeline.isBase ? [] : args.overrides;
+  const customRows = pipeline.isBase ? [] : args.customRows;
   const rows = buildPlanningRows({
     movements: rawProjection.movements,
-    customRows: args.customRows,
-    overrides: args.overrides,
+    customRows,
+    overrides,
     providers: args.providers,
   });
   const buckets = applyCellOverridesToBuckets({
     buckets: rawProjection.buckets,
-    overrides: args.overrides,
+    overrides,
     movements: rawProjection.movements,
     rows,
     granularity: args.granularity,
@@ -328,7 +335,7 @@ export function aggregateScenarioForecastRun(
       initialCash: args.initialCash,
     }),
     rows,
-    overrides: args.overrides,
+    overrides,
     supplierPlan: pipeline.supplierPlan,
   };
 }

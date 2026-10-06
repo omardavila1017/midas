@@ -5,8 +5,7 @@ import {
   fmtYearMonthShort,
   fmtYearMonthLong,
   fmtPctInt,
-  signClass,
-} from './formatters';
+  signClass, parseDateForDisplay } from './formatters';
 
 describe('formatters', () => {
   describe('fmtDate', () => {
@@ -84,5 +83,28 @@ describe('formatters', () => {
       expect(signClass(-5)).toBe('negative');
       expect(signClass(0)).toBe('neutral');
     });
+  });
+});
+
+describe('parseDateForDisplay', () => {
+  // `new Date('2026-07-15')` es medianoche UTC: formateado en hora de México
+  // (UTC-6) sale "14 jul". Es el defecto que este helper existe para cerrar, y
+  // por eso TODO formateador de fechas debe pasar por aquí.
+  it('una fecha pelada conserva su día al formatearse en hora local', () => {
+    const d = parseDateForDisplay('2026-07-15');
+    expect(d.getFullYear()).toBe(2026);
+    expect(d.getMonth()).toBe(6);
+    expect(d.getDate()).toBe(15);
+    expect(new Intl.DateTimeFormat('es-MX', { day: '2-digit', month: 'short' }).format(d)).toMatch(/15/);
+  });
+
+  it('un timestamp con hora pasa tal cual y un Date se devuelve intacto', () => {
+    expect(parseDateForDisplay('2026-07-15T23:30:00Z').toISOString()).toBe('2026-07-15T23:30:00.000Z');
+    const date = new Date('2026-07-15T10:00:00Z');
+    expect(parseDateForDisplay(date)).toBe(date);
+  });
+
+  it('una cadena inválida produce Invalid Date (el caller decide)', () => {
+    expect(Number.isNaN(parseDateForDisplay('no-es-fecha').getTime())).toBe(true);
   });
 });

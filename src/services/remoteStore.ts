@@ -169,22 +169,28 @@ export async function listManifest(ns: StoreNamespace): Promise<ManifestEntry[]>
   }
 }
 
-/** Lectura por lote. `{}` = apagado, sin keys o fallo. */
+/**
+ * Lectura por lote. `{}` = apagado o sin keys. **`null` = la lectura FALLÓ**
+ * (red, no-2xx, JSON ilegible o con forma inesperada). La distinción es
+ * load-bearing: con `{}` también en el fallo, el caller no podía separar "el
+ * server no tiene estos docs" de "no se pudo leer", y la hidratación de
+ * planeación sembraba el estado local ENCIMA del servidor ante un 500.
+ */
 export async function batchGet<T>(
   ns: StoreNamespace,
   keys: string[],
-): Promise<Record<string, T>> {
+): Promise<Record<string, T> | null> {
   if (!storeEnabled() || keys.length === 0) return {};
   const res = await doFetch('POST', `${enc(ns)}/batch-get`, { keys });
-  if (!res || !res.ok) return {};
+  if (!res || !res.ok) return null;
   try {
     const json = (await res.json()) as unknown;
     if (json && typeof json === 'object' && !Array.isArray(json)) {
       return json as Record<string, T>;
     }
-    return {};
+    return null;
   } catch {
-    return {};
+    return null;
   }
 }
 

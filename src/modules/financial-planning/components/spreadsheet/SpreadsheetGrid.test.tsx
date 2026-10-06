@@ -39,6 +39,47 @@ describe('<SpreadsheetGrid />', () => {
     expect(screen.queryAllByText(/999/).length).toBe(0);
   });
 
+  // La selección vive por ÍNDICE, pero una ola de rebuild en segundo plano
+  // reordena las filas mientras el usuario teclea (INVARIANTE DE ESTABILIDAD).
+  // Resolver la fila por índice AL CONFIRMAR escribía el monto en otra fila.
+  it('confirma sobre la fila que se empezó a editar aunque las filas se reordenen', () => {
+    const onCommitCell = vi.fn();
+    const filaA = { ...row, conceptKey: 'INFLOW:AR_COLLECTION:a', label: 'Cliente A' };
+    const filaB = { ...row, conceptKey: 'INFLOW:AR_COLLECTION:b', label: 'Cliente B' };
+    const { rerender } = render(editableGrid([filaA, filaB], onCommitCell));
+
+    fireEvent.click(screen.getByText('Clientes'));
+    fireEvent.doubleClick(cellOfRow('Cliente A')); // abre el editor sobre Cliente A
+
+    // Llega el rebuild con una fila que ORDENA ANTES (el grid ordena por label),
+    // así que el índice que tenía Cliente A pasa a ser de otra fila.
+    const filaNueva = { ...row, conceptKey: 'INFLOW:AR_COLLECTION:nueva', label: 'Abarrotes del Norte' };
+    rerender(editableGrid([filaNueva, filaA, filaB], onCommitCell));
+
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '500' } });
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' });
+
+    expect(onCommitCell).toHaveBeenCalledWith('INFLOW:AR_COLLECTION:a', '2026-05-01', 500, 'INFLOW');
+  });
+
+  // Hermano del caso de arriba: si la columna CIERRA entre que se abre el
+  // editor y se confirma, el override iría a un bucket que el motor ignora y
+  // que la UI ya no deja editar ni limpiar.
+  it('descarta la edición si la columna cerró mientras se editaba', () => {
+    const onCommitCell = vi.fn();
+    const { rerender } = render(editableGrid([row], onCommitCell));
+
+    fireEvent.click(screen.getByText('Clientes'));
+    fireEvent.doubleClick(cellOfRow('Cliente A'));
+
+    rerender(editableGrid([row], onCommitCell, true));
+
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '500' } });
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' });
+
+    expect(onCommitCell).not.toHaveBeenCalled();
+  });
+
   it('selects cells on click without opening the advanced inspector', () => {
     const onInspectCell = vi.fn();
     renderGrid(onInspectCell);
@@ -154,6 +195,29 @@ describe('<SpreadsheetGrid />', () => {
   });
 });
 
+function editableGrid(
+  rows: PlanningRow[],
+  onCommitCell: (conceptKey: string, bucketKey: string, value: number, type: PlanningRow['type']) => void,
+  columnClosed = false,
+) {
+  return (
+    <SpreadsheetGrid
+      rows={rows}
+      columns={[{ key: '2026-05-01', label: 'May', isPast: columnClosed, isCurrent: !columnClosed }]}
+      granularity="monthly"
+      isReadOnly={false}
+      asOfDate="2026-05-01"
+      baseValueFor={() => 100}
+      overrideFor={() => undefined}
+      totalsFor={() => 100}
+      onCommitCell={onCommitCell}
+      onClearCell={() => {}}
+      onAddRow={() => {}}
+      onInspectCell={() => {}}
+    />
+  );
+}
+
 function renderPastGrid(override: CellOverride | undefined) {
   return render(
     <SpreadsheetGrid
@@ -198,6 +262,13 @@ function renderGrid(
       onInspectCell={onInspectCell}
     />,
   );
+}
+
+function cellOfRow(label: string): HTMLElement {
+  const rowElement = screen.getByRole('button', { name: label }).closest('[role="row"]');
+  const cell = rowElement?.querySelector('[role="gridcell"]');
+  if (!cell) throw new Error(`Celda no encontrada para ${label}`);
+  return cell as HTMLElement;
 }
 
 function dataCell(): HTMLElement {

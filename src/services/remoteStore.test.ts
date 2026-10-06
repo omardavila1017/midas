@@ -118,6 +118,20 @@ describe('remoteStore', () => {
       expect(JSON.parse(init.body)).toEqual({ keys: ['a', 'b'] });
     });
 
+    it('batchGet distingue el FALLO (null) de "no hay docs" ({})', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ error: 'boom' }, 500)));
+      vi.useFakeTimers();
+      const pending = batchGet('planning', ['scenarios']);
+      await vi.runAllTimersAsync();
+      expect(await pending).toBeNull();
+
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse([1, 2])));
+      expect(await batchGet('planning', ['scenarios'])).toBeNull();
+
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({})));
+      expect(await batchGet('planning', ['scenarios'])).toEqual({});
+    });
+
     it('encodes keys with colons into a single path segment', async () => {
       const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ value: [] }));
       vi.stubGlobal('fetch', fetchMock);

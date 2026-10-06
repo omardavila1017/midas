@@ -2,6 +2,7 @@ import {
   applyAdjustmentsToMovements,
   calculateBaseProjection,
   calculateScenarioImpact,
+  normalizeMovementTarget,
 } from '../../shared-finance/calculation-engine/financialProjectionEngine';
 import type {
   FinancialAdjustment,
@@ -75,5 +76,6 @@ export function scenarioUsesMovement(
   adjustment: FinancialAdjustment,
 ): boolean {
   if (adjustment.targetType !== 'MOVEMENT') return true;
-  return movements.some((movement) => movement.id === adjustment.targetExpression || movement.sourceObjectId === adjustment.targetExpression);
+  const target = normalizeMovementTarget(adjustment.targetExpression);
+  return movements.some((movement) => movement.id === target || movement.sourceObjectId === target);
 }

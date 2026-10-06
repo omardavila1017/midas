@@ -35,6 +35,14 @@ export interface ExpandManualPlanningEntriesOptions {
   scenarioId: string;
   startDate: string;
   endDate: string;
+  /**
+   * "Hoy" del run. Las ocurrencias de meses CERRADOS (antes del mes de
+   * `asOfDate`) NO se emiten: el pasado de un escenario no-Base es el de Base
+   * (MOTOR 1, anclado al banco), y una entrada manual encima de él lo contaría
+   * dos veces y arrastraría el error al `closingCash` de todos los meses
+   * siguientes. Mismo corte (`>= primer día del mes en curso`) que
+   * `buildScenarioPipeline` aplica a `nonBaseSource`.
+   */
   asOfDate: string;
 }
 
@@ -134,20 +142,29 @@ export function countManualEntryOccurrences(
   return enumerateDates(entry.startDate, entry.endDate ?? rangeEnd, entry.recurrence, entry.startDate, rangeEnd).length;
 }
 
+/** Id estable de una ocurrencia: (entrada, fecha). */
+export function manualOccurrenceId(entryId: string, date: string): string {
+  return `manual-entry:${entryId}:${date}`;
+}
+
 function expandEntry(
   entry: ManualPlanningEntry,
   options: ExpandManualPlanningEntriesOptions,
 ): FinancialMovement[] {
+  const firstOpenDay = isIsoDate(options.asOfDate) ? `${options.asOfDate.slice(0, 7)}-01` : '';
   const dates = enumerateDates(
     entry.startDate,
     entry.endDate ?? options.endDate,
     entry.recurrence,
     options.startDate,
     options.endDate,
-  );
+  ).filter((date) => date >= firstOpenDay);
   const score = entry.status === 'APPROVED' ? 78 : 58;
   return dates.map((date, index) => ({
-    id: `manual-entry:${entry.id}:${date}:${index + 1}`,
+    // La identidad de la ocurrencia es (entrada, fecha). Un índice dentro de la
+    // ventana cambiaría con la granularidad o el año y desconectaría cualquier
+    // propuesta dirigida a este movimiento.
+    id: manualOccurrenceId(entry.id, date),
     sourceSystem: 'MANUAL',
     sourceObjectId: entry.id,
     type: entry.type,
@@ -156,7 +173,12 @@ function expandEntry(
     counterpartyType: counterpartyType(entry),
     companyId: entry.companyId,
     businessUnitId: entry.businessUnitId,
-    concept: occurrenceConcept(entry, index, dates.length),
+    // El concepto es el NOMBRE, sin contador: sin `counterpartyName` la fila del
+    // grid se llavea por el concepto, y un "(3/12)" — que depende de cuántas
+    // ocurrencias caen en la ventana — partía la entrada en una fila por
+    // ocurrencia y movía la llave al cambiar granularidad o año, desconectando
+    // sus overrides (que entonces sumaban como fila huérfana).
+    concept: entry.name,
     currency: 'MXN',
     originalAmount: entry.amount,
     baseAmount: entry.amount,
@@ -179,6 +201,7 @@ function expandEntry(
     comments: [
       entry.description,
       `Escenario manual: ${entry.status === 'APPROVED' ? 'aprobado' : 'propuesta'}`,
+      dates.length > 1 ? `Ocurrencia ${index + 1} de ${dates.length} en la ventana` : undefined,
     ].filter((value): value is string => Boolean(value)),
     createdAt: entry.createdAt,
     updatedAt: entry.updatedAt,
@@ -239,11 +262,6 @@ function counterpartyType(entry: ManualPlanningEntry): FinancialMovement['counte
   if (entry.category === 'CAPEX' || entry.category === 'OPEX') return 'SUPPLIER';
   if (entry.type === 'INFLOW') return 'CUSTOMER';
   return 'INTERNAL';
-}
-
-function occurrenceConcept(entry: ManualPlanningEntry, index: number, total: number): string {
-  if (total <= 1) return entry.name;
-  return `${entry.name} (${index + 1}/${total})`;
 }
 
 function defaultTaxTreatment(

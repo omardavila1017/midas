@@ -119,6 +119,106 @@ describe('scenarioForecastRun', () => {
     expect(run.summary.finalCash).toBe(1_200);
   });
 
+  it('Base ignora overrides y custom rows aunque lleguen (p.ej. por hidratación remota)', () => {
+    const run = buildScenarioForecastRun({
+      scenarioId: 'base',
+      scenarioName: 'Base',
+      scenarioKind: 'BASE',
+      sourceMovements: [movement('cxc:pending-1', 'INFLOW', 'AR_COLLECTION', 'Cliente pendiente', 700)],
+      adjustments: [],
+      manualEntries: [],
+      customRows: [{
+        id: 'cr-1',
+        scenarioId: 'base',
+        conceptKey: 'OUTFLOW:MANUAL:fila-colada',
+        label: 'Fila colada',
+        type: 'OUTFLOW',
+        category: 'MANUAL',
+        createdBy: 'x',
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      }],
+      overrides: [{
+        id: 'co-base',
+        scenarioId: 'base',
+        conceptKey: 'INFLOW:AR_COLLECTION:cliente-pendiente',
+        granularity: 'monthly',
+        bucketKey: '2026-05-01',
+        type: 'INFLOW',
+        mode: 'REPLACE',
+        value: 9_999,
+        createdBy: 'x',
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      }],
+      clients: [],
+      providers: [],
+      assumptions: { year: 2026, globalCompliance: 1, factorajeDays: 30 },
+      cxpRecords: [],
+      budget: null,
+      companyCode: 'all',
+      taxStore: defaultTaxStore(),
+      startDate: '2026-05-01',
+      endDate: '2026-05-31',
+      today: '2026-05-18',
+      initialCash: 100,
+      supplierInitialCash: 100,
+      minimumCash: 0,
+      granularity: 'monthly',
+    });
+
+    expect(run.buckets[0].inflows).toBe(700);
+    expect(run.overrides).toEqual([]);
+    expect(run.rows.some((row) => row.conceptKey === 'OUTFLOW:MANUAL:fila-colada')).toBe(false);
+  });
+
+  it('Aprobado no emite entradas manuales en meses cerrados (el pasado es el de Base)', () => {
+    const run = buildScenarioForecastRun({
+      scenarioId: 'approved',
+      scenarioName: 'Aprobado',
+      scenarioKind: 'APPROVED',
+      sourceMovements: [],
+      adjustments: [],
+      manualEntries: [{
+        id: 'me-renta',
+        scenarioIds: ['approved'],
+        type: 'OUTFLOW',
+        category: 'OPEX',
+        name: 'Renta',
+        amount: 1_000,
+        startDate: '2026-01-15',
+        recurrence: 'MONTHLY',
+        taxTreatment: 'IVA_CREDITABLE',
+        status: 'APPROVED',
+        createdBy: 'x',
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      }],
+      customRows: [],
+      overrides: [],
+      clients: [],
+      providers: [],
+      assumptions: { year: 2026, globalCompliance: 1, factorajeDays: 30 },
+      cxpRecords: [],
+      budget: null,
+      companyCode: 'all',
+      taxStore: defaultTaxStore(),
+      startDate: '2026-01-01',
+      endDate: '2026-06-30',
+      today: '2026-05-18',
+      initialCash: 100,
+      supplierInitialCash: 100,
+      minimumCash: 0,
+      granularity: 'monthly',
+    });
+
+    const manualDates = run.movements
+      .filter((m) => m.sourceSystem === 'MANUAL')
+      .map((m) => m.adjustedDate ?? m.projectedDate)
+      .sort();
+    expect(manualDates).toEqual(['2026-05-15', '2026-06-15']);
+  });
+
   it('drops projected movements dated in previous months but keeps real historical (non-base)', () => {
     const run = buildScenarioForecastRun({
       scenarioId: 'approved',

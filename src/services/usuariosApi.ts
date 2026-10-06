@@ -193,8 +193,7 @@ function toUsuarioApi(raw: unknown): UsuarioApi | null {
     contrasena: typeof r.contrasena === 'string' ? r.contrasena : '',
     rol: typeof r.rol === 'string' ? r.rol : '',
     permisos: typeof r.permisos === 'string' ? r.permisos : null,
-    // Tolera `b_Activo`/`bActivo`/`activo`; ausente → activo (true).
-    b_Activo: r.b_Activo === false || r.bActivo === false || r.activo === false ? false : true,
+    b_Activo: readActivo(r),
   };
 }
 
@@ -276,6 +275,23 @@ export async function validateUsuario(email: string, contrasenaHash: string): Pr
     usuario: typeof record.usuario === 'string' ? normalizeEmail(record.usuario) : normalizeEmail(email),
     role,
     permissions: role === 'admin' ? [] : parsePermissionsCsv(typeof record.permisos === 'string' ? record.permisos : null),
-    activo: record.b_Activo === false ? false : true,
+    activo: readActivo(record),
   };
+}
+
+/**
+ * Bandera de usuario activo (`B_Activo`, bit en la tabla de usuarios). Tolera los
+ * alias del sobre (`b_Activo`/`bActivo`/`B_Activo`/`activo`) y la serialización
+ * del bit como número o texto. Ausente → activo: el backend es quien rechaza, y
+ * leer "inactivo" donde no hay dato dejaría fuera a todos.
+ */
+function readActivo(record: Record<string, unknown>): boolean {
+  for (const field of ['b_Activo', 'bActivo', 'B_Activo', 'activo']) {
+    const value = record[field];
+    if (value === undefined || value === null) continue;
+    if (value === false || value === 0) return false;
+    if (typeof value === 'string' && ['0', 'false', 'n', 'no'].includes(value.trim().toLowerCase())) return false;
+    return true;
+  }
+  return true;
 }

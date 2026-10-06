@@ -137,3 +137,33 @@ describe('recurrencia mensual anclada a la fecha de inicio', () => {
     expect(monthly('2026-01-15', '2026-03-15')).toEqual(['2026-01-15', '2026-02-15', '2026-03-15']);
   });
 });
+
+describe('meses cerrados y llave estable de la fila', () => {
+  const renta = () => createManualPlanningEntry({
+    scenarioIds: ['approved'], type: 'OUTFLOW', category: 'OPEX', name: 'Renta',
+    amount: 1000, startDate: '2026-01-15', endDate: '2026-12-15', recurrence: 'MONTHLY',
+  });
+
+  it('no emite ocurrencias de meses cerrados (antes del mes de asOfDate)', () => {
+    const dates = expandManualPlanningEntriesToMovements([renta()], {
+      scenarioId: 'approved', startDate: '2026-01-01', endDate: '2026-12-31', asOfDate: '2026-10-05',
+    }).map((m) => m.projectedDate);
+    // Octubre se conserva completo (el mes en curso se proyecta), ene–sep no.
+    expect(dates).toEqual(['2026-10-15', '2026-11-15', '2026-12-15']);
+  });
+
+  it('concepto e id no dependen de la ventana', () => {
+    const entry = renta();
+    const fullYear = expandManualPlanningEntriesToMovements([entry], {
+      scenarioId: 'approved', startDate: '2026-01-01', endDate: '2026-12-31', asOfDate: '2026-01-01',
+    });
+    const nearWindow = expandManualPlanningEntriesToMovements([entry], {
+      scenarioId: 'approved', startDate: '2026-10-01', endDate: '2026-11-30', asOfDate: '2026-01-01',
+    });
+    const octFull = fullYear.find((m) => m.projectedDate === '2026-10-15')!;
+    const octNear = nearWindow.find((m) => m.projectedDate === '2026-10-15')!;
+    expect(octNear.id).toBe(octFull.id);
+    expect(octNear.concept).toBe('Renta');
+    expect(new Set(fullYear.map((m) => m.concept))).toEqual(new Set(['Renta']));
+  });
+});

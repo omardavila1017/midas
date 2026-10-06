@@ -267,6 +267,11 @@ export async function login(email: string, password: string): Promise<LoginRespo
     // Modo ONLINE: hash SHA-256 en el cliente → POST /usuarios/validate.
     const hash = await hashPassword(password);
     const validated = await validateUsuario(email, hash); // 401 → invalid_credentials
+    // El contrato dice que el backend contesta 401 a un usuario inactivo; si
+    // algún día no lo hace, un `B_Activo = 0` no debe abrir sesión.
+    if (!validated.activo) {
+      throw new AuthApiError('forbidden', 'Tu cuenta está desactivada. Pide a un administrador que la reactive.', 403);
+    }
     if (validated.role === 'none') {
       throw new AuthApiError('forbidden', 'Tu cuenta no tiene un rol asignado para Midas.', 403);
     }

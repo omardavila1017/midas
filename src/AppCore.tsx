@@ -3630,9 +3630,10 @@ export default function App() {
       auxiliarIvaAutoFetchDone.current = true;
       return;
     }
-    const now = new Date();
-    const expectedFloorDate = `${now.getUTCFullYear()}-01-01`;
+    // Piso y techo en el MISMO huso (America/Mexico_City): con getUTCFullYear la
+    // tarde del 31-dic el piso saltaba al año siguiente y el refresh se saltaba.
     const expectedTopDate = todayISO();
+    const expectedFloorDate = `${expectedTopDate.slice(0, 4)}-01-01`;
     // Cias que REALMENTE tienen registros en memoria. `clearCacheStorageOnEntry`
     // borra `auxiliarIvaRecords` (esta en HEAVY_KEYS) pero NO los marcadores
     // `auxiliarIvaLoadedCias`, que viven en el MidasStore — asi que el marcador

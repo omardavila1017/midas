@@ -21,6 +21,7 @@ import {
   buildBucketDates,
   effectiveAmount,
   effectiveMovementDate,
+  normalizeMovementTarget,
 } from '../../shared-finance/calculation-engine/financialProjectionEngine';
 import type {
   CellOverride,
@@ -631,29 +632,16 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
     };
   }, []);
 
-  // Shared store: hydrate planning data from the server-side store once on
-  // mount so every browser converges on the same scenarios/propuestas/overrides.
-  // The first paint already rendered from the local mirror (useState above); if
-  // the server holds different data we pull it into localStorage and reload it
-  // into state here. No-op when the store is OFF or unreachable (best-effort).
+  // Shared store: hydrate planning data from the server-side store once per
+  // session so every browser converges on the same scenarios/propuestas/
+  // overrides. The first paint already rendered from the local mirror; the keys
+  // the server changes come back through `subscribePlanningDocs` (origin
+  // 'remote-store'), which reloads only those and skips the echo-persist.
+  // No-op when the store is OFF or unreachable (best-effort).
   useEffect(() => {
-    let cancelled = false;
-    hydratePlanningFromServer()
-      .then((changed) => {
-        if (cancelled || !changed) return;
-        setStoredScenarios(loadPlanningScenarios([]));
-        setStoredAdjustments(loadPlanningAdjustments([]));
-        setManualEntries(loadManualPlanningEntries([]));
-        setCustomRows(loadCustomRows([]));
-        setCellOverrides(loadCellOverrides([]));
-        setChangeLog(loadChangeLog([]));
-      })
-      .catch(() => {
-        /* best-effort: keep the local mirror */
-      });
-    return () => {
-      cancelled = true;
-    };
+    void hydratePlanningFromServer().catch(() => {
+      /* best-effort: keep the local mirror */
+    });
   }, []);
 
   // Bootstrap: enforce Base + Approved + clean legacy on every relevant change.
@@ -1090,7 +1078,9 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
     const targetIds = new Set<string>();
     for (const adj of aiAdjustments) {
       if (adj.targetType === 'MOVEMENT' && adj.targetExpression) {
-        targetIds.add(adj.targetExpression);
+        // Misma normalización que el motor: una propuesta guardada contra el id
+        // legado de una ocurrencia manual se aplicaría pero no se marcaría.
+        targetIds.add(normalizeMovementTarget(adj.targetExpression));
       }
     }
     for (const movement of activeRunRaw.movements) {
@@ -1295,12 +1285,16 @@ function PlanningDashboardInner(props: Props & { today: string; source: Financia
       approvedScenarioId: approvedScenario.id,
       allOverrides: cellOverrides,
       allCustomRows: customRows,
+      allAdjustments: storedAdjustments,
+      allManualEntries: manualEntries,
       changeLog,
       user: USER,
     });
     setStoredScenarios((current) => [...current, result.newScenario]);
     setCellOverrides(result.cellOverrides);
     setCustomRows(result.customRows);
+    setStoredAdjustments(result.adjustments);
+    setManualEntries(result.manualEntries);
     setChangeLog(result.changeLog);
     setActiveScenarioId(result.newScenario.id);
     setStatusMessage(`Propuesta duplicada como "${result.newScenario.name}".`);

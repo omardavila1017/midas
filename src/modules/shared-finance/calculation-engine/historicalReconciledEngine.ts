@@ -544,7 +544,18 @@ export function buildHistoricalReconciledMovements({ monthly, inputs }: BuildArg
     if (bankCoverage.has(`${normalizeCia(record.cia)}::${ym}`)) continue;
     const facturaKey = cxcFacturaKey(record);
     if (cobradaBancoKeysHistoric.has(facturaKey)) continue;
-    const amount = Math.abs(record.importeBrutoPesos);
+    // El EFECTIVO que entró, no el bruto de la factura: una factura
+    // parcialmente cobrada (saldo vivo con abonos ya aplicados) tiene
+    // `fechaCobro` pero sólo entró `bruto − pendiente`. Emitir el bruto infla
+    // el ingreso histórico por la diferencia. Es la misma aritmética que usa el
+    // calendario de Cobranza para el mismo hecho (`cobradoParcial`).
+    // Medido 2026-10-06: las 43 facturas parciales vivas caen en meses CON
+    // cobertura bancaria, donde este relleno no corre — así que hoy el
+    // resultado es idéntico (degrada solo) y el latente queda cerrado.
+    const pendiente = Number.isFinite(record.importePendientePesos)
+      ? Math.max(0, record.importePendientePesos)
+      : 0;
+    const amount = Math.max(0, Math.abs(record.importeBrutoPesos) - pendiente);
     if (!Number.isFinite(amount) || amount <= 0) continue;
     const clientMatch = findClientForCobranza(record, clientLookupHistoric);
     const counterpartyId = clientMatch?.client.id ?? record.noCliente;

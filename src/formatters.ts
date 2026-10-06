@@ -92,15 +92,23 @@ export function fmtDelta(value: number): string {
 
 /* ─── Dates ─── */
 
+/**
+ * `Date` de una fecha para FORMATEAR. Una cadena `YYYY-MM-DD` pelada se parsea
+ * como medianoche UTC por spec, así que cualquier formateo en hora local la
+ * pinta un día antes en America/Mexico_City (UTC-6) — "15 jul" se ve "14 jul".
+ * Anclar a mediodía local deja la fecha intacta en cualquier huso.
+ *
+ * ÚSALA en todo formateador de fechas; no vuelvas a hacer `new Date(iso)` para
+ * pintar una fecha. Los valores con hora (timestamps) pasan tal cual.
+ */
+export function parseDateForDisplay(date: Date | string): Date {
+  if (typeof date !== 'string') return date;
+  return new Date(/^\d{4}-\d{2}-\d{2}$/.test(date) ? `${date}T12:00:00` : date);
+}
+
 /** Short date: "20 Abr 2026" */
 export function fmtDate(date: Date | string): string {
-  // Bare YYYY-MM-DD strings parse as UTC midnight per spec, so the local
-  // getters below would render them a day early in America/Mexico_City
-  // (UTC-6). Anchor them to local noon — same trick callers were applying
-  // by hand with `${iso}T12:00:00`.
-  const d = typeof date === 'string'
-    ? new Date(/^\d{4}-\d{2}-\d{2}$/.test(date) ? `${date}T12:00:00` : date)
-    : date;
+  const d = parseDateForDisplay(date);
   // Defensive: malformed/empty date strings (legacy payloads, un-facturado
   // CITI/JDE fields) yield an Invalid Date — render '' instead of the
   // user-hostile "NaN undefined NaN". Mirrors the guards in
@@ -156,9 +164,7 @@ export function fmtRelative(date: Date | string): string {
   // Same local-noon anchor as fmtDate: a bare YYYY-MM-DD parses as UTC
   // midnight, which diffed against a local `now` classifies today's date
   // as "Ayer" after 18:00 in America/Mexico_City.
-  const d = typeof date === 'string'
-    ? new Date(/^\d{4}-\d{2}-\d{2}$/.test(date) ? `${date}T12:00:00` : date)
-    : date;
+  const d = parseDateForDisplay(date);
   if (Number.isNaN(d.getTime())) return '';
   const now = new Date();
   const diff = Math.floor((now.getTime() - d.getTime()) / 86_400_000);

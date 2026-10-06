@@ -1,5 +1,5 @@
 import type { ProjectionSummary } from '../../shared-finance/types';
-import { fmtCompact, fmtCurrency } from '../../../formatters';
+import { fmtCompact, fmtCurrency, parseDateForDisplay } from '../../../formatters';
 
 export type InsightTone = 'positive' | 'warning' | 'critical' | 'neutral';
 
@@ -89,7 +89,7 @@ export function deriveInsights(input: InsightInput): Insight[] {
 
 function formatDateMx(iso: string): string {
   try {
-    const date = new Date(iso);
+    const date = parseDateForDisplay(iso);
     if (Number.isNaN(date.getTime())) return iso;
     return new Intl.DateTimeFormat('es-MX', { day: '2-digit', month: 'short' }).format(date);
   } catch {

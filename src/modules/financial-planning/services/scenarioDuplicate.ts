@@ -1,6 +1,8 @@
 import type {
   CellOverride,
+  FinancialAdjustment,
   FinancialScenario,
+  ManualPlanningEntry,
   PlanningCustomRow,
   ScenarioChangeLogEntry,
 } from '../../shared-finance/types';
@@ -11,6 +13,13 @@ export interface DuplicateDraftArgs {
   approvedScenarioId: string;
   allOverrides: CellOverride[];
   allCustomRows: PlanningCustomRow[];
+  /**
+   * Requeridos (no opcionales) a propósito: una copia que omite las propuestas
+   * o las entradas manuales del origen CALCULA DISTINTO sin avisar — fue
+   * exactamente el defecto que esto cierra.
+   */
+  allAdjustments: FinancialAdjustment[];
+  allManualEntries: ManualPlanningEntry[];
   changeLog: ScenarioChangeLogEntry[];
   newName?: string;
   user?: string;
@@ -20,6 +29,8 @@ export interface DuplicateDraftResult {
   newScenario: FinancialScenario;
   cellOverrides: CellOverride[];
   customRows: PlanningCustomRow[];
+  adjustments: FinancialAdjustment[];
+  manualEntries: ManualPlanningEntry[];
   changeLog: ScenarioChangeLogEntry[];
 }
 
@@ -63,8 +74,40 @@ export function duplicateDraft(args: DuplicateDraftArgs): DuplicateDraftResult {
     updatedAt: now,
   }));
 
+  const sourceManualEntries = args.allManualEntries.filter((entry) => entry.scenarioIds.includes(args.source.id));
+  const manualEntryIdRemap = new Map<string, string>();
+  const clonedManualEntries: ManualPlanningEntry[] = sourceManualEntries.map((entry, index) => {
+    const clonedId = `${entry.id}:dup:${Date.now()}:${index}`;
+    manualEntryIdRemap.set(entry.id, clonedId);
+    return {
+      ...entry,
+      id: clonedId,
+      scenarioIds: [newId],
+      createdAt: now,
+      updatedAt: now,
+    };
+  });
+
+  // Propuestas y entradas manuales se CLONAN (copia independiente, igual que
+  // overrides y custom rows): compartir el registro haría que editar una copia
+  // moviera la otra. El motor las selecciona por `scenarioIds`.
+  const sourceAdjustments = args.allAdjustments.filter((adjustment) => adjustment.scenarioIds.includes(args.source.id));
+  const clonedAdjustments: FinancialAdjustment[] = sourceAdjustments.map((adjustment, index) => ({
+    ...adjustment,
+    id: `${adjustment.id}:dup:${Date.now()}:${index}`,
+    scenarioIds: [newId],
+    // Una propuesta dirigida a un MOVIMIENTO apunta por id, y el id de una
+    // ocurrencia manual lleva dentro el id de su entrada — que acaba de
+    // clonarse. Sin re-apuntar, la copia deja de aplicar esa propuesta: el
+    // defecto que duplicar-completo viene a cerrar, por la otra puerta.
+    targetExpression: remapManualTarget(adjustment, manualEntryIdRemap),
+    createdAt: now,
+  }));
+
   const cellOverrides = [...args.allOverrides, ...clonedOverrides];
   const customRows = [...args.allCustomRows, ...clonedCustomRows];
+  const adjustments = [...args.allAdjustments, ...clonedAdjustments];
+  const manualEntries = [...args.allManualEntries, ...clonedManualEntries];
 
   const seedEntry = newChangeLogEntry({
     scenarioId: newId,
@@ -75,6 +118,8 @@ export function duplicateDraft(args: DuplicateDraftArgs): DuplicateDraftResult {
       sourceName: args.source.name,
       cellCount: clonedOverrides.length,
       customRowCount: clonedCustomRows.length,
+      adjustmentCount: clonedAdjustments.length,
+      manualEntryCount: clonedManualEntries.length,
     },
     createdBy: user,
   });
@@ -83,6 +128,8 @@ export function duplicateDraft(args: DuplicateDraftArgs): DuplicateDraftResult {
     newScenario,
     cellOverrides,
     customRows,
+    adjustments,
+    manualEntries,
     changeLog: [seedEntry, ...args.changeLog],
   };
 }
@@ -119,4 +166,22 @@ export function createNewDraft(args: {
   });
 
   return { newScenario, seedEntry };
+}
+
+/**
+ * Re-apunta una propuesta dirigida a una ocurrencia de entrada manual cuando esa
+ * entrada se clonó. El id de la ocurrencia es `manual-entry:<entryId>:<fecha>`
+ * y `sourceObjectId` es el `<entryId>` pelado — `matchesAdjustmentTarget` acepta
+ * los dos, así que ambas formas se re-apuntan. Cualquier otro target (una
+ * categoría, un rango de fechas, un movimiento del API) se devuelve intacto.
+ */
+function remapManualTarget(adjustment: FinancialAdjustment, remap: Map<string, string>): string {
+  if (adjustment.targetType !== 'MOVEMENT' || remap.size === 0) return adjustment.targetExpression;
+  const expression = adjustment.targetExpression;
+  const direct = remap.get(expression);
+  if (direct) return direct;
+  const occurrence = /^manual-entry:(.+):(\d{4}-\d{2}-\d{2})$/.exec(expression);
+  if (!occurrence) return expression;
+  const clonedEntryId = remap.get(occurrence[1]);
+  return clonedEntryId ? `manual-entry:${clonedEntryId}:${occurrence[2]}` : expression;
 }

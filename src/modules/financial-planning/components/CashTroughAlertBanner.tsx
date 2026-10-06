@@ -1,6 +1,6 @@
 import { AlertOctagon, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { fmtCompact, fmtCurrency } from '../../../formatters';
+import { fmtCompact, fmtCurrency, parseDateForDisplay } from '../../../formatters';
 
 const STORAGE_KEY_PREFIX = 'midas.troughBannerDismissed.v1';
 
@@ -89,7 +89,7 @@ export function CashTroughAlertBanner({
 
 function formatDateMx(iso: string): string {
   try {
-    const date = new Date(iso);
+    const date = parseDateForDisplay(iso);
     if (Number.isNaN(date.getTime())) return iso;
     return new Intl.DateTimeFormat('es-MX', { day: '2-digit', month: 'short' }).format(date);
   } catch {

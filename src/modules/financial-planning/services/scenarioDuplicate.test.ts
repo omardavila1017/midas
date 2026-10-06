@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type {
   CellOverride,
+  FinancialAdjustment,
   FinancialScenario,
+  ManualPlanningEntry,
   PlanningCustomRow,
   ScenarioChangeLogEntry,
 } from '../../shared-finance/types';
@@ -59,6 +61,43 @@ function customRow(patch: Partial<PlanningCustomRow> = {}): PlanningCustomRow {
   };
 }
 
+function adjustmentFor(patch: Partial<FinancialAdjustment> = {}): FinancialAdjustment {
+  return {
+    id: 'adj-1',
+    name: 'Diferir Pemex',
+    scenarioIds: ['draft-src'],
+    type: 'DATE_SHIFT',
+    targetType: 'COUNTERPARTY',
+    targetExpression: 'PEMEX',
+    deltaDays: 15,
+    reasonCode: 'LIQUIDITY',
+    justification: 'test',
+    status: 'DRAFT',
+    createdBy: 'blanca@senda.local',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    ...patch,
+  };
+}
+
+function manualEntryFor(patch: Partial<ManualPlanningEntry> = {}): ManualPlanningEntry {
+  return {
+    id: 'me-1',
+    scenarioIds: ['draft-src'],
+    type: 'OUTFLOW',
+    category: 'OPEX',
+    name: 'Renta',
+    amount: 1000,
+    startDate: '2026-03-15',
+    recurrence: 'MONTHLY',
+    taxTreatment: 'IVA_CREDITABLE',
+    status: 'DRAFT',
+    createdBy: 'blanca@senda.local',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    ...patch,
+  };
+}
+
 function existingLogEntry(): ScenarioChangeLogEntry {
   return {
     id: 'cl-old',
@@ -77,6 +116,8 @@ function args(patch: Partial<DuplicateDraftArgs> = {}): DuplicateDraftArgs {
     approvedScenarioId: APPROVED_ID,
     allOverrides: [override(), override({ id: 'ov-other', scenarioId: 'otro-escenario' })],
     allCustomRows: [customRow(), customRow({ id: 'row-other', scenarioId: 'otro-escenario' })],
+    allAdjustments: [adjustmentFor(), adjustmentFor({ id: 'adj-other', scenarioIds: ['otro-escenario'] })],
+    allManualEntries: [manualEntryFor(), manualEntryFor({ id: 'me-other', scenarioIds: ['otro-escenario'] })],
     changeLog: [existingLogEntry()],
     ...patch,
   };
@@ -132,6 +173,64 @@ describe('duplicateDraft', () => {
     expect(result.customRows).toHaveLength(3);
   });
 
+  it('clona las propuestas y entradas manuales del origen: la copia calcula igual', () => {
+    const result = duplicateDraft(args());
+    const newId = result.newScenario.id;
+    const adjClones = result.adjustments.filter((a) => a.scenarioIds.includes(newId));
+    const entryClones = result.manualEntries.filter((e) => e.scenarioIds.includes(newId));
+    expect(adjClones).toHaveLength(1);
+    expect(adjClones[0]).toMatchObject({ type: 'DATE_SHIFT', targetExpression: 'PEMEX', deltaDays: 15, scenarioIds: [newId] });
+    expect(adjClones[0].id).not.toBe('adj-1');
+    expect(entryClones).toHaveLength(1);
+    expect(entryClones[0]).toMatchObject({ name: 'Renta', amount: 1000, scenarioIds: [newId] });
+    expect(entryClones[0].id).not.toBe('me-1');
+    // Copias independientes: el origen y los de otros escenarios no se tocan.
+    expect(result.adjustments).toHaveLength(3);
+    expect(result.adjustments.find((a) => a.id === 'adj-1')?.scenarioIds).toEqual(['draft-src']);
+    expect(result.manualEntries).toHaveLength(3);
+    expect(result.manualEntries.find((e) => e.id === 'me-1')?.scenarioIds).toEqual(['draft-src']);
+  });
+
+  it('re-apunta la propuesta dirigida a una ocurrencia manual al id clonado', () => {
+    const result = duplicateDraft(args({
+      allAdjustments: [adjustmentFor({
+        id: 'adj-mov',
+        type: 'AMOUNT_OVERRIDE',
+        targetType: 'MOVEMENT',
+        targetExpression: 'manual-entry:me-1:2026-03-15',
+        adjustedValue: 2000,
+      })],
+    }));
+    const newId = result.newScenario.id;
+    const clonedEntry = result.manualEntries.find((e) => e.scenarioIds.includes(newId))!;
+    const clonedAdj = result.adjustments.find((a) => a.scenarioIds.includes(newId))!;
+    expect(clonedAdj.targetExpression).toBe(`manual-entry:${clonedEntry.id}:2026-03-15`);
+    // El original no se toca.
+    expect(result.adjustments.find((a) => a.id === 'adj-mov')!.targetExpression)
+      .toBe('manual-entry:me-1:2026-03-15');
+  });
+
+  it('re-apunta también cuando la propuesta apunta al id pelado de la entrada', () => {
+    const result = duplicateDraft(args({
+      allAdjustments: [adjustmentFor({ id: 'adj-src', targetType: 'MOVEMENT', targetExpression: 'me-1' })],
+    }));
+    const newId = result.newScenario.id;
+    const clonedEntry = result.manualEntries.find((e) => e.scenarioIds.includes(newId))!;
+    expect(result.adjustments.find((a) => a.scenarioIds.includes(newId))!.targetExpression).toBe(clonedEntry.id);
+  });
+
+  it('no toca el target de una propuesta ajena a las entradas manuales', () => {
+    const result = duplicateDraft(args({
+      allAdjustments: [
+        adjustmentFor({ id: 'adj-cat', targetType: 'CATEGORY', targetExpression: 'AP_PAYMENT' }),
+        adjustmentFor({ id: 'adj-api', targetType: 'MOVEMENT', targetExpression: 'cxc:00011:RI-123' }),
+      ],
+    }));
+    const newId = result.newScenario.id;
+    const targets = result.adjustments.filter((a) => a.scenarioIds.includes(newId)).map((a) => a.targetExpression).sort();
+    expect(targets).toEqual(['AP_PAYMENT', 'cxc:00011:RI-123']);
+  });
+
   it('antepone una entrada DUPLICATE_DRAFT al changelog con los conteos clonados', () => {
     const result = duplicateDraft(args());
     expect(result.changeLog).toHaveLength(2);
@@ -144,6 +243,8 @@ describe('duplicateDraft', () => {
       sourceName: 'Propuesta original',
       cellCount: 1,
       customRowCount: 1,
+      adjustmentCount: 1,
+      manualEntryCount: 1,
     });
     // El log previo se conserva DESPUÉS del seed:
     expect(result.changeLog[1].id).toBe('cl-old');
@@ -156,11 +257,17 @@ describe('duplicateDraft', () => {
   });
 
   it('origen sin overrides ni rows produce copia limpia con conteos en 0', () => {
-    const result = duplicateDraft(args({ allOverrides: [], allCustomRows: [], changeLog: [] }));
+    const result = duplicateDraft(args({
+      allOverrides: [], allCustomRows: [], allAdjustments: [], allManualEntries: [], changeLog: [],
+    }));
     expect(result.cellOverrides).toEqual([]);
     expect(result.customRows).toEqual([]);
+    expect(result.adjustments).toEqual([]);
+    expect(result.manualEntries).toEqual([]);
     expect(result.changeLog).toHaveLength(1);
-    expect(result.changeLog[0].payload).toMatchObject({ cellCount: 0, customRowCount: 0 });
+    expect(result.changeLog[0].payload).toMatchObject({
+      cellCount: 0, customRowCount: 0, adjustmentCount: 0, manualEntryCount: 0,
+    });
   });
 });
 

@@ -75,6 +75,27 @@ describe('authApi — modo ONLINE (WS/midas)', () => {
     expect(readMidasSession()).toBeNull();
   });
 
+  it.each([
+    ['b_Activo: false', { b_Activo: false }],
+    ['B_Activo: 0 (bit numérico)', { B_Activo: 0 }],
+    ['activo: "0"', { activo: '0' }],
+  ])('login rechaza a un usuario inactivo aunque el backend conteste 200 (%s)', async (_label, flag) => {
+    installRouter({
+      'POST /api/midas/usuarios/validate': () =>
+        envelope({ usuario: 'baja@gruposenda.com', rol: 'Usuario', permisos: 'cxp', ...flag }),
+    });
+    await expect(login('baja@gruposenda.com', 'Senda123')).rejects.toMatchObject({ code: 'forbidden' });
+    expect(readMidasSession()).toBeNull();
+  });
+
+  it('login sin la bandera de activo en la respuesta abre sesión (degrada solo)', async () => {
+    installRouter({
+      'POST /api/midas/usuarios/validate': () =>
+        envelope({ usuario: 'a@gruposenda.com', rol: 'Usuario', permisos: 'cxp' }),
+    });
+    await expect(login('a@gruposenda.com', 'Senda123')).resolves.toMatchObject({ role: 'user' });
+  });
+
   it('getAuthSession reads the local marker (no session endpoint)', async () => {
     writeMidasSession('a@x.com', 'admin', []);
     await expect(getAuthSession()).resolves.toMatchObject({

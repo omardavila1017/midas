@@ -468,7 +468,8 @@ function matchesAdjustmentTarget(movement: FinancialMovement, adjustment: Financ
   const expression = adjustment.targetExpression.trim();
   if (!expression) return false;
   if (adjustment.targetType === 'MOVEMENT') {
-    return movement.id === expression || movement.sourceObjectId === expression;
+    const target = normalizeMovementTarget(expression);
+    return movement.id === target || movement.sourceObjectId === target;
   }
   if (adjustment.targetType === 'CATEGORY') {
     return movement.category === expression;
@@ -481,6 +482,23 @@ function matchesAdjustmentTarget(movement: FinancialMovement, adjustment: Financ
     return Boolean(start && end && inRange(effectiveMovementDate(movement), start, end));
   }
   return filterExpressionMatches(movement, expression);
+}
+
+/**
+ * Normaliza el `targetExpression` de una propuesta dirigida a un MOVIMIENTO.
+ *
+ * Hasta 2026-10 el id de una ocurrencia manual llevaba además su índice DENTRO
+ * de la ventana (`manual-entry:<id>:2026-07-15:3`), que cambiaba con la
+ * granularidad o el año. Ahora es `(entrada, fecha)`; una propuesta guardada
+ * contra la forma vieja sigue apuntando a la misma ocurrencia.
+ *
+ * Es idempotente sobre cualquier otra expresión, así que TODO consumidor que
+ * compare un `targetExpression` contra `movement.id` debe pasarlo por aquí —
+ * si no, el motor aplica la propuesta y la UI la reporta como huérfana.
+ */
+export function normalizeMovementTarget(expression: string): string {
+  const match = /^(manual-entry:.+:\d{4}-\d{2}-\d{2}):\d+$/.exec(expression);
+  return match ? match[1] : expression;
 }
 
 function filterExpressionMatches(movement: FinancialMovement, expression: string): boolean {

@@ -342,6 +342,80 @@ describe('buildHistoricalReconciledMovements (MOTOR 1)', () => {
     }
   });
 
+  // El relleno histórico es el EFECTIVO que entró, no el bruto de la factura:
+  // una parcialmente cobrada tiene `fechaCobro` pero sólo entró
+  // `bruto − pendiente`. Es la misma aritmética del calendario de Cobranza.
+  it('cobranza-historic: de una factura PARCIAL emite lo cobrado, no el bruto', () => {
+    const anchor = bankStatement({
+      cia: '00002',
+      cuenta: 'CTA-OTHER',
+      movimientos: [
+        bankMovement({ cia: '00002', cuenta: 'CTA-OTHER', tipoMovimiento: 'ABONO', importe: 1, fechaOperacion: '2026-04-01', concepto: 'DEPOSITO' }),
+      ],
+    });
+    const parcial: CobranzaRecord = cobranzaRecord({
+      cia: '00001',
+      noCliente: '1',
+      nombreCliente: 'Cliente Parcial',
+      noFactura: 'CXC-P',
+      fechaFactura: '2026-03-10',
+      fechaCobro: '2026-04-10',
+      importeBrutoPesos: 10_000,
+      importePendientePesos: 4_000,
+    });
+    const inputs = {
+      companyCode: 'all',
+      bankStatements: [anchor],
+      clients: [],
+      providers: [],
+      cxpRecords: [],
+      cobranzaRecords: [parcial],
+      assumptions,
+      budget: null,
+      startingBalance: 0,
+      asOfDate: '2026-05-01',
+    };
+    const monthly = buildCanonicalProjection(inputs).monthly;
+    const mv = buildHistoricalReconciledMovements({ monthly, inputs });
+    const filler = mv.find((m) => m.id === 'cobranza-historic:00001:1:CXC-P:2026-04-10');
+    expect(filler?.projectedAmount).toBe(6_000);
+  });
+
+  it('cobranza-historic: de una factura TOTALMENTE cobrada emite el bruto (degrada solo)', () => {
+    const anchor = bankStatement({
+      cia: '00002',
+      cuenta: 'CTA-OTHER',
+      movimientos: [
+        bankMovement({ cia: '00002', cuenta: 'CTA-OTHER', tipoMovimiento: 'ABONO', importe: 1, fechaOperacion: '2026-04-01', concepto: 'DEPOSITO' }),
+      ],
+    });
+    const total: CobranzaRecord = cobranzaRecord({
+      cia: '00001',
+      noCliente: '1',
+      nombreCliente: 'Cliente Total',
+      noFactura: 'CXC-T',
+      fechaFactura: '2026-03-10',
+      fechaCobro: '2026-04-10',
+      importeBrutoPesos: 10_000,
+      importePendientePesos: 0,
+    });
+    const inputs = {
+      companyCode: 'all',
+      bankStatements: [anchor],
+      clients: [],
+      providers: [],
+      cxpRecords: [],
+      cobranzaRecords: [total],
+      assumptions,
+      budget: null,
+      startingBalance: 0,
+      asOfDate: '2026-05-01',
+    };
+    const monthly = buildCanonicalProjection(inputs).monthly;
+    const mv = buildHistoricalReconciledMovements({ monthly, inputs });
+    expect(mv.find((m) => m.id === 'cobranza-historic:00001:1:CXC-T:2026-04-10')?.projectedAmount).toBe(10_000);
+  });
+
   it('emite cobranza-historic: solo para (cia, mes) SIN cobertura bancaria', () => {
     const anchorStatement = bankStatement({
       cia: '00002',

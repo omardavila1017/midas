@@ -207,6 +207,15 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
 
   const [selection, setSelection] = useState<CellCoord | null>(null);
   const [isEditing, setIsEditing] = useState(false);
+  /**
+   * Celda que se está editando, por LLAVE. La selección vive por índice
+   * (`rowIndex`/`colIndex`), y entre que se abre el editor y se confirma pueden
+   * cambiar las filas: las olas de rebuild en segundo plano reordenan
+   * `displayRows` mientras el usuario teclea (ver INVARIANTE DE ESTABILIDAD en
+   * CLAUDE.md). Resolver la fila por índice AL CONFIRMAR escribía el monto en
+   * otra fila — dinero capturado a mano en el concepto equivocado, sin señal.
+   */
+  const editTargetRef = useRef<{ conceptKey: string; colKey: string; type: PlanningRow['type'] } | null>(null);
   const [draftValue, setDraftValue] = useState('');
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -322,17 +331,25 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
     setIsEditing(false);
   }, [columns.length, displayRows.length]);
 
-  const startEdit = useCallback((seed?: string) => {
+  /**
+   * `at` permite abrir el editor sobre una celda que AÚN no está en `selection`.
+   * `setSelection` no se refleja hasta el siguiente render, así que el doble
+   * clic (que selecciona y edita en el mismo gesto) abría el editor sobre la
+   * celda seleccionada ANTES — o no lo abría si no había ninguna.
+   */
+  const startEdit = useCallback((seed?: string, at?: CellCoord) => {
     if (isReadOnly) {
       onReadOnlyAttempt?.();
       return;
     }
-    if (!selection) return;
-    const displayRow = displayRows[selection.rowIndex];
-    const col = columns[selection.colIndex];
+    const coord = at ?? selection;
+    if (!coord) return;
+    const displayRow = displayRows[coord.rowIndex];
+    const col = columns[coord.colIndex];
     if (!displayRow || displayRow.kind !== 'data' || !col) return;
     const row = displayRow.row;
     if (col.isPast) return;
+    editTargetRef.current = { conceptKey: row.conceptKey, colKey: col.key, type: row.type };
     if (seed !== undefined) {
       setDraftValue(seed);
     } else {
@@ -344,25 +361,31 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
   }, [baseValueFor, columns, displayRows, isReadOnly, onReadOnlyAttempt, overrideFor, selection]);
 
   const commitEdit = useCallback(() => {
-    if (!selection || !isEditing) {
+    const target = editTargetRef.current;
+    editTargetRef.current = null;
+    if (!isEditing || !target) {
       setIsEditing(false);
       return;
     }
-    const displayRow = displayRows[selection.rowIndex];
-    const col = columns[selection.colIndex];
-    if (!displayRow || displayRow.kind !== 'data' || !col) {
+    // La columna se revalida por LLAVE, no por índice: entre `startEdit` y el
+    // commit puede haber rodado `today`, cambiado la granularidad o llegado una
+    // ola de rebuild. Una columna que ya cerró se descarta — el motor ignora los
+    // overrides de un bucket cerrado (`applyCellOverridesToBuckets`), así que
+    // persistirlo guardaría un número que nadie suma y que la UI ya no deja
+    // editar ni limpiar.
+    const col = columns.find((candidate) => candidate.key === target.colKey);
+    if (!col || col.isPast) {
       setIsEditing(false);
       return;
     }
-    const row = displayRow.row;
     const parsed = parseNumericInput(draftValue);
     if (parsed === null) {
       setIsEditing(false);
       return;
     }
-    onCommitCell(row.conceptKey, col.key, Math.max(0, parsed), row.type);
+    onCommitCell(target.conceptKey, target.colKey, Math.max(0, parsed), target.type);
     setIsEditing(false);
-  }, [columns, displayRows, draftValue, isEditing, onCommitCell, selection]);
+  }, [columns, draftValue, isEditing, onCommitCell]);
 
   const clearSelectedCell = useCallback(() => {
     if (!selection || isReadOnly) return;
@@ -576,7 +599,7 @@ export function SpreadsheetGrid(props: SpreadsheetGridProps) {
             }}
             onDoubleClick={() => {
               setSelection({ rowIndex, colIndex });
-              startEdit();
+              startEdit(undefined, { rowIndex, colIndex });
             }}
             className={cellClass}
             style={{ width: colWidth, flex: `0 0 ${colWidth}px` }}
