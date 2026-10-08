@@ -69,7 +69,8 @@ export function ProposalSuggestionCard({ suggestion, onAccept, onEdit, onDismiss
           {draft.percentageChange != null && (
             <span className="rounded-full bg-[var(--gray-100)] px-2 py-0.5 text-[var(--gray-700)]">
               {draft.percentageChange > 0 ? '+' : ''}
-              {draft.percentageChange}%
+              {/* El draft guarda FRACCIÓN (ver `percentToFraction`): ×100 para pintar puntos. */}
+              {Number((draft.percentageChange * 100).toFixed(2))}%
             </span>
           )}
         </div>

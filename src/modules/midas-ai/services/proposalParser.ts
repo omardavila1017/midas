@@ -53,6 +53,29 @@ export interface FailedProposal {
   raw: RawProposalArgs;
 }
 
+/**
+ * FRONTERA DE UNIDAD del canal de Midas AI: PORCENTAJE → FRACCIÓN.
+ *
+ * El prompt le pide al modelo el cambio en PUNTOS porcentuales (`-15 = -15%`,
+ * `midasPromptTemplates.ts`), que es lo natural para un LLM. El resto del
+ * sistema guarda `percentageChange` como FRACCIÓN: la ruta humana divide entre
+ * 100 (`AdjustmentEditorPopover`), el motor predictivo emite `0.06`/`-0.08`, y
+ * el display multiplica por 100 (`scenarioMerge`). El motor aplica
+ * `monto * (1 + percentageChange)`.
+ *
+ * Sin esta conversión un `-15` llegaba al motor como `monto * (1 - 15)` =
+ * `monto * -14` → `Math.max(0, …)` = **$0**: la propuesta BORRABA el pago en vez
+ * de reducirlo 15%, y un `+10` lo multiplicaba por 11. En silencio — la tarjeta
+ * pintaba "-15%", que es justo lo que el usuario esperaba ver al aceptar.
+ *
+ * La asimetría favorece convertir: si el modelo desobedeciera y mandara ya una
+ * fracción (`-0.15`), dividir de nuevo da `-0.0015` — una reducción del 0.15%,
+ * un casi no-op. El modo de falla contrario borra dinero.
+ */
+function percentToFraction(value: number | undefined): number | undefined {
+  return value === undefined ? undefined : value / 100;
+}
+
 export function parseProposal(args: RawProposalArgs): ParsedProposal | FailedProposal {
   const name = typeof args.name === 'string' ? args.name.trim() : '';
   const type = typeof args.type === 'string' ? (args.type as FinancialAdjustment['type']) : null;
@@ -80,7 +103,7 @@ export function parseProposal(args: RawProposalArgs): ParsedProposal | FailedPro
     justification,
     deltaAmount: numberOrUndef(args.deltaAmount),
     deltaDays: numberOrUndef(args.deltaDays),
-    percentageChange: numberOrUndef(args.percentageChange),
+    percentageChange: percentToFraction(numberOrUndef(args.percentageChange)),
     adjustedValue: numberOrUndef(args.adjustedValueAmount),
   };
 

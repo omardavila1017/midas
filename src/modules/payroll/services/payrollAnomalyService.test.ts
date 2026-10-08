@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PayrollCashTreatment, PayrollCostRecord } from '../../shared-finance/types';
 import { detectPayrollAnomalies } from './payrollAnomalyService';
 
@@ -115,5 +115,41 @@ describe('detectPayrollAnomalies — mes en curso y meses futuros', () => {
     ]);
     const anomalies = detectPayrollAnomalies(records, { todayIso: '2026-07-20' });
     expect(anomalies.filter(a => a.label === 'SUELDO ORDINARIO')).toEqual([]);
+  });
+});
+
+describe('reloj por defecto — huso de producción y resuelto por llamada', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('el mes EN CURSO sigue excluido la noche del último día del mes (UTC ya es el mes siguiente)', () => {
+    // 2026-10-01T02:00Z == 2026-09-30 20:00 en America/Mexico_City: septiembre
+    // sigue CORRIENDO. Con el reloj en UTC el "mes en curso" era octubre y
+    // septiembre — medio cargado — entraba a la serie como mes cerrado,
+    // disparando alertas CRÍTICAS falsas. Es el defecto que el filtro cierra.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-01T02:00:00Z'));
+    // 8 meses estables y septiembre (mes 9) a un tercio: parece un desplome.
+    const records = monthlySeries(
+      1,
+      'SUELDO ORDINARIO',
+      [100_000, 101_000, 99_000, 100_500, 100_000, 99_500, 101_500, 100_000, 33_000],
+    );
+    const anomalies = detectPayrollAnomalies(records);
+    expect(anomalies.some(a => a.month === '2026-09')).toBe(false);
+  });
+
+  it('no se congela al importar: el mismo input cambia de veredicto al avanzar el reloj', () => {
+    const records = monthlySeries(
+      1,
+      'SUELDO ORDINARIO',
+      [100_000, 101_000, 99_000, 100_500, 100_000, 99_500, 101_500, 100_000, 33_000],
+    );
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-20T18:00:00Z')); // septiembre en curso
+    expect(detectPayrollAnomalies(records).some(a => a.month === '2026-09')).toBe(false);
+    vi.setSystemTime(new Date('2026-10-20T18:00:00Z')); // septiembre ya cerrado
+    expect(detectPayrollAnomalies(records).some(a => a.month === '2026-09')).toBe(true);
   });
 });

@@ -210,6 +210,29 @@ describe('duplicateDraft', () => {
       .toBe('manual-entry:me-1:2026-03-15');
   });
 
+  it('re-apunta también la forma LEGADA con índice (`:3` al final)', () => {
+    // Hasta 2026-10 el id de una ocurrencia llevaba su índice dentro de la
+    // ventana. El motor sigue aceptándola vía `normalizeMovementTarget`; sin
+    // pasar por él aquí, la copia se quedaba apuntando a la entrada ORIGINAL y
+    // dejaba de aplicar la propuesta.
+    const result = duplicateDraft(args({
+      allAdjustments: [adjustmentFor({
+        id: 'adj-legacy',
+        type: 'AMOUNT_OVERRIDE',
+        targetType: 'MOVEMENT',
+        targetExpression: 'manual-entry:me-1:2026-03-15:3',
+        adjustedValue: 2000,
+      })],
+    }));
+    const newId = result.newScenario.id;
+    const clonedEntry = result.manualEntries.find((e) => e.scenarioIds.includes(newId))!;
+    const clonedAdj = result.adjustments.find((a) => a.scenarioIds.includes(newId))!;
+    expect(clonedAdj.targetExpression).toBe(`manual-entry:${clonedEntry.id}:2026-03-15`);
+    // El original no se toca.
+    expect(result.adjustments.find((a) => a.id === 'adj-legacy')!.targetExpression)
+      .toBe('manual-entry:me-1:2026-03-15:3');
+  });
+
   it('re-apunta también cuando la propuesta apunta al id pelado de la entrada', () => {
     const result = duplicateDraft(args({
       allAdjustments: [adjustmentFor({ id: 'adj-src', targetType: 'MOVEMENT', targetExpression: 'me-1' })],

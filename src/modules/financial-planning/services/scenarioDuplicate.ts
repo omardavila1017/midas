@@ -6,6 +6,7 @@ import type {
   PlanningCustomRow,
   ScenarioChangeLogEntry,
 } from '../../shared-finance/types';
+import { normalizeMovementTarget } from '../../shared-finance/calculation-engine/financialProjectionEngine';
 import { describeDuplicateDraft, newChangeLogEntry } from './changeLogTemplates';
 
 export interface DuplicateDraftArgs {
@@ -177,7 +178,13 @@ export function createNewDraft(args: {
  */
 function remapManualTarget(adjustment: FinancialAdjustment, remap: Map<string, string>): string {
   if (adjustment.targetType !== 'MOVEMENT' || remap.size === 0) return adjustment.targetExpression;
-  const expression = adjustment.targetExpression;
+  // La forma LEGADA de una ocurrencia lleva además su índice dentro de la
+  // ventana (`manual-entry:<id>:<fecha>:3`). `normalizeMovementTarget` la reduce
+  // a la canónica, y su docblock pide que TODO consumidor que compare un
+  // `targetExpression` pase por él. Sin esto, una propuesta guardada antes de
+  // 2026-10 se quedaba apuntando a la entrada ORIGINAL y la copia dejaba de
+  // aplicarla — el mismo defecto que este remap cierra, una puerta más abajo.
+  const expression = normalizeMovementTarget(adjustment.targetExpression);
   const direct = remap.get(expression);
   if (direct) return direct;
   const occurrence = /^manual-entry:(.+):(\d{4}-\d{2}-\d{2})$/.exec(expression);

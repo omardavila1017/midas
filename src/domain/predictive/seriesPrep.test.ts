@@ -3,7 +3,6 @@ import {
   extractHistoricalSeries,
   closedMonthsCount,
   closedMonthsOnly,
-  partialCurrentMonth,
   dayOfMonthProfile,
   type SeriesPoint,
 } from './seriesPrep';
@@ -145,20 +144,6 @@ describe('closedMonthsCount / closedMonthsOnly', () => {
     expect(closedMonthsOnly(series, '2026-03-15').map(p => p.key)).toEqual(['2026-01', '2026-02']);
     // Todo cerrado si asOfDate cae en un mes posterior a la serie.
     expect(closedMonthsCount(series, '2026-04-01')).toBe(3);
-  });
-});
-
-describe('partialCurrentMonth', () => {
-  it('suma sólo los días del mes en curso ≤ asOfDate (mismo total en income y expense — el caller usa uno)', () => {
-    const daily: SeriesPoint[] = [
-      { key: '2026-02-28', value: 999 }, // mes anterior — fuera
-      { key: '2026-03-05', value: 100 },
-      { key: '2026-03-10', value: 50 },
-      { key: '2026-03-20', value: 777 }, // posterior al corte — fuera
-    ];
-    const out = partialCurrentMonth(daily, '2026-03-15');
-    expect(out.income).toBe(150);
-    expect(out.expense).toBe(150); // misma estructura a propósito
   });
 });
 

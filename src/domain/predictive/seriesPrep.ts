@@ -138,27 +138,6 @@ export function closedMonthsOnly(series: SeriesPoint[], asOfDate: string): Serie
 }
 
 /**
- * Suma ingresos/egresos reales del mes en curso hasta la fecha de corte.
- * Devuelve los acumulados parciales — el predictor usa esto para componer
- * el bucket parcial: real-a-la-fecha + predicción del resto.
- */
-export function partialCurrentMonth(
-  daily: SeriesPoint[],
-  asOfDate: string,
-): { income: number; expense: number } {
-  // El caller pasa la serie de income o de expense; este helper sólo suma
-  // valores ≤ asOfDate del mes actual.
-  const currentYm = toYearMonth(asOfDate);
-  let total = 0;
-  for (const p of daily) {
-    if (toYearMonth(p.key) !== currentYm) continue;
-    if (p.key > asOfDate) continue;
-    total += p.value;
-  }
-  return { income: total, expense: total }; // misma estructura — caller usa uno
-}
-
-/**
  * Construye perfil de día-del-mes (1..31) normalizado: porcentaje promedio
  * del flujo mensual que ocurre cada día. Útil para distribuir el forecast
  * mensual en buckets diarios respetando la cadencia real observada.

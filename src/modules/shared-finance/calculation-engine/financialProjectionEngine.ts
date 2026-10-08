@@ -248,6 +248,16 @@ export function applyCellOverridesToBuckets(args: ApplyCellOverridesArgs): Proje
   const movementById = new Map<string, FinancialMovement>();
   for (const movement of movements) movementById.set(movement.id, movement);
 
+  // Red de seguridad de abajo, indexada UNA vez. `buildPlanningRows` recorre los
+  // MISMOS movimientos sin filtrar, así que el único caller de producción deja
+  // esto siempre en `true` y el bucle de rescate no corre — pero su condición sí
+  // se evaluaba, y era un `rows.some(...)` ANIDADO por bucket y por concepto:
+  // O(buckets × conceptos × filas) en cada corrida de escenario, sobre un grid
+  // que llega a miles de filas. El Set conserva la red (un caller que pase filas
+  // y movimientos desparejados sigue sin perder el monto) y la cobra O(1).
+  const knownConceptKeys = new Set<string>();
+  for (const row of rows) knownConceptKeys.add(row.conceptKey);
+
   const recomputed = buckets.map((bucket) => {
     const bucketMovements = bucket.movementIds
       .map((id) => movementById.get(id))
@@ -274,8 +284,7 @@ export function applyCellOverridesToBuckets(args: ApplyCellOverridesArgs): Proje
     }
 
     for (const [conceptKey, aggregate] of aggregateByConcept.entries()) {
-      const known = rows.some((row) => row.conceptKey === conceptKey);
-      if (known) continue;
+      if (knownConceptKeys.has(conceptKey)) continue;
       const sample = bucketMovements.find((movement) => conceptKeyForMovement(movement) === conceptKey);
       if (!sample) continue;
       if (sample.type === 'INFLOW') inflows += aggregate;

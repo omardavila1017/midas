@@ -202,3 +202,50 @@ describe('parseProposal — montos no numéricos y valores malformados', () => {
     expect(result.suggestion.draft.targetExpression).toBe('2026-13-45..no-fecha');
   });
 });
+
+describe('percentageChange — frontera de unidad porcentaje→fracción', () => {
+  // El prompt le pide al modelo PUNTOS porcentuales ("-15 = -15%"); el resto del
+  // sistema guarda FRACCIÓN y el motor aplica `monto * (1 + percentageChange)`.
+  // Sin la conversión, un -15 llegaba como `monto * -14` → Math.max(0,…) = $0:
+  // la propuesta BORRABA el pago en vez de reducirlo.
+  function pctArgs(percentageChange: number): RawProposalArgs {
+    return validArgs({ type: 'PERCENTAGE_CHANGE', percentageChange, deltaDays: undefined });
+  }
+
+  function parsedPct(percentageChange: number): number | undefined {
+    const result = parseProposal(pctArgs(percentageChange));
+    if (!result.ok) throw new Error(`parseProposal falló: ${result.reason}`);
+    return result.suggestion.draft.percentageChange;
+  }
+
+  it('-15 (reducir 15%) se guarda como -0.15, no como -15', () => {
+    expect(parsedPct(-15)).toBeCloseTo(-0.15, 10);
+  });
+
+  it('el monto resultante es una REDUCCIÓN del 15%, no un borrado a $0', () => {
+    // Misma aritmética que `applySingleAdjustment` en el motor.
+    const amount = 1_000_000;
+    const applied = Math.max(0, amount * (1 + (parsedPct(-15) ?? 0)));
+    expect(applied).toBeCloseTo(850_000, 6);
+  });
+
+  it('+10 (aumentar 10%) multiplica por 1.1, no por 11', () => {
+    const amount = 1_000_000;
+    const applied = Math.max(0, amount * (1 + (parsedPct(10) ?? 0)));
+    expect(applied).toBeCloseTo(1_100_000, 6);
+  });
+
+  it('ausente sigue siendo undefined (no se convierte un hueco en 0)', () => {
+    const result = parseProposal(validArgs({ type: 'PERCENTAGE_CHANGE', percentageChange: undefined }));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.suggestion.draft.percentageChange).toBeUndefined();
+  });
+
+  it('un modelo que desobedezca y mande ya una fracción degrada a casi no-op, nunca a borrado', () => {
+    // -0.15 → -0.0015: una reducción del 0.15%. El modo de falla contrario
+    // (tratar -15 como fracción) borraba el pago entero.
+    const applied = Math.max(0, 1_000_000 * (1 + (parsedPct(-0.15) ?? 0)));
+    expect(applied).toBeGreaterThan(990_000);
+  });
+});

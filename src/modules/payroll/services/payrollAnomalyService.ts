@@ -18,6 +18,7 @@
  * no marcar caídas que en realidad son truncamientos del API.
  */
 
+import { todayISO } from '../../../formatters';
 import type { PayrollCostRecord } from '../../shared-finance/types';
 import { findSuspectMonths } from './payrollModuleService';
 import { distinctMonths } from './payrollAnalyticsService';
@@ -60,14 +61,24 @@ export interface AnomalyOptions {
   todayIso: string;
 }
 
-export const DEFAULT_ANOMALY_OPTIONS: AnomalyOptions = {
+/**
+ * `todayIso` NO vive aquí a propósito: se resuelve en CADA llamada, con el huso
+ * de produccion (`todayISO()` → America/Mexico_City). Como constante de módulo
+ * tenía dos defectos: se congelaba al importar — una pestaña abierta cruzando un
+ * cambio de mes seguía usando el día viejo, y esta app vive en sesiones largas —
+ * y se calculaba en UTC, así que de 18:00 a 24:00 del último día del mes el
+ * "mes en curso" ya era el siguiente y el mes que seguía corriendo entraba a la
+ * serie como CERRADO. Eso es justo lo que el filtro de abajo existe para
+ * impedir. Mismo criterio que `computePayrollMonthlyFloor`, que exige `todayIso`
+ * sin default.
+ */
+export const DEFAULT_ANOMALY_OPTIONS: Omit<AnomalyOptions, 'todayIso'> = {
   minHistory: 4,
   zMedio: 2,
   zAlto: 2.5,
   zCritico: 3,
   momMedioPct: 40,
   relevanceFloor: 0.02,
-  todayIso: new Date().toISOString().slice(0, 10),
 };
 
 function mean(xs: number[]): number {
@@ -166,7 +177,7 @@ export function detectPayrollAnomalies(
   records: PayrollCostRecord[],
   options: Partial<AnomalyOptions> = {},
 ): PayrollAnomaly[] {
-  const opts = { ...DEFAULT_ANOMALY_OPTIONS, ...options };
+  const opts: AnomalyOptions = { ...DEFAULT_ANOMALY_OPTIONS, todayIso: todayISO(), ...options };
 
   // Excluye meses parciales/truncados.
   const suspect = new Set(findSuspectMonths(records).map(s => `${s.year}-${String(s.month).padStart(2, '0')}`));
